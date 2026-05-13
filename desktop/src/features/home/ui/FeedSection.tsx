@@ -122,7 +122,6 @@ type FeedSectionProps = {
   showDoneAction: boolean;
   onOpenItem: (item: FeedItem) => void;
   onMarkDone: (id: string) => void;
-  onUndoDone: (id: string) => void;
 };
 
 export function FeedSection({
@@ -138,8 +137,10 @@ export function FeedSection({
   showDoneAction,
   onOpenItem,
   onMarkDone,
-  onUndoDone,
 }: FeedSectionProps) {
+  const unreadItems = items.filter((item) => !doneSet.has(item.id));
+  const readCount = items.length - unreadItems.length;
+
   return (
     <section>
       <div className="flex items-center gap-2 pb-2">
@@ -147,10 +148,12 @@ export function FeedSection({
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {title}
         </h2>
-        <span className="text-xs text-muted-foreground/70">{items.length}</span>
+        <span className="text-xs text-muted-foreground/70">
+          {unreadItems.length}
+        </span>
       </div>
 
-      {items.length === 0 ? (
+      {unreadItems.length === 0 ? (
         <div className="rounded-md border border-dashed border-border/60 bg-background/45 px-4 py-5 text-center shadow-sm backdrop-blur-xl supports-[backdrop-filter]:bg-background/35">
           <p className="text-sm font-medium text-muted-foreground">
             {emptyTitle}
@@ -161,16 +164,15 @@ export function FeedSection({
         </div>
       ) : (
         <div className="divide-y divide-border/60 rounded-md border border-border/60 bg-background/45 shadow-sm backdrop-blur-xl supports-[backdrop-filter]:bg-background/35">
-          {items.map((item) => {
+          {unreadItems.map((item) => {
             const channelId = item.channelId;
             const canOpenChannel =
               channelId !== null && availableChannelIds.has(channelId);
-            const isDone = doneSet.has(item.id);
             const mentionNames = resolveMentionNames(item.tags, profiles);
 
             return (
               <div
-                className={`group relative px-3 py-2.5 transition-colors hover:bg-muted/40 ${isDone ? "opacity-50" : ""} ${canOpenChannel ? "cursor-pointer" : ""}`}
+                className={`group relative px-3 py-2.5 transition-colors hover:bg-muted/40 ${canOpenChannel ? "cursor-pointer" : ""}`}
                 key={item.id}
               >
                 {canOpenChannel ? (
@@ -186,9 +188,7 @@ export function FeedSection({
                 ) : null}
 
                 <div className="pointer-events-none relative flex min-w-0 items-center gap-2">
-                  <span
-                    className={`text-[13px] font-medium ${isDone ? "line-through text-muted-foreground" : ""}`}
-                  >
+                  <span className="text-[13px] font-medium">
                     {feedHeadline(item)}
                   </span>
                   <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -232,18 +232,14 @@ export function FeedSection({
 
                 {showDoneAction ? (
                   <Button
-                    aria-label={isDone ? "Undo done" : "Mark done"}
+                    aria-label="Mark done"
                     onClick={() => {
-                      if (isDone) {
-                        onUndoDone(item.id);
-                      } else {
-                        onMarkDone(item.id);
-                      }
+                      onMarkDone(item.id);
                     }}
                     size="icon"
                     type="button"
                     variant="ghost"
-                    className={`pointer-events-auto absolute right-1.5 top-1.5 h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 ${isDone ? "text-green-500 opacity-100" : "text-muted-foreground"}`}
+                    className="pointer-events-auto absolute right-1.5 top-1.5 h-7 w-7 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
                   >
                     <Check className="h-3.5 w-3.5" />
                   </Button>
@@ -253,6 +249,12 @@ export function FeedSection({
           })}
         </div>
       )}
+
+      {readCount > 0 ? (
+        <div className="mt-2 rounded-md border border-border/50 bg-background/30 px-3 py-2 text-center text-xs text-muted-foreground/70 shadow-sm backdrop-blur-xl supports-[backdrop-filter]:bg-background/25">
+          {readCount} read {readCount === 1 ? "message" : "messages"} hidden
+        </div>
+      ) : null}
     </section>
   );
 }

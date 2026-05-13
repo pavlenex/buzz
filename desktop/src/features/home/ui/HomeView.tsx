@@ -4,6 +4,7 @@ import {
   AtSign,
   Bot,
   CircleAlert,
+  Inbox,
   RefreshCcw,
   Search,
 } from "lucide-react";
@@ -39,7 +40,7 @@ const RecentNotesSection = React.lazy(async () => {
 type HomeTab = "search" | "inbox" | "feed";
 
 const tabTriggerClassName =
-  "h-8 rounded-full px-4 text-xs font-medium shadow-none transition-colors data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm";
+  "h-8 rounded-full px-4 text-xs font-medium shadow-none transition-colors data-[state=active]:bg-foreground data-[state=active]:text-background data-[state=active]:shadow-sm";
 
 function HomeLoadingState() {
   return (
@@ -126,7 +127,7 @@ export function HomeView({
 }: HomeViewProps) {
   const [activeTab, setActiveTab] = React.useState<HomeTab>("search");
   const { settings: homeBackgroundSettings } = useHomeBackgroundSettings();
-  const { doneSet, markDone, undoDone } = useFeedItemState(currentPubkey);
+  const { doneSet, markDone } = useFeedItemState(currentPubkey);
 
   // Defer Pulse feed queries until the shell is interactive and the tab is open.
   const startupReady = useDeferredStartup();
@@ -205,110 +206,90 @@ export function HomeView({
       );
     }
 
-    const priorityCount =
-      feed.feed.needsAction.length + feed.feed.mentions.length;
+    const openCount = [
+      ...feed.feed.needsAction,
+      ...feed.feed.mentions,
+      ...(feed.feed.activity ?? []),
+      ...(feed.feed.agentActivity ?? []),
+    ].filter((item) => !doneSet.has(item.id)).length;
 
     return (
-      <div className="px-4 py-5 sm:px-6">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+      <div className="px-4 pb-5 pt-10 sm:px-6 sm:pt-14">
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
           <React.Suspense fallback={null}>
-            <div className="grid gap-6">
-              <section className="rounded-2xl border border-primary/15 bg-background/35 p-4 shadow-[0_4px_24px_rgba(0,0,0,0.08)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/25 dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)]">
-                <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <CircleAlert className="h-4 w-4 text-primary" />
-                      <h2 className="text-sm font-semibold tracking-tight">
-                        Priority inbox
-                      </h2>
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Mentions and items waiting for you are grouped here first.
-                    </p>
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Inbox className="h-5 w-5 text-foreground" />
+                    <h2 className="text-base font-semibold tracking-tight">
+                      Inbox board
+                    </h2>
                   </div>
-                  <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
-                    {priorityCount} open
-                  </span>
                 </div>
+                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+                  {openCount} open
+                </span>
+              </div>
 
-                <div className="grid gap-5">
-                  <FeedSection
-                    availableChannelIds={availableChannelIds}
-                    currentPubkey={currentPubkey}
-                    profiles={feedProfiles}
-                    doneSet={doneSet}
-                    emptyDescription="Approval requests and reminders will appear here."
-                    emptyTitle="Nothing needs action"
-                    icon={CircleAlert}
-                    items={feed.feed.needsAction}
-                    onMarkDone={markDone}
-                    onOpenItem={onOpenFeedItem}
-                    onUndoDone={undoDone}
-                    showDoneAction={true}
-                    title="Needs Action"
-                  />
-                  <FeedSection
-                    availableChannelIds={availableChannelIds}
-                    currentPubkey={currentPubkey}
-                    profiles={feedProfiles}
-                    doneSet={doneSet}
-                    emptyDescription="When someone mentions you, it will land here."
-                    emptyTitle="No mentions right now"
-                    icon={AtSign}
-                    items={feed.feed.mentions}
-                    onMarkDone={markDone}
-                    onOpenItem={onOpenFeedItem}
-                    onUndoDone={undoDone}
-                    showDoneAction={false}
-                    title="Mentions"
-                  />
-                </div>
-              </section>
-
-              <section className="rounded-2xl border border-border/50 bg-background/30 p-4 shadow-[0_4px_24px_rgba(0,0,0,0.08)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)]">
-                <div className="mb-4">
-                  <h2 className="text-sm font-semibold tracking-tight">
-                    Everything else
-                  </h2>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Channel activity and agent updates that are useful, but not
-                    urgent.
-                  </p>
-                </div>
-
-                <div className="grid gap-5">
-                  <FeedSection
-                    availableChannelIds={availableChannelIds}
-                    currentPubkey={currentPubkey}
-                    profiles={feedProfiles}
-                    doneSet={doneSet}
-                    emptyDescription="Recent channel messages and forum posts will show up here."
-                    emptyTitle="No channel activity yet"
-                    icon={Activity}
-                    items={feed.feed.activity ?? []}
-                    onMarkDone={markDone}
-                    onOpenItem={onOpenFeedItem}
-                    onUndoDone={undoDone}
-                    showDoneAction={false}
-                    title="Channel Activity"
-                  />
-                  <FeedSection
-                    availableChannelIds={availableChannelIds}
-                    currentPubkey={currentPubkey}
-                    profiles={feedProfiles}
-                    doneSet={doneSet}
-                    emptyDescription="Agent job requests, progress, and results will appear here."
-                    emptyTitle="No agent updates yet"
-                    icon={Bot}
-                    items={feed.feed.agentActivity ?? []}
-                    onMarkDone={markDone}
-                    onOpenItem={onOpenFeedItem}
-                    onUndoDone={undoDone}
-                    showDoneAction={false}
-                    title="Agent Updates"
-                  />
-                </div>
-              </section>
+              <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <FeedSection
+                  availableChannelIds={availableChannelIds}
+                  currentPubkey={currentPubkey}
+                  profiles={feedProfiles}
+                  doneSet={doneSet}
+                  emptyDescription="Approval requests and reminders will appear here."
+                  emptyTitle="Nothing needs action"
+                  icon={CircleAlert}
+                  items={feed.feed.needsAction}
+                  onMarkDone={markDone}
+                  onOpenItem={onOpenFeedItem}
+                  showDoneAction={true}
+                  title="Needs Action"
+                />
+                <FeedSection
+                  availableChannelIds={availableChannelIds}
+                  currentPubkey={currentPubkey}
+                  profiles={feedProfiles}
+                  doneSet={doneSet}
+                  emptyDescription="When someone mentions you, it will land here."
+                  emptyTitle="No mentions right now"
+                  icon={AtSign}
+                  items={feed.feed.mentions}
+                  onMarkDone={markDone}
+                  onOpenItem={onOpenFeedItem}
+                  showDoneAction={false}
+                  title="Mentions"
+                />
+                <FeedSection
+                  availableChannelIds={availableChannelIds}
+                  currentPubkey={currentPubkey}
+                  profiles={feedProfiles}
+                  doneSet={doneSet}
+                  emptyDescription="Recent channel messages and forum posts will show up here."
+                  emptyTitle="No channel activity yet"
+                  icon={Activity}
+                  items={feed.feed.activity ?? []}
+                  onMarkDone={markDone}
+                  onOpenItem={onOpenFeedItem}
+                  showDoneAction={false}
+                  title="Channel Activity"
+                />
+                <FeedSection
+                  availableChannelIds={availableChannelIds}
+                  currentPubkey={currentPubkey}
+                  profiles={feedProfiles}
+                  doneSet={doneSet}
+                  emptyDescription="Agent job requests, progress, and results will appear here."
+                  emptyTitle="No agent updates yet"
+                  icon={Bot}
+                  items={feed.feed.agentActivity ?? []}
+                  onMarkDone={markDone}
+                  onOpenItem={onOpenFeedItem}
+                  showDoneAction={false}
+                  title="Agent Updates"
+                />
+              </div>
             </div>
           </React.Suspense>
         </div>
@@ -381,7 +362,7 @@ export function HomeView({
         <TabsList className="h-10 gap-1 rounded-full border border-border/60 bg-card/80 p-1 shadow-sm backdrop-blur">
           <TabsTrigger
             aria-label="Search"
-            className="h-8 w-10 rounded-full px-0 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+            className="h-8 w-10 rounded-full px-0 data-[state=active]:bg-foreground data-[state=active]:text-background"
             value="search"
           >
             <Search className="h-4 w-4" />
