@@ -331,14 +331,8 @@ export function formatTimelineMessages(
         profiles,
       }),
       role,
-      personaDisplayName:
-        role === "bot"
-          ? personaLookup?.get(authorPubkey.toLowerCase())
-          : undefined,
-      respondTo:
-        role === "bot"
-          ? respondToLookup?.get(authorPubkey.toLowerCase())
-          : undefined,
+      personaDisplayName: personaLookup?.get(authorPubkey.toLowerCase()),
+      respondTo: respondToLookup?.get(authorPubkey.toLowerCase()),
       time: formatTime(event.created_at),
       body: edit ? edit.content : event.content,
       parentId: thread.parentId,
