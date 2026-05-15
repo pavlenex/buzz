@@ -299,7 +299,10 @@ export const MessageRow = React.memo(
                     botIdenticonValue={message.author}
                   >
                     <button
-                      className="flex shrink-0 items-start gap-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className={cn(
+                        "flex shrink-0 items-start gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        avatarButtonRadiusClass,
+                      )}
                       type="button"
                     >
                       {avatarNode}
