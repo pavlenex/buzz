@@ -30,13 +30,14 @@
 //! Schnorr verify and 1-2 DB reads per connection, which is negligible
 //! versus the QUIC + model traffic that follows.
 //!
-//! # Patched-fork hooks
+//! # Patched-fork hooks (forward-looking)
 //!
 //! Upstream iroh-relay rc.0 does not expose a per-client maximum-lifetime
-//! hook. A locally-patched fork (`upstream PR C` in the plan) adds one so we
-//! can force re-auth every N minutes. We isolate that wiring behind
-//! [`cfg(feature = "patched-iroh-relay")`] so the unpatched crate compiles
-//! cleanly.
+//! hook. The mesh-LLM plan (v6.1, upstream PR C) will add one so we can
+//! force re-auth every N minutes. The `patched-iroh-relay` Cargo feature
+//! and the `TODO(patched-iroh-relay)` marker in [`spawn`] are reserved
+//! insertion points for that wiring — **the hook is not implemented yet**.
+//! Unpatched rc.0 stays compile-clean either way.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -59,6 +60,14 @@ pub const IROH_RELAY_PATH: &str = "/relay";
 
 /// HTTP method bound into NIP-98 events for iroh-relay connection auth.
 const NIP98_METHOD: &str = "GET";
+
+/// Maximum size of a bearer token (raw, pre-base64-decode) we'll even try to
+/// process. A well-formed NIP-98 event JSON is well under a kilobyte; the
+/// base64 expansion of that is ~1.4 KiB. We allow up to 64 KiB so generous
+/// signers don't trip over `payload` tag hashes etc., but reject anything
+/// larger before allocating decode buffers — admission requests must not be
+/// able to coerce the relay into multi-megabyte allocations.
+const MAX_BEARER_LEN: usize = 64 * 1024;
 
 /// Handle returned by [`spawn`] — dropping it stops the server.
 pub struct IrohRelayHandle {
@@ -106,6 +115,11 @@ pub async fn spawn(
 
     let mut relay = RelayConfig::new(bind_addr);
     relay.access = access;
+
+    // TODO(patched-iroh-relay): once upstream PR C lands, set the per-client
+    // maximum-lifetime hook here (gated on `#[cfg(feature = "patched-iroh-relay")]`)
+    // so we force re-auth every N minutes. Until then the connection lifetime
+    // is whatever iroh-relay's defaults are.
 
     let mut cfg = ServerConfig::default();
     cfg.relay = Some(relay);
@@ -217,6 +231,16 @@ fn verify_bearer(
         _ => return Err("missing or empty bearer token".to_string()),
     };
 
+    // Pre-decode length cap (Mari's review note). NIP-98 events are tiny; an
+    // attacker shouldn't be able to coerce the relay into allocating a
+    // multi-megabyte decode buffer before any signature check runs.
+    if token.len() > MAX_BEARER_LEN {
+        return Err(format!(
+            "bearer token exceeds {MAX_BEARER_LEN}-byte limit ({} bytes)",
+            token.len()
+        ));
+    }
+
     let json =
         decode_bearer(token).ok_or_else(|| "bearer token is not valid base64".to_string())?;
 
@@ -306,6 +330,41 @@ mod tests {
         let url = canonical();
         let result = verify_bearer(&url, Some("not!!!base64!!!"));
         assert!(matches!(result, Err(ref e) if e.contains("base64")));
+    }
+
+    #[test]
+    fn verify_bearer_rejects_oversized_token() {
+        // 64 KiB + 1 byte. Must be rejected by the length cap *before* any
+        // decode allocation happens, so an attacker can't coerce a giant
+        // base64 buffer.
+        let url = canonical();
+        let huge = "A".repeat(MAX_BEARER_LEN + 1);
+        let result = verify_bearer(&url, Some(&huge));
+        assert!(
+            matches!(result, Err(ref e) if e.contains("exceeds")),
+            "expected length-cap denial, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn verify_bearer_rejects_internal_whitespace() {
+        // base64 0.22's `general_purpose` engines reject internal whitespace
+        // (no MIME mode). A valid token with a space spliced into the middle
+        // must therefore fail decode, not be silently accepted as if the
+        // whitespace were ignored.
+        let keys = Keys::generate();
+        let url = canonical();
+        let json = signed_event_json(&keys, &url, NIP98_METHOD);
+        let mut token = bearer(&json);
+        // Splice a space into the middle of an otherwise valid token.
+        let mid = token.len() / 2;
+        token.insert(mid, ' ');
+
+        let result = verify_bearer(&url, Some(&token));
+        assert!(
+            matches!(result, Err(ref e) if e.contains("base64")),
+            "expected base64 denial on internal whitespace, got {result:?}",
+        );
     }
 
     #[test]

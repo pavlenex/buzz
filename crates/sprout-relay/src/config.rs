@@ -133,6 +133,16 @@ pub struct Config {
     /// `https://relay.example.com/iroh` (a path prefix is supported and
     /// preserved by the NIP-98 canonicaliser).
     pub iroh_relay_public_url: Option<String>,
+
+    /// Optional local socket address the embedded iroh-relay binds to.
+    ///
+    /// `iroh_relay::server::Server::spawn` owns its own listener, so this is
+    /// independent of [`Self::bind_addr`] (the Sprout HTTP/WS port). When
+    /// unset, [`crate::iroh_relay::spawn`] is *not* started by `fn main` —
+    /// even if `iroh_relay_public_url` is configured, since advertising a
+    /// URL without a listener would be a deploy footgun. Set via
+    /// `SPROUT_IROH_RELAY_BIND_ADDR`, e.g. `0.0.0.0:3478`.
+    pub iroh_relay_bind_addr: Option<std::net::SocketAddr>,
 }
 
 impl Config {
@@ -340,6 +350,21 @@ impl Config {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        // Mesh-LLM iroh-relay local bind address (optional; independent of
+        // the Sprout HTTP listener since Server::spawn owns its own socket).
+        let iroh_relay_bind_addr = match std::env::var("SPROUT_IROH_RELAY_BIND_ADDR")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            Some(s) => Some(s.parse::<std::net::SocketAddr>().map_err(|e| {
+                ConfigError::InvalidValue(format!(
+                    "SPROUT_IROH_RELAY_BIND_ADDR={s:?} is not a valid socket address: {e}"
+                ))
+            })?),
+            None => None,
+        };
+
         // Web UI static file serving
         let web_dir = std::env::var("SPROUT_WEB_DIR")
             .ok()
@@ -400,6 +425,7 @@ impl Config {
             git_hook_hmac_secret,
             web_dir,
             iroh_relay_public_url,
+            iroh_relay_bind_addr,
         })
     }
 }
