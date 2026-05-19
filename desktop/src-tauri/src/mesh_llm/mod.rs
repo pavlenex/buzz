@@ -16,9 +16,11 @@
 //!   (VRAM/RAM/concurrency caps, models).
 
 pub mod endpoint;
+pub mod nip11;
 pub mod nip98;
 pub mod offer;
 
 pub use endpoint::{load_or_create_endpoint_key, EndpointKeyError};
+pub use nip11::{fetch_iroh_relay_url, Nip11Error};
 pub use nip98::{build_nip98_bearer, Nip98BearerError};
 pub use offer::{ComputeSharingPrefs, OfferPrefsError};
