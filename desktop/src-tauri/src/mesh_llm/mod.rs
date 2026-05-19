@@ -20,7 +20,11 @@ pub mod nip11;
 pub mod nip98;
 pub mod offer;
 
-pub use endpoint::{load_or_create_endpoint_key, EndpointKeyError};
-pub use nip11::{fetch_iroh_relay_url, Nip11Error};
-pub use nip98::{build_nip98_bearer, Nip98BearerError};
-pub use offer::{ComputeSharingPrefs, OfferPrefsError};
+// Wildcard re-exports are deliberately avoided so that adding an
+// unused-by-design helper to a submodule (e.g. a publisher that hasn't been
+// wired yet) doesn't trip dead-code lints at the top level. Callers reach
+// into the submodules directly until a public API surface stabilises.
+
+pub use endpoint::load_or_create_endpoint_key;
+pub use nip11::fetch_iroh_relay_url;
+pub use offer::ComputeSharingPrefs;
