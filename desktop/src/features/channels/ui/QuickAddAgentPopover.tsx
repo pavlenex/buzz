@@ -1,29 +1,22 @@
-import { Check, Settings2, Users } from "lucide-react";
+import { Check, Settings2 } from "lucide-react";
 import * as React from "react";
 
 import {
   useAcpProvidersQuery,
   useAttachManagedAgentToChannelMutation,
   useCreateChannelManagedAgentMutation,
-  useCreateChannelManagedAgentsMutation,
   useManagedAgentsQuery,
   usePersonasQuery,
-  useTeamsQuery,
 } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { getActivePersonas } from "@/features/agents/lib/catalog";
 import { resolvePersonaProvider } from "@/features/agents/lib/resolvePersonaProvider";
 import { pickBotName } from "@/features/agents/lib/pickBotName";
 import { useBotRecents } from "@/features/agents/lib/useBotRecents";
-import {
-  getUsableTeams,
-  resolveTeamPersonas,
-} from "@/features/agents/lib/teamPersonas";
-import type { AgentPersona, AgentTeam, ManagedAgent } from "@/shared/api/types";
+import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { cn } from "@/shared/lib/cn";
-import { Button } from "@/shared/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Spinner } from "@/shared/ui/spinner";
 
@@ -77,17 +70,6 @@ function getItemKey(item: QuickAddAgentItem): string {
   }
 }
 
-/** Get the persona ID associated with an item (for team membership checks). */
-function getItemPersonaId(item: QuickAddAgentItem): string | null {
-  switch (item.kind) {
-    case "persona":
-      return item.persona.id;
-    case "running-available":
-    case "running-in-channel":
-      return item.agent.personaId ?? null;
-  }
-}
-
 function safeBotName(persona: AgentPersona, usedNames: Set<string>): string {
   const pool = persona.namePool ?? [];
   const name = pickBotName(pool, usedNames);
@@ -107,22 +89,16 @@ export function QuickAddAgentPopover({
   const managedAgentsQuery = useManagedAgentsQuery();
   const personasQuery = usePersonasQuery();
   const providersQuery = useAcpProvidersQuery();
-  const teamsQuery = useTeamsQuery();
   const membersQuery = useChannelMembersQuery(
     channelId,
     open && channelId !== null,
   );
   const attachMutation = useAttachManagedAgentToChannelMutation(channelId);
   const createMutation = useCreateChannelManagedAgentMutation(channelId);
-  const batchCreateMutation = useCreateChannelManagedAgentsMutation(channelId);
   const { recentIds, pushRecent } = useBotRecents();
 
   const [pendingKey, setPendingKey] = React.useState<string | null>(null);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
-  const [multiSelectMode, setMultiSelectMode] = React.useState(false);
-  const [selectedKeys, setSelectedKeys] = React.useState<Set<string>>(
-    new Set(),
-  );
 
   const managedAgents = managedAgentsQuery.data ?? [];
   const personas = React.useMemo(
@@ -132,20 +108,13 @@ export function QuickAddAgentPopover({
   const providers = providersQuery.data ?? [];
   const defaultProvider = providers[0] ?? null;
   const members = membersQuery.data ?? [];
-  const teams = teamsQuery.data ?? [];
 
   const channelMemberPubkeys = React.useMemo(
     () => new Set(members.map((m) => normalizePubkey(m.pubkey))),
     [members],
   );
 
-  // Usable teams (all personas resolved)
-  const usableTeams = React.useMemo(
-    () => getUsableTeams(teams, personas),
-    [teams, personas],
-  );
-
-  // Build the full item list (flat, for mutations)
+  // Build the sorted item list
   const items: QuickAddAgentItem[] = React.useMemo(() => {
     const result: QuickAddAgentItem[] = [];
 
@@ -231,49 +200,13 @@ export function QuickAddAgentPopover({
     return result;
   }, [managedAgents, personas, channelMemberPubkeys, recentIds]);
 
-  // ── Grouped layout: team sections + ungrouped ─────────────────────────────
-
-  // Set of all persona IDs that belong to at least one usable team
-  const teamedPersonaIds = React.useMemo(() => {
-    const ids = new Set<string>();
-    for (const team of usableTeams) {
-      for (const pid of team.personaIds) {
-        ids.add(pid);
-      }
-    }
-    return ids;
-  }, [usableTeams]);
-
-  // Items grouped by team
-  const teamGroups = React.useMemo(() => {
-    return usableTeams.map((team) => {
-      const memberItems = items.filter((item) => {
-        const personaId = getItemPersonaId(item);
-        return personaId !== null && team.personaIds.includes(personaId);
-      });
-      return { team, items: memberItems };
-    });
-  }, [usableTeams, items]);
-
-  // Ungrouped items (not in any team)
-  const ungroupedItems = React.useMemo(() => {
-    return items.filter((item) => {
-      const personaId = getItemPersonaId(item);
-      return personaId === null || !teamedPersonaIds.has(personaId);
-    });
-  }, [items, teamedPersonaIds]);
-
   // Reset state when popover closes
   React.useEffect(() => {
     if (!open) {
       setPendingKey(null);
       setErrorMessage(null);
-      setMultiSelectMode(false);
-      setSelectedKeys(new Set());
     }
   }, [open]);
-
-  // ── Single-add handlers (preserved fast path) ─────────────────────────────
 
   async function handleAddRunningAgent(agent: ManagedAgent) {
     if (!channelId) return;
@@ -333,159 +266,15 @@ export function QuickAddAgentPopover({
     }
   }
 
-  // ── Multi-select handlers ─────────────────────────────────────────────────
-
-  function enterMultiSelect(key: string) {
-    setMultiSelectMode(true);
-    setSelectedKeys((prev) => {
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
-  }
-
-  function toggleSelection(key: string) {
-    setSelectedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      if (next.size === 0) {
-        setMultiSelectMode(false);
-      }
-      return next;
-    });
-  }
-
-  function handleTeamClick(team: AgentTeam) {
-    const resolution = resolveTeamPersonas(team, personas);
-
-    setMultiSelectMode(true);
-    setSelectedKeys((prev) => {
-      const next = new Set(prev);
-      for (const persona of resolution.resolvedPersonas) {
-        // Find the matching item (running agent or persona)
-        const runningItem = items.find(
-          (i) =>
-            i.kind === "running-available" && i.agent.personaId === persona.id,
-        );
-        if (runningItem) {
-          next.add(getItemKey(runningItem));
-        } else {
-          const personaItem = items.find(
-            (i) => i.kind === "persona" && i.persona.id === persona.id,
-          );
-          if (personaItem && personaItem.kind !== "running-in-channel") {
-            next.add(getItemKey(personaItem));
-          }
-        }
-      }
-      return next;
-    });
-  }
-
-  async function handleBatchAdd() {
-    if (!channelId || selectedKeys.size === 0) return;
-    setPendingKey("batch");
-    setErrorMessage(null);
-
-    const usedNames = new Set(managedAgents.map((a) => a.name));
-    const toAttach: ManagedAgent[] = [];
-    const toCreate: Array<{
-      persona: AgentPersona;
-      instanceName: string;
-    }> = [];
-
-    for (const key of selectedKeys) {
-      const item = items.find((i) => getItemKey(i) === key);
-      if (!item || item.kind === "running-in-channel") continue;
-
-      if (item.kind === "running-available") {
-        toAttach.push(item.agent);
-      } else {
-        const instanceName = safeBotName(item.persona, usedNames);
-        usedNames.add(instanceName);
-        toCreate.push({ persona: item.persona, instanceName });
-      }
-    }
-
-    try {
-      for (const agent of toAttach) {
-        await attachMutation.mutateAsync({ agent, ensureRunning: true });
-        if (agent.personaId) pushRecent(agent.personaId);
-      }
-
-      if (toCreate.length > 0 && defaultProvider) {
-        const inputs = toCreate.map(({ persona, instanceName }) => {
-          const { provider } = resolvePersonaProvider(
-            persona.provider,
-            providers,
-            defaultProvider,
-          );
-          const providerToUse = provider ?? defaultProvider;
-          return {
-            provider: {
-              id: providerToUse.id,
-              label: providerToUse.label,
-              command: providerToUse.command,
-              defaultArgs: providerToUse.defaultArgs,
-              mcpCommand: providerToUse.mcpCommand,
-            },
-            name: instanceName,
-            systemPrompt: persona.systemPrompt,
-            avatarUrl: persona.avatarUrl ?? undefined,
-            personaId: persona.id,
-            model: persona.model ?? undefined,
-          };
-        });
-
-        await batchCreateMutation.mutateAsync(inputs);
-        for (const { persona } of toCreate) {
-          pushRecent(persona.id);
-        }
-      }
-
-      onOpenChange(false);
-    } catch (err) {
-      setErrorMessage(
-        err instanceof Error ? err.message : "Failed to add agents.",
-      );
-      setPendingKey(null);
-    }
-  }
-
-  // ── Item click dispatcher ─────────────────────────────────────────────────
-
   function handleItemClick(item: QuickAddAgentItem) {
     if (item.kind === "running-in-channel") return;
     if (pendingKey) return;
     if (!channelId) return;
 
-    if (multiSelectMode) {
-      toggleSelection(getItemKey(item));
+    if (item.kind === "running-available") {
+      void handleAddRunningAgent(item.agent);
     } else {
-      // Single-click fast path — add immediately
-      if (item.kind === "running-available") {
-        void handleAddRunningAgent(item.agent);
-      } else {
-        void handleAddPersona(item.persona);
-      }
-    }
-  }
-
-  function handleCheckboxClick(e: React.MouseEvent, item: QuickAddAgentItem) {
-    e.stopPropagation();
-    if (item.kind === "running-in-channel") return;
-    if (pendingKey) return;
-
-    const key = getItemKey(item);
-    if (multiSelectMode) {
-      toggleSelection(key);
-    } else {
-      // Clicking checkbox enters multi-select mode
-      enterMultiSelect(key);
+      void handleAddPersona(item.persona);
     }
   }
 
@@ -496,75 +285,6 @@ export function QuickAddAgentPopover({
 
   if (!channelId) {
     return <>{children}</>;
-  }
-
-  // ── Render helpers ────────────────────────────────────────────────────────
-
-  function renderAgentRow(item: QuickAddAgentItem, indented: boolean) {
-    const itemKey = getItemKey(item);
-    const isInChannel = item.kind === "running-in-channel";
-    const isItemPending = pendingKey === itemKey || pendingKey === "batch";
-    const isSelected = selectedKeys.has(itemKey);
-
-    return (
-      <button
-        aria-selected={isInChannel || isSelected}
-        className={cn(
-          "group flex w-full items-center gap-2.5 py-1.5 text-left text-sm transition-colors",
-          indented ? "pl-6 pr-3" : "px-3",
-          isInChannel
-            ? "cursor-default opacity-50"
-            : "cursor-pointer hover:bg-accent focus-visible:bg-accent focus-visible:outline-none",
-          isItemPending && "pointer-events-none opacity-60",
-          isSelected && "bg-accent/50",
-        )}
-        data-quick-add-item
-        disabled={isInChannel || Boolean(pendingKey)}
-        key={itemKey}
-        onClick={() => handleItemClick(item)}
-        role="option"
-        tabIndex={isInChannel ? -1 : 0}
-        type="button"
-      >
-        {/* Checkbox: always visible in multi-select, hover-reveal otherwise */}
-        {!isInChannel ? (
-          <div
-            className={cn(
-              "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-all",
-              multiSelectMode
-                ? "opacity-100"
-                : "opacity-0 group-hover:opacity-100",
-              isSelected
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-muted-foreground/40",
-            )}
-            onClick={(e) => handleCheckboxClick(e, item)}
-            onKeyDown={() => {}}
-            aria-hidden="true"
-          >
-            {isSelected ? <Check className="h-3 w-3" /> : null}
-          </div>
-        ) : (
-          <div className="h-4 w-4 shrink-0" />
-        )}
-        <QuickAddAgentAvatar
-          avatarUrl={item.avatarUrl}
-          label={item.label}
-          isRunning={item.kind !== "persona"}
-        />
-        <span className="flex-1 truncate font-medium">{item.label}</span>
-        {isInChannel ? (
-          <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        ) : item.kind === "running-available" && !multiSelectMode ? (
-          <span className="shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-            running
-          </span>
-        ) : null}
-        {isItemPending ? (
-          <Spinner className="h-3.5 w-3.5 shrink-0 text-primary" />
-        ) : null}
-      </button>
-    );
   }
 
   return (
@@ -602,25 +322,10 @@ export function QuickAddAgentPopover({
             }
           }}
         >
-          <div className="flex items-center border-b px-3 py-2">
+          <div className="border-b px-3 py-2">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Add agent
             </h3>
-            {multiSelectMode && selectedKeys.size > 0 ? (
-              <Button
-                className="ml-auto"
-                data-testid="quick-add-batch-confirm"
-                disabled={Boolean(pendingKey)}
-                onClick={() => void handleBatchAdd()}
-                size="sm"
-                type="button"
-              >
-                {pendingKey === "batch" ? (
-                  <Spinner className="h-3 w-3" />
-                ) : null}
-                Add ({selectedKeys.size})
-              </Button>
-            ) : null}
           </div>
 
           {/* Scrollable content — clips mid-item to hint at more */}
@@ -639,44 +344,50 @@ export function QuickAddAgentPopover({
                 className="py-1"
                 role="listbox"
               >
-                {/* Team groups */}
-                {teamGroups.map(({ team, items: teamItems }) => (
-                  <div key={team.id} className="mb-1">
-                    {/* Team header */}
+                {items.map((item) => {
+                  const itemKey = getItemKey(item);
+                  const isInChannel = item.kind === "running-in-channel";
+                  const isItemPending = pendingKey === itemKey;
+
+                  return (
                     <button
-                      className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                      aria-selected={isInChannel}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm transition-colors",
+                        isInChannel
+                          ? "cursor-default opacity-50"
+                          : "cursor-pointer hover:bg-accent focus-visible:bg-accent focus-visible:outline-none",
+                        isItemPending && "pointer-events-none opacity-60",
+                      )}
                       data-quick-add-item
-                      onClick={() => handleTeamClick(team)}
+                      disabled={isInChannel || Boolean(pendingKey)}
+                      key={itemKey}
+                      onClick={() => handleItemClick(item)}
+                      role="option"
+                      tabIndex={isInChannel ? -1 : 0}
                       type="button"
                     >
-                      <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-muted">
-                        <Users className="h-3 w-3 text-muted-foreground" />
-                      </div>
-                      <span className="flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        {team.name}
+                      <QuickAddAgentAvatar
+                        avatarUrl={item.avatarUrl}
+                        label={item.label}
+                        isRunning={item.kind !== "persona"}
+                      />
+                      <span className="flex-1 truncate font-medium">
+                        {item.label}
                       </span>
-                      <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {teamItems.length}
-                      </span>
-                    </button>
-                    {/* Team members (indented) */}
-                    {teamItems.map((item) => renderAgentRow(item, true))}
-                  </div>
-                ))}
-
-                {/* Ungrouped section */}
-                {ungroupedItems.length > 0 ? (
-                  <div className={cn(teamGroups.length > 0 && "border-t pt-1")}>
-                    {teamGroups.length > 0 ? (
-                      <div className="px-3 py-1">
-                        <span className="text-[11px] font-medium text-muted-foreground">
-                          Ungrouped
+                      {isInChannel ? (
+                        <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      ) : item.kind === "running-available" ? (
+                        <span className="shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                          running
                         </span>
-                      </div>
-                    ) : null}
-                    {ungroupedItems.map((item) => renderAgentRow(item, false))}
-                  </div>
-                ) : null}
+                      ) : null}
+                      {isItemPending ? (
+                        <Spinner className="h-3.5 w-3.5 shrink-0 text-primary" />
+                      ) : null}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
