@@ -546,6 +546,11 @@ export function QuickAddAgentPopover({
             {usableTeams.length > 0 ? (
               <div className="ml-auto flex shrink-0 items-center pl-2">
                 <Button
+                  className={
+                    selectMode
+                      ? undefined
+                      : "border border-input bg-transparent"
+                  }
                   onClick={() => {
                     if (selectMode) {
                       handleCancelSelect();
@@ -555,7 +560,7 @@ export function QuickAddAgentPopover({
                   }}
                   size="sm"
                   type="button"
-                  variant={selectMode ? "default" : "outline"}
+                  variant={selectMode ? "default" : "ghost"}
                 >
                   Select
                 </Button>
