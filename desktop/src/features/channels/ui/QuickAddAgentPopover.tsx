@@ -311,9 +311,6 @@ export function QuickAddAgentPopover({
       } else {
         next.add(key);
       }
-      if (next.size === 0) {
-        setSelectMode(false);
-      }
       return next;
     });
   }
@@ -501,24 +498,34 @@ export function QuickAddAgentPopover({
                 <motion.div
                   key="team-chips"
                   className="flex flex-1 items-center gap-1.5 overflow-x-auto py-1.5"
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 20 }}
-                  transition={{ duration: 0.2 }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.15 }}
                 >
-                  {usableTeams.map((team) => (
-                    <Toggle
-                      className="h-6 shrink-0 rounded-full px-2.5 text-[11px]"
+                  {usableTeams.map((team, index) => (
+                    <motion.div
                       key={team.id}
-                      onPressedChange={(pressed) =>
-                        handleTeamToggle(team, pressed)
-                      }
-                      pressed={selectedTeamIds.has(team.id)}
-                      size="sm"
-                      variant="outline"
+                      initial={{ opacity: 0, x: 12 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{
+                        duration: 0.2,
+                        delay: index * 0.05,
+                      }}
+                      className="shrink-0"
                     >
-                      {team.name}
-                    </Toggle>
+                      <Toggle
+                        className="h-6 rounded-full px-2.5 text-[11px]"
+                        onPressedChange={(pressed) =>
+                          handleTeamToggle(team, pressed)
+                        }
+                        pressed={selectedTeamIds.has(team.id)}
+                        size="sm"
+                        variant="outline"
+                      >
+                        {team.name}
+                      </Toggle>
+                    </motion.div>
                   ))}
                 </motion.div>
               ) : (
