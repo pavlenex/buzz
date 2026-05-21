@@ -542,11 +542,10 @@ export function QuickAddAgentPopover({
               )}
             </AnimatePresence>
 
-            {/* Right side: Select / Cancel toggle */}
+            {/* Right side: Select / Cancel button */}
             {usableTeams.length > 0 ? (
               <div className="ml-auto flex shrink-0 items-center pl-2">
-                <button
-                  className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                <Button
                   onClick={() => {
                     if (selectMode) {
                       handleCancelSelect();
@@ -554,10 +553,12 @@ export function QuickAddAgentPopover({
                       setSelectMode(true);
                     }
                   }}
+                  size="sm"
                   type="button"
+                  variant={selectMode ? "default" : "secondary"}
                 >
                   {selectMode ? "Cancel" : "Select"}
-                </button>
+                </Button>
               </div>
             ) : null}
           </div>
@@ -605,23 +606,26 @@ export function QuickAddAgentPopover({
                       type="button"
                     >
                       {selectMode && !isInChannel ? (
-                        <div
+                        <motion.div
                           className={cn(
                             "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
                             isSelected
                               ? "border-primary bg-primary text-primary-foreground"
                               : "border-muted-foreground/40",
                           )}
+                          initial={{ opacity: 0, scale: 0.5 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          transition={{ duration: 0.15 }}
                         >
                           {isSelected ? <Check className="h-3 w-3" /> : null}
-                        </div>
+                        </motion.div>
                       ) : null}
                       <QuickAddAgentAvatar
                         avatarUrl={item.avatarUrl}
                         label={item.label}
                         isRunning={item.kind !== "persona"}
                       />
-                      <span className="flex-1 truncate font-medium">
+                      <span className="min-w-0 flex-1 truncate font-medium">
                         {item.label}
                       </span>
                       {isInChannel ? (
