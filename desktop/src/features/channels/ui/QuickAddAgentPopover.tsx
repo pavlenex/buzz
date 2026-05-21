@@ -555,9 +555,9 @@ export function QuickAddAgentPopover({
                   }}
                   size="sm"
                   type="button"
-                  variant={selectMode ? "default" : "secondary"}
+                  variant={selectMode ? "default" : "outline"}
                 >
-                  {selectMode ? "Cancel" : "Select"}
+                  Select
                 </Button>
               </div>
             ) : null}
