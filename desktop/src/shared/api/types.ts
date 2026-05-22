@@ -369,6 +369,7 @@ export type CancelManagedAgentTurnResult = {
 export type AcpAvailabilityStatus =
   | "available"
   | "adapter_missing"
+  | "cli_missing"
   | "not_installed";
 
 export type AcpProviderCatalogEntry = {

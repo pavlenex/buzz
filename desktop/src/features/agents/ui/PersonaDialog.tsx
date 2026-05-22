@@ -272,7 +272,9 @@ export function PersonaDialog({
       <p className="text-xs text-warning">
         {selectedProvider.availability === "adapter_missing"
           ? `${selectedProvider.label} CLI is installed but the ACP adapter is missing.`
-          : `${selectedProvider.label} is not installed.`}{" "}
+          : selectedProvider.availability === "cli_missing"
+            ? `${selectedProvider.label} ACP adapter is installed but the CLI is missing.`
+            : `${selectedProvider.label} is not installed.`}{" "}
         Visit Settings &gt; Doctor to set it up.
       </p>
     ) : null;
@@ -367,9 +369,11 @@ export function PersonaDialog({
                     {p.label}
                     {p.availability === "adapter_missing"
                       ? " (adapter missing)"
-                      : p.availability === "not_installed"
-                        ? " (not installed)"
-                        : ""}
+                      : p.availability === "cli_missing"
+                        ? " (CLI missing)"
+                        : p.availability === "not_installed"
+                          ? " (not installed)"
+                          : ""}
                   </option>
                 ))}
               </select>

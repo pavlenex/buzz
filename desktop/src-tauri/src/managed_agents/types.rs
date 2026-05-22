@@ -280,6 +280,7 @@ pub struct ManagedAgentLogResponse {
 pub enum AcpAvailabilityStatus {
     Available,
     AdapterMissing,
+    CliMissing,
     NotInstalled,
 }
 

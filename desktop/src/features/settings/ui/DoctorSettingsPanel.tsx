@@ -29,6 +29,8 @@ function StatusIcon({
       return <CheckCircle2 className="h-4 w-4 text-status-added" />;
     case "adapter_missing":
       return <AlertTriangle className="h-4 w-4 text-warning" />;
+    case "cli_missing":
+      return <AlertTriangle className="h-4 w-4 text-warning" />;
     case "not_installed":
       return <Circle className="h-4 w-4 text-muted-foreground/50" />;
   }
@@ -92,7 +94,8 @@ function ProviderRow({
         "flex items-start gap-3 rounded-xl border px-4 py-3",
         provider.availability === "available"
           ? "border-border/70 bg-background/80"
-          : provider.availability === "adapter_missing"
+          : provider.availability === "adapter_missing" ||
+              provider.availability === "cli_missing"
             ? "border-amber-500/30 bg-amber-500/5"
             : "border-border/50 bg-muted/30",
       )}
@@ -142,6 +145,24 @@ function ProviderRow({
                 {provider.underlyingCliPath ?? "unknown path"}
               </code>{" "}
               but ACP adapter not found.
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {provider.installHint}
+            </p>
+            <InstallActions
+              isInstalling={isInstalling}
+              onInstall={onInstall}
+              provider={provider}
+            />
+          </>
+        ) : provider.availability === "cli_missing" ? (
+          <>
+            <p className="mt-1 text-sm text-muted-foreground">
+              ACP adapter found at{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px]">
+                {provider.binaryPath ?? "unknown path"}
+              </code>{" "}
+              but the {provider.label} CLI is not installed.
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
               {provider.installHint}

@@ -401,11 +401,19 @@ fn classify_provider(
     underlying_cli_found: bool,
 ) -> (AcpAvailabilityStatus, Option<String>, Option<String>) {
     if let Some((cmd, path)) = adapter_result {
-        (
-            AcpAvailabilityStatus::Available,
-            Some(cmd.to_string()),
-            Some(path.display().to_string()),
-        )
+        if underlying_cli.is_some() && !underlying_cli_found {
+            (
+                AcpAvailabilityStatus::CliMissing,
+                Some(cmd.to_string()),
+                Some(path.display().to_string()),
+            )
+        } else {
+            (
+                AcpAvailabilityStatus::Available,
+                Some(cmd.to_string()),
+                Some(path.display().to_string()),
+            )
+        }
     } else if underlying_cli.is_some() && underlying_cli_found {
         (AcpAvailabilityStatus::AdapterMissing, None, None)
     } else {
@@ -446,20 +454,38 @@ pub fn discover_acp_providers() -> Vec<AcpProviderCatalogEntry> {
             let can_auto_install = !provider.cli_install_commands.is_empty()
                 || !provider.adapter_install_commands.is_empty();
 
-            let install_hint = if availability == AcpAvailabilityStatus::Available {
-                provider.install_hint.to_string()
-            } else if provider.underlying_cli.is_some() {
-                let has_cli_cmds = !provider.cli_install_commands.is_empty();
-                let has_adapter_cmds = !provider.adapter_install_commands.is_empty();
-                match availability {
-                    AcpAvailabilityStatus::AdapterMissing => {
-                        if has_adapter_cmds {
-                            format!("Install the {} ACP adapter via the Install button, or follow the manual instructions.", provider.label)
-                        } else {
-                            provider.install_hint.to_string()
-                        }
+            let install_hint = match availability {
+                AcpAvailabilityStatus::Available => provider.install_hint.to_string(),
+                _ if provider.underlying_cli.is_none() => provider.install_hint.to_string(),
+                AcpAvailabilityStatus::CliMissing => {
+                    let has_cli_cmds = !provider.cli_install_commands.is_empty();
+                    if has_cli_cmds {
+                        format!(
+                            "ACP adapter found, but the {} CLI is missing. Install will set up the CLI.",
+                            provider.label
+                        )
+                    } else {
+                        format!(
+                            "ACP adapter found, but the {} CLI is missing. Install it manually.",
+                            provider.label
+                        )
                     }
-                    AcpAvailabilityStatus::NotInstalled => match (has_cli_cmds, has_adapter_cmds) {
+                }
+                AcpAvailabilityStatus::AdapterMissing => {
+                    let has_adapter_cmds = !provider.adapter_install_commands.is_empty();
+                    if has_adapter_cmds {
+                        format!(
+                            "Install the {} ACP adapter via the Install button, or follow the manual instructions.",
+                            provider.label
+                        )
+                    } else {
+                        provider.install_hint.to_string()
+                    }
+                }
+                AcpAvailabilityStatus::NotInstalled => {
+                    let has_cli_cmds = !provider.cli_install_commands.is_empty();
+                    let has_adapter_cmds = !provider.adapter_install_commands.is_empty();
+                    match (has_cli_cmds, has_adapter_cmds) {
                         (true, true) => format!(
                             "Install will set up the {} CLI and its ACP adapter.",
                             provider.label
@@ -473,11 +499,8 @@ pub fn discover_acp_providers() -> Vec<AcpProviderCatalogEntry> {
                             provider.label
                         ),
                         (false, false) => provider.install_hint.to_string(),
-                    },
-                    AcpAvailabilityStatus::Available => unreachable!(),
+                    }
                 }
-            } else {
-                provider.install_hint.to_string()
             };
 
             AcpProviderCatalogEntry {
@@ -637,5 +660,17 @@ mod tests {
         assert_eq!(status, AcpAvailabilityStatus::NotInstalled);
         assert!(cmd.is_none());
         assert!(path.is_none());
+    }
+
+    #[test]
+    fn classifies_cli_missing_when_adapter_found_but_cli_absent() {
+        let (status, cmd, path) = classify_provider(
+            Some(("codex-acp", PathBuf::from("/opt/homebrew/bin/codex-acp"))),
+            Some("codex"),
+            false,
+        );
+        assert_eq!(status, AcpAvailabilityStatus::CliMissing);
+        assert_eq!(cmd.as_deref(), Some("codex-acp"));
+        assert_eq!(path.as_deref(), Some("/opt/homebrew/bin/codex-acp"));
     }
 }
