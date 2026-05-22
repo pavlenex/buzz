@@ -1,4 +1,5 @@
 import * as React from "react";
+import { AnimatePresence, motion } from "motion/react";
 
 import { TerminalInstance } from "./TerminalInstance";
 
@@ -80,20 +81,28 @@ export function TerminalPanel({ channelId, isOpen }: TerminalPanelProps) {
     [heightPx],
   );
 
-  if (!isOpen) return null;
-
   return (
-    <div className="px-4 pb-2 pt-1">
-      <div
-        className="pointer-events-auto relative flex flex-col overflow-hidden rounded-2xl border border-border/50 shadow-[0_4px_24px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
-        style={{ height: `${heightPx}px` }}
-        onPointerDown={handleResizeStart}
-      >
-        {/* Terminal content */}
-        <div className="min-h-0 flex-1 bg-terminal p-2">
-          <TerminalInstance channelId={channelId} isVisible={isOpen} />
-        </div>
-      </div>
-    </div>
+    <AnimatePresence>
+      {isOpen ? (
+        <motion.div
+          key="terminal-panel"
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: heightPx + 12, opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
+          className="overflow-hidden px-4 pb-2 pt-1"
+        >
+          <div
+            className="pointer-events-auto relative flex h-full flex-col overflow-hidden rounded-2xl border border-border/50 shadow-[0_4px_24px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
+            onPointerDown={handleResizeStart}
+          >
+            {/* Terminal content */}
+            <div className="min-h-0 flex-1 bg-terminal p-2">
+              <TerminalInstance channelId={channelId} isVisible={isOpen} />
+            </div>
+          </div>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
   );
 }
