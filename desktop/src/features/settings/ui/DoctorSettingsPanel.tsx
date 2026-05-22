@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Stethoscope,
 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import {
   useAcpProvidersQuery,
@@ -60,15 +61,14 @@ function InstallActions({
           {isInstalling ? "Installing..." : "Install"}
         </Button>
       ) : null}
-      <a
+      <button
         className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-        href={provider.installInstructionsUrl}
-        rel="noopener noreferrer"
-        target="_blank"
+        onClick={() => void openUrl(provider.installInstructionsUrl)}
+        type="button"
       >
         <ExternalLink className="h-3 w-3" />
         View instructions
-      </a>
+      </button>
     </div>
   );
 }
