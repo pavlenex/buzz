@@ -10,6 +10,7 @@ pub mod nostr_convert;
 mod prevent_sleep;
 mod relay;
 mod templates;
+mod terminal;
 mod util;
 
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
@@ -584,6 +585,10 @@ pub fn run() {
             apply_workspace,
             get_active_workspace,
             set_prevent_sleep_active,
+            terminal_open_session,
+            terminal_write,
+            terminal_resize,
+            terminal_close_session,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -89,6 +89,14 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
     keysWindows: "Ctrl+S",
     category: "Navigation",
   },
+  {
+    id: "toggle-terminal",
+    label: "Toggle terminal",
+    description: "Open or close the terminal panel",
+    keys: "⌘J",
+    keysWindows: "Ctrl+J",
+    category: "Navigation",
+  },
 
   // Zoom
   {

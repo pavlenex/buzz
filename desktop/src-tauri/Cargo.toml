@@ -73,5 +73,6 @@ earshot = "1.0"
 rubato = "2.0"
 audioadapter-buffers = "3.0"
 tempfile = "3"
+portable-pty = "0.8"
 
 [dev-dependencies]

@@ -9,6 +9,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::huddle::HuddleState;
 use crate::managed_agents::ManagedAgentProcess;
+use crate::terminal::TerminalRegistry;
 
 pub struct AppState {
     pub keys: Mutex<Keys>,
@@ -33,6 +34,8 @@ pub struct AppState {
     pub media_proxy_port: AtomicU16,
     /// IOKit power assertion state — prevents idle sleep while agents run.
     pub prevent_sleep: Arc<Mutex<crate::prevent_sleep::PreventSleepState>>,
+    /// PTY terminal session registry — one session per channel.
+    pub terminal_registry: TerminalRegistry,
 }
 
 pub fn build_app_state() -> AppState {
@@ -78,6 +81,7 @@ pub fn build_app_state() -> AppState {
         prevent_sleep: Arc::new(Mutex::new(
             crate::prevent_sleep::PreventSleepState::default(),
         )),
+        terminal_registry: TerminalRegistry::new(),
     }
 }
 

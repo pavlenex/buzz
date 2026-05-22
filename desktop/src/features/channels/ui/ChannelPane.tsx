@@ -10,6 +10,7 @@ import type { TypingIndicatorEntry } from "@/features/messages/useChannelTyping"
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
+import { TerminalPanel, useTerminal } from "@/features/terminal";
 import {
   BotActivityComposerAction,
   type BotActivityAgent,
@@ -179,6 +180,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   const timelineScrollRef = React.useRef<HTMLDivElement>(null);
   const composerWrapperRef = React.useRef<HTMLDivElement>(null);
   useComposerHeightPadding(timelineScrollRef, composerWrapperRef);
+  const { isOpen: isTerminalOpen, close: closeTerminal } = useTerminal();
 
   React.useEffect(() => {
     if (typeof window === "undefined") {
@@ -439,6 +441,13 @@ export const ChannelPane = React.memo(function ChannelPane({
             </div>
           </div>
         )}
+        {activeChannel && isTerminalOpen ? (
+          <TerminalPanel
+            channelId={activeChannel.id}
+            isOpen={isTerminalOpen}
+            onClose={closeTerminal}
+          />
+        ) : null}
       </div>
 
       {threadHeadMessage ? (
