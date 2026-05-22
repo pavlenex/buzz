@@ -90,7 +90,7 @@ export function TerminalPanel({ channelId, isOpen }: TerminalPanelProps) {
           animate={{ height: heightPx + 12, opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
           transition={{ duration: 0.2, ease: "easeOut" }}
-          className="overflow-hidden px-4 pb-2 pt-1"
+          className="overflow-hidden bg-background px-4 pb-2 pt-1"
         >
           <div
             className="pointer-events-auto relative flex h-full flex-col overflow-hidden rounded-2xl border border-border/50 bg-terminal shadow-[0_4px_24px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)]"
