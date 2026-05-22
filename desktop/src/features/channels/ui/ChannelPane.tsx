@@ -411,8 +411,14 @@ export const ChannelPane = React.memo(function ChannelPane({
                 }
                 showTopBorder={false}
               />
+              {activeChannel && isTerminalOpen ? (
+                <TerminalPanel
+                  channelId={activeChannel.id}
+                  isOpen={isTerminalOpen}
+                />
+              ) : null}
               {hasComposerBotActivity || hasTypingActivity ? (
-                <div className="h-7 bg-background px-4 pb-1 pt-0 sm:px-6 -mt-1">
+                <div className="h-7 bg-background px-4 pb-1 pt-0 sm:px-6">
                   <div className="flex h-full w-full items-center gap-2">
                     {hasComposerBotActivity ? (
                       <div className="shrink-0">
@@ -439,12 +445,6 @@ export const ChannelPane = React.memo(function ChannelPane({
                     ) : null}
                   </div>
                 </div>
-              ) : null}
-              {activeChannel && isTerminalOpen ? (
-                <TerminalPanel
-                  channelId={activeChannel.id}
-                  isOpen={isTerminalOpen}
-                />
               ) : null}
             </div>
           </div>
