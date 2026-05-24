@@ -69,6 +69,7 @@ export function useRichTextEditor({
 
   const editor = useEditor(
     {
+      immediatelyRender: true,
       extensions: [
         StarterKit.configure({
           // Use hard breaks (Shift+Enter) — Enter submits the message.
