@@ -453,7 +453,7 @@ export function AppSidebar({
 
   return (
     <Sidebar
-      className="!border-r-0"
+      className="z-30 !border-r-0"
       collapsible="offcanvas"
       data-testid="app-sidebar"
       variant="sidebar"

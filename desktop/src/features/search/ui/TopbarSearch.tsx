@@ -185,7 +185,7 @@ export function TopbarSearch({
 
   return (
     <div className="relative">
-      <div className="flex h-7 items-center gap-2 rounded-lg border border-border/70 bg-background/75 px-2.5 shadow-sm backdrop-blur">
+      <div className="flex h-7 items-center gap-2 rounded-lg border border-border/70 bg-background/60 px-2.5 shadow-sm backdrop-blur-xl backdrop-saturate-150 supports-[backdrop-filter]:bg-background/45">
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <Input
           aria-label="Search Sprout"

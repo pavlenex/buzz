@@ -30,7 +30,7 @@ export function AppHeaderControls({
 }: AppHeaderControlsProps) {
   return (
     <>
-      <div className="pointer-events-none fixed inset-x-0 top-0 z-20 h-20 bg-background/35 backdrop-blur-2xl backdrop-saturate-150 [mask-image:linear-gradient(to_bottom,black_0%,black_45%,transparent_100%)] supports-[backdrop-filter]:bg-background/25 [-webkit-mask-image:linear-gradient(to_bottom,black_0%,black_45%,transparent_100%)]" />
+      <div className="pointer-events-none fixed inset-x-0 top-0 z-20 h-[84px] bg-background/70 backdrop-blur-xl supports-[backdrop-filter]:bg-background/55" />
 
       <div className="pointer-events-none fixed inset-x-0 top-0 z-[70] h-10">
         <div className="pointer-events-auto absolute left-[80px] top-[9px] flex items-center gap-0.5">

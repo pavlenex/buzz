@@ -103,14 +103,12 @@ export function ChatHeader({
       {topbarActions}
       <header
         className={cn(
-          "relative z-30 flex min-h-[44px] min-w-0 shrink-0 cursor-default select-none items-center gap-[10px] py-[6px] pl-[16px] pr-[8px] transition-[margin,padding] duration-200 ease-linear sm:pl-[24px] sm:pr-[12px]",
+          "relative z-30 mt-10 flex min-h-[44px] min-w-0 shrink-0 cursor-default select-none items-center gap-[10px] py-[6px] pl-[16px] pr-[8px] transition-[margin,padding] duration-200 ease-linear sm:pl-[24px] sm:pr-[12px]",
           overlaysContent && "-mb-[44px]",
         )}
         data-testid="chat-header"
         data-tauri-drag-region
       >
-        <div className="pointer-events-none absolute inset-0 bg-background/70 backdrop-blur-xl [mask-image:linear-gradient(to_bottom,black_0%,transparent_100%)] supports-[backdrop-filter]:bg-background/55 [-webkit-mask-image:linear-gradient(to_bottom,black_0%,transparent_100%)]" />
-
         <div className="relative z-10 min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-[4px]">
             <ChannelIcon

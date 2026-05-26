@@ -176,14 +176,14 @@ export function MessageThreadPanel({
         )}
 
         <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex min-h-[44px] items-center gap-3 px-4 py-[6px]">
-          <div className="min-w-0 flex-1">
+          <div className="relative z-10 min-w-0 flex-1">
             <h2 className="text-sm font-semibold tracking-tight text-foreground">
               Thread
             </h2>
           </div>
           <Button
             aria-label="Close thread"
-            className="pointer-events-auto h-7 w-7"
+            className="pointer-events-auto relative z-10 h-7 w-7"
             data-testid="message-thread-close"
             onClick={onClose}
             size="icon"
