@@ -11,7 +11,9 @@ pub(crate) struct KnownAcpRuntime {
     pub commands: &'static [&'static str],
     pub aliases: &'static [&'static str],
     pub avatar_url: &'static str,
-    /// MCP server binary for this runtime, or `None` for no MCP server.
+    /// MCP server binary to use instead of the default `sprout-mcp-server`.
+    /// `None` means this runtime does not need a Sprout MCP server —
+    /// no MCP tools will be registered for the agent session.
     pub mcp_command: Option<&'static str>,
     /// Whether to enable MCP hook tools (`_Stop`, `_PostCompact`) for this agent.
     pub mcp_hooks: bool,
@@ -32,12 +34,16 @@ pub(crate) struct KnownAcpRuntime {
     /// pointing to the canonical `.agents/skills/sprout-cli`. `None` → this
     /// runtime reads the canonical path directly or has no skill support.
     pub skill_dir: Option<&'static str>,
+    // Phase 3: these fields are consumed by runtime.rs spawn logic to replace ad-hoc env var injection.
+    /// Whether this runtime supports ACP model switching mid-session.
     pub supports_acp_model_switching: bool,
+    /// Environment variable name used to set the model for this runtime, if any.
     pub model_env_var: Option<&'static str>,
-    #[allow(dead_code)]
+    /// Environment variable name used to set the LLM provider for this runtime, if any.
     pub provider_env_var: Option<&'static str>,
-    #[allow(dead_code)]
+    /// Whether the LLM provider is locked (not user-selectable) for this runtime.
     pub provider_locked: bool,
+    /// Default environment variables injected when spawning agents using this runtime.
     pub default_env: &'static [(&'static str, &'static str)],
 }
 
