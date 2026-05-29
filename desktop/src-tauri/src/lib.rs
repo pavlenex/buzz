@@ -638,6 +638,7 @@ pub fn run() {
             start_pairing,
             confirm_pairing_sas,
             cancel_pairing,
+            run_sprout_cli,
             apply_workspace,
             get_active_workspace,
             set_prevent_sleep_active,

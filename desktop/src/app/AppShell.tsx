@@ -12,6 +12,7 @@ import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
+import { useQuakeConsoleShortcut } from "@/app/useQuakeConsoleShortcut";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 import {
   channelsQueryKey,
@@ -169,6 +170,7 @@ export function AppShell() {
 
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
+  const [isConsoleOpen, setIsConsoleOpen] = React.useState(false);
   const [searchFocusRequest, setSearchFocusRequest] = React.useState(0);
   const [browseDialogType, setBrowseDialogType] =
     React.useState<BrowseDialogType>(null);
@@ -517,6 +519,11 @@ export function AppShell() {
     setIsNewDmOpen(true);
   }, []);
 
+  const toggleConsole = React.useCallback(() => {
+    setIsConsoleOpen((open) => !open);
+  }, []);
+  useQuakeConsoleShortcut({ isOpen: isConsoleOpen, onToggle: toggleConsole });
+
   React.useLayoutEffect(() => {
     if (settingsOpen) {
       return;
@@ -797,9 +804,11 @@ export function AppShell() {
                   channels={channels}
                   currentPubkey={identityQuery.data?.pubkey}
                   isChannelManagementOpen={isChannelManagementOpen}
+                  isConsoleOpen={isConsoleOpen}
                   onBrowseChannelJoin={handleBrowseChannelJoin}
                   onBrowseDialogOpenChange={handleBrowseDialogOpenChange}
                   onChannelManagementOpenChange={setIsChannelManagementOpen}
+                  onConsoleOpenChange={setIsConsoleOpen}
                   onDeleteActiveChannel={() => {
                     setIsChannelManagementOpen(false);
                     void goHome({ replace: true });

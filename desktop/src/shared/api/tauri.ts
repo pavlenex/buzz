@@ -555,6 +555,30 @@ export function getRelayHttpUrl(): Promise<string> {
   return invokeTauri<string>("get_relay_http_url");
 }
 
+export type SproutCliOutput = {
+  exitCode: number;
+  stderr: string;
+  stdout: string;
+};
+
+type RawSproutCliOutput = {
+  exit_code: number;
+  stderr: string;
+  stdout: string;
+};
+
+export async function runSproutCli(args: string[]): Promise<SproutCliOutput> {
+  const output = await invokeTauri<RawSproutCliOutput>("run_sprout_cli", {
+    args,
+  });
+
+  return {
+    exitCode: output.exit_code,
+    stderr: output.stderr,
+    stdout: output.stdout,
+  };
+}
+
 export async function getChannels(): Promise<Channel[]> {
   const channels = await invokeTauri<RawChannel[]>("get_channels");
   return channels.map(fromRawChannel);

@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { QuakeConsole } from "@/features/console/ui/QuakeConsole";
 import type { Channel } from "@/shared/api/types";
 
 const ChannelBrowserDialog = React.lazy(async () => {
@@ -20,9 +21,11 @@ type AppShellOverlaysProps = {
   channels: Channel[];
   currentPubkey?: string;
   isChannelManagementOpen: boolean;
+  isConsoleOpen: boolean;
   onBrowseChannelJoin: (channelId: string) => Promise<void>;
   onBrowseDialogOpenChange: (open: boolean) => void;
   onChannelManagementOpenChange: (open: boolean) => void;
+  onConsoleOpenChange: (open: boolean) => void;
   onDeleteActiveChannel: () => void;
   onSelectChannel: (channelId: string) => void;
 };
@@ -33,9 +36,11 @@ export function AppShellOverlays({
   channels,
   currentPubkey,
   isChannelManagementOpen,
+  isConsoleOpen,
   onBrowseChannelJoin,
   onBrowseDialogOpenChange,
   onChannelManagementOpenChange,
+  onConsoleOpenChange,
   onDeleteActiveChannel,
   onSelectChannel,
 }: AppShellOverlaysProps) {
@@ -65,6 +70,13 @@ export function AppShellOverlays({
           />
         </React.Suspense>
       ) : null}
+
+      <QuakeConsole
+        channels={channels}
+        onOpenChange={onConsoleOpenChange}
+        onOpenChannel={onSelectChannel}
+        open={isConsoleOpen}
+      />
     </>
   );
 }
