@@ -57,7 +57,7 @@ sprout-auth = { path = "../../crates/sprout-auth" }
 sprout-core = { path = "../../crates/sprout-core" }
 sprout-persona = { path = "../../crates/sprout-persona" }
 sprout-sdk = { path = "../../crates/sprout-sdk" }
-mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "6818bc779e33aef9b8599c30129b3853a0248c5a", package = "mesh-llm-host-runtime", default-features = false }
+mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "fd949ebdfc8d2abba9792cbad0be744d55366300", package = "mesh-llm-host-runtime", default-features = false }
 iroh-base = { version = "=1.0.0-rc.0", features = ["key"] }
 base64 = "0.22"
 sha2 = "0.11"
