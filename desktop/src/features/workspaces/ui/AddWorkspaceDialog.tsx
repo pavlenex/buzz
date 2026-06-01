@@ -1,5 +1,9 @@
 import * as React from "react";
 
+import {
+  DEFAULT_PUBLIC_RELAYS,
+  DEFAULT_SERVERLESS_RELAY,
+} from "@/features/workspaces/defaultRelays";
 import type { Workspace } from "@/features/workspaces/types";
 import {
   deriveWorkspaceName,
@@ -104,11 +108,27 @@ export function AddWorkspaceDialog({
               id="ws-relay-url"
               onChange={(e) => setRelayUrl(e.target.value)}
               placeholder={
-                serverless ? "wss://relay.damus.io" : "wss://relay.example.com"
+                serverless
+                  ? DEFAULT_SERVERLESS_RELAY
+                  : "wss://relay.example.com"
               }
               type="text"
               value={relayUrl}
             />
+            {serverless ? (
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                {DEFAULT_PUBLIC_RELAYS.map((relay) => (
+                  <button
+                    className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-primary/60 hover:text-foreground"
+                    key={relay}
+                    onClick={() => setRelayUrl(relay)}
+                    type="button"
+                  >
+                    {relay.replace("wss://", "")}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
           <div className="flex flex-col gap-1.5">
             <label

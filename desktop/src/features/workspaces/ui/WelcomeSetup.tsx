@@ -4,6 +4,10 @@ import { getIdentity } from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
+import {
+  DEFAULT_PUBLIC_RELAYS,
+  DEFAULT_SERVERLESS_RELAY,
+} from "../defaultRelays";
 import { initFirstWorkspace, deriveWorkspaceName } from "../workspaceStorage";
 
 const LOCAL_RELAY_URL = "ws://localhost:3000";
@@ -29,7 +33,7 @@ export function WelcomeSetup({
       setError(null);
       // Offer a sensible public relay default when flipping into serverless.
       if (checked && (relayUrl.trim() === "" || relayUrl === defaultRelayUrl)) {
-        setRelayUrl("wss://relay.damus.io");
+        setRelayUrl(DEFAULT_SERVERLESS_RELAY);
       }
     },
     [relayUrl, defaultRelayUrl],
@@ -119,10 +123,29 @@ export function WelcomeSetup({
                   setRelayUrl(e.target.value);
                   setError(null);
                 }}
-                placeholder="ws://localhost:3000"
+                placeholder={
+                  serverless ? DEFAULT_SERVERLESS_RELAY : "ws://localhost:3000"
+                }
                 type="url"
                 value={relayUrl}
               />
+              {serverless ? (
+                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                  {DEFAULT_PUBLIC_RELAYS.map((relay) => (
+                    <button
+                      className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-primary/60 hover:text-foreground"
+                      key={relay}
+                      onClick={() => {
+                        setRelayUrl(relay);
+                        setError(null);
+                      }}
+                      type="button"
+                    >
+                      {relay.replace("wss://", "")}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
