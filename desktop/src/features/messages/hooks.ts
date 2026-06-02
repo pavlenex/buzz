@@ -47,6 +47,7 @@ import {
   CHANNEL_EVENT_KINDS,
   KIND_STREAM_MESSAGE,
   KIND_SYSTEM_MESSAGE,
+  KIND_TYPING_INDICATOR,
 } from "@/shared/constants/kinds";
 
 /**
@@ -55,12 +56,32 @@ import {
  * relay set as writes — the live-WS path is single-relay and split-brains.
  * Encrypted channels and server mode keep the existing live-WS path.
  */
+// Public relays are slow/flaky on cold start: pooled connections are still
+// being established, so the first query often returns 0 even though the
+// messages exist. Retry a few times with short backoff until events arrive
+// (an empty channel is also valid). Kills the "blank for a minute" feeling.
+async function queryServerlessHistoryWithRetry(
+  channelId: string,
+  limit: number,
+): Promise<RelayEvent[]> {
+  const kinds = [...CHANNEL_EVENT_KINDS];
+  let events = await queryChannelMessages(channelId, kinds, limit);
+  for (const wait of [400, 800, 1500]) {
+    if (events.length > 0) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    events = await queryChannelMessages(channelId, kinds, limit);
+  }
+  return events;
+}
+
 async function fetchHistoryForChannel(
   channel: Channel,
   limit: number,
 ): Promise<RelayEvent[]> {
   if (isActiveWorkspaceServerless() && !isEncryptedChannel(channel)) {
-    return queryChannelMessages(channel.id, [...CHANNEL_EVENT_KINDS], limit);
+    return queryServerlessHistoryWithRetry(channel.id, limit);
   }
   return relayClient.fetchChannelHistory(
     channel.id,
@@ -222,6 +243,14 @@ export function useChannelSubscription(channel: Channel | null) {
       return;
     }
 
+    // Typing indicators (kind 20002) are ephemeral — they ride the same
+    // serverless-event channel as messages so the agent's "is typing…" signal
+    // reaches the client, but they must never land in the message timeline.
+    // useChannelTyping consumes them separately.
+    if (event.kind === KIND_TYPING_INDICATOR) {
+      return;
+    }
+
     queryClient.setQueryData<RelayEvent[]>(
       channelMessagesKey(channelId),
       (current = []) => mergeTimelineCacheMessages(current, event),
@@ -279,6 +308,9 @@ export function useChannelSubscription(channel: Channel | null) {
         }
         subId = await subscribeChannelMessages(channelId, [
           ...CHANNEL_EVENT_KINDS,
+          // Ephemeral typing indicators so the agent's "is typing…" signal
+          // streams through in serverless mode (consumed by useChannelTyping).
+          KIND_TYPING_INDICATOR,
         ]);
         // Initial backfill so existing messages show immediately.
         void syncLatestHistory().catch(() => {});
