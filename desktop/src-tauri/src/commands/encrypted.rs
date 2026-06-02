@@ -48,7 +48,7 @@ pub async fn decrypt_gift_wrap(
     Ok(DecryptedEvent {
         id: rumor.id.map(|id| id.to_hex()).unwrap_or_default(),
         pubkey: unwrapped.sender.to_hex(),
-        created_at: rumor.created_at.as_u64() as i64,
+        created_at: rumor.created_at.as_secs() as i64,
         kind: rumor.kind.as_u16(),
         tags,
         content: rumor.content.clone(),

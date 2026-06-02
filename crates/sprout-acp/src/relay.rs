@@ -567,6 +567,12 @@ enum RelayMessage {
 const MEMBERSHIP_NOTIF_SUB_ID: &str = "membership-notif";
 /// Subscription ID for encrypted owner-to-agent observer control frames.
 const OBSERVER_CONTROL_SUB_ID: &str = "agent-observer-control";
+/// Subscription ID for the agent's NIP-17 gift-wrap inbox (encrypted serverless
+/// private channels / DMs). The relay only stores `kind 1059` blobs addressed
+/// by `#p`; the agent unwraps each and routes the inner message by its `h` tag.
+const GIFT_WRAP_SUB_ID: &str = "agent-gift-wrap-inbox";
+/// NIP-59 gift wrap kind.
+const KIND_GIFT_WRAP: u16 = 1059;
 
 /// Commands sent from `HarnessRelay` to the background WebSocket task.
 enum RelayCommand {
@@ -1328,6 +1334,10 @@ async fn execute_connected_command(
         RelayCommand::SubscribeMembership => {
             let since = state.membership_last_seen.or(state.startup_watermark);
             let sent = send_membership_subscribe(ws, agent_pubkey_hex, since).await;
+            // Also bring up the NIP-17 gift-wrap inbox so the agent can receive
+            // encrypted messages in serverless private channels / DMs. Tied to
+            // membership so it's active whenever the agent is listening.
+            let _ = send_gift_wrap_subscribe(ws, agent_pubkey_hex).await;
             if sent {
                 state.membership_sub_active = true;
                 if state.membership_last_seen.is_none() {
@@ -1817,7 +1827,45 @@ async fn handle_ws_message(
                     subscription_id,
                     event,
                 } => {
-                    if subscription_id == OBSERVER_CONTROL_SUB_ID {
+                    if subscription_id == GIFT_WRAP_SUB_ID {
+                        // NIP-17 encrypted message in a serverless private channel
+                        // or DM. Unwrap to recover the inner kind-9 rumor (which
+                        // carries the channel `h` tag), then forward it as a normal
+                        // SproutEvent so the respond-to gate + rule matching run
+                        // unchanged.
+                        let wrap_id = event.id.to_hex();
+                        if !state.seen_ids.insert(wrap_id.clone()) {
+                            return true; // duplicate wrapper
+                        }
+                        match nostr::nips::nip59::UnwrappedGift::from_gift_wrap(keys, &event).await
+                        {
+                            Ok(unwrapped) => {
+                                if let Some(inner) =
+                                    rumor_to_event(&unwrapped.rumor, unwrapped.sender)
+                                {
+                                    if let Some(channel_uuid) = extract_h_tag_uuid(&inner) {
+                                        let sprout_event = SproutEvent {
+                                            channel_id: channel_uuid,
+                                            event: inner,
+                                        };
+                                        match event_tx.try_send(Some(sprout_event)) {
+                                            Ok(()) => {}
+                                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                                state.seen_ids.remove(&wrap_id);
+                                                warn!("encrypted event dropped (backpressure)");
+                                            }
+                                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                                return false
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                debug!("gift wrap not for us / undecryptable: {e}");
+                            }
+                        }
+                    } else if subscription_id == OBSERVER_CONTROL_SUB_ID {
                         match observer_control_tx.try_send(*event) {
                             Ok(()) => {}
                             Err(mpsc::error::TrySendError::Full(_)) => {
@@ -2214,6 +2262,11 @@ async fn resubscribe_after_reconnect(
             state.membership_dropped_since = None;
         } else {
             warn!("failed to resubscribe membership after reconnect");
+            all_ok = false;
+        }
+        // Restore the gift-wrap inbox alongside membership.
+        if !send_gift_wrap_subscribe(ws, agent_pubkey_hex).await {
+            warn!("failed to resubscribe gift-wrap inbox after reconnect");
             all_ok = false;
         }
     }
@@ -2631,6 +2684,45 @@ async fn send_membership_subscribe(
 }
 
 /// Send a NIP-01 REQ for owner-to-agent observer control frames.
+/// Subscribe to the agent's NIP-17 gift-wrap inbox (kind 1059, `#p` = agent).
+/// Gift wraps have randomized timestamps (up to ~2 days in the past per NIP-59),
+/// so we don't apply a tight `since` — a small look-back avoids replaying the
+/// entire history while still catching freshly-wrapped messages.
+async fn send_gift_wrap_subscribe(ws: &mut WsStream, agent_pubkey_hex: &str) -> bool {
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_sub(2 * 24 * 60 * 60); // NIP-59 timestamp tweak window
+    let req = json!([
+        "REQ",
+        GIFT_WRAP_SUB_ID,
+        {
+            "kinds": [KIND_GIFT_WRAP],
+            "#p": [agent_pubkey_hex],
+            "since": since,
+        }
+    ]);
+    match serde_json::to_string(&req) {
+        Ok(text) => {
+            match ws_send_timeout(ws, Message::Text(text.into()), WS_SEND_TIMEOUT_SECS).await {
+                Ok(()) => {
+                    debug!("subscribed to gift-wrap inbox");
+                    true
+                }
+                Err(e) => {
+                    warn!("failed to send gift-wrap REQ: {e}");
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            warn!("failed to serialize gift-wrap REQ: {e}");
+            false
+        }
+    }
+}
+
 async fn send_observer_control_subscribe(ws: &mut WsStream, agent_pubkey_hex: &str) -> bool {
     let req = json!([
         "REQ",
@@ -2694,6 +2786,28 @@ fn jittered_duration(base: Duration) -> Duration {
 }
 
 /// Extract a channel UUID from the h tag of a Nostr event.
+/// Convert an unwrapped NIP-17 rumor (`UnsignedEvent`, no signature) into a
+/// concrete `Event` for the harness pipeline. The gift-wrap seal already
+/// cryptographically verified `sender`, so we trust the rumor's author; the
+/// downstream pipeline reads only id/pubkey/kind/created_at/tags/content (never
+/// `.sig`). We materialize an `Event` via JSON with an empty signature.
+fn rumor_to_event(rumor: &nostr::UnsignedEvent, sender: nostr::PublicKey) -> Option<nostr::Event> {
+    let id = rumor.id?;
+    // Rumors carry no signature (NIP-17). The seal already verified `sender`,
+    // and the downstream pipeline never inspects `.sig`, so we attach an
+    // all-zero placeholder signature. `Event::new` does not verify.
+    let sig = nostr::secp256k1::schnorr::Signature::from_slice(&[0u8; 64]).ok()?;
+    Some(nostr::Event::new(
+        id,
+        sender,
+        rumor.created_at,
+        rumor.kind,
+        rumor.tags.iter().cloned(),
+        rumor.content.clone(),
+        sig,
+    ))
+}
+
 fn extract_h_tag_uuid(event: &nostr::Event) -> Option<Uuid> {
     event.tags.iter().find_map(|tag| {
         let tag_vec = tag.as_slice();
@@ -3657,5 +3771,41 @@ mod tests {
             state.seen_ids.insert(event_id_hex),
             "after backpressure removal, replay must be accepted"
         );
+    }
+
+    #[tokio::test]
+    async fn gift_wrap_unwraps_to_usable_channel_event() {
+        // End-to-end of the agent's inbound encrypted path: a sender gift-wraps
+        // a kind-9 message (with an h tag) to the agent; the agent unwraps it,
+        // converts the rumor to an Event, and recovers the channel + content.
+        use nostr::{EventBuilder, Keys, Kind, Tag};
+
+        let sender = Keys::generate();
+        let agent = Keys::generate();
+        let channel = uuid::Uuid::new_v4();
+
+        let rumor = EventBuilder::new(Kind::Custom(9), "hello agent")
+            .tags([Tag::parse(vec!["h", &channel.to_string()]).unwrap()])
+            .build(sender.public_key());
+
+        let wrap = EventBuilder::gift_wrap(&sender, &agent.public_key(), rumor, [])
+            .await
+            .expect("wrap");
+
+        // Agent unwraps with its own key.
+        let unwrapped = nostr::nips::nip59::UnwrappedGift::from_gift_wrap(&agent, &wrap)
+            .await
+            .expect("unwrap");
+        let event = rumor_to_event(&unwrapped.rumor, unwrapped.sender).expect("rumor -> event");
+
+        // The recovered event is usable by the harness pipeline.
+        assert_eq!(event.kind, Kind::Custom(9));
+        assert_eq!(event.content, "hello agent");
+        assert_eq!(
+            event.pubkey,
+            sender.public_key(),
+            "verified sender preserved"
+        );
+        assert_eq!(extract_h_tag_uuid(&event), Some(channel));
     }
 }

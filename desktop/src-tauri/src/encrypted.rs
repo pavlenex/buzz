@@ -27,6 +27,7 @@ use nostr::nips::nip59::UnwrappedGift;
 use nostr::{Event, EventBuilder, Keys, PublicKey, UnsignedEvent};
 
 /// Kind 1059 — NIP-59 gift wrap.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const KIND_GIFT_WRAP: u16 = 1059;
 
 /// Build the gift-wrapped events for `rumor`, one per recipient pubkey.
@@ -70,7 +71,6 @@ pub async fn unwrap_gift(
     Ok(UnwrappedRumor {
         sender: unwrapped.sender,
         rumor,
-        wrap_id: gift_wrap.id.to_hex(),
     })
 }
 
@@ -80,8 +80,6 @@ pub struct UnwrappedRumor {
     pub sender: PublicKey,
     /// The inner message event (kind 9, carries the channel `h` tag).
     pub rumor: UnsignedEvent,
-    /// The outer gift-wrap event id (used for relay-side dedup of the wrapper).
-    pub wrap_id: String,
 }
 
 impl UnwrappedRumor {
