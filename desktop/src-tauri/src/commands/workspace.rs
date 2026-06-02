@@ -54,6 +54,10 @@ pub fn apply_workspace(
         std::sync::atomic::Ordering::Relaxed,
     );
 
+    // Drop any pooled relay connections from the previous workspace so we don't
+    // reuse a socket authed to a different relay/identity.
+    state.relay_pool.clear();
+
     if let Some(keys) = parsed_keys {
         let mut keys_guard = state.keys.lock().map_err(|e| e.to_string())?;
         *keys_guard = keys;

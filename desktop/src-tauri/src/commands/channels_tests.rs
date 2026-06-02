@@ -345,3 +345,68 @@ async fn serverless_multi_relay_fanout() {
 
     eprintln!("✅ multi-relay fanout OK: published to 2, read+deduped from 2");
 }
+
+// ── Connection-reuse burst test (the rate-limit fix) ─────────────────────────
+//
+// Reproduces the real-app failure: a single AppState (one pooled connection)
+// firing many ops in quick succession — like get_channels (~10 queries) +
+// create channel (2 publishes) + several messages. Before the connection pool,
+// each op opened a fresh WebSocket and public relays rate-limited the storm
+// ("you are noting too much"). With the pool, all ops reuse ONE socket per
+// relay, so the burst goes through.
+//
+// Run with:
+//   cargo test --manifest-path desktop/src-tauri/Cargo.toml \
+//     serverless_burst_no_rate_limit -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "network: hits a live public relay (RELAY_URL, default damus)"]
+async fn serverless_burst_no_rate_limit() {
+    use crate::app_state::build_app_state;
+    use crate::relay::{query_relay, submit_event};
+    use std::sync::atomic::Ordering;
+
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let keys = nostr::Keys::generate();
+    let pk = keys.public_key().to_hex();
+    let relay = std::env::var("RELAY_URL").unwrap_or_else(|_| "wss://relay.damus.io".to_string());
+
+    let state = build_app_state();
+    *state.keys.lock().unwrap() = keys.clone();
+    *state.relay_url_override.lock().unwrap() = Some(relay.clone());
+    state.serverless.store(true, Ordering::Relaxed);
+
+    // Burst of ~15 sequential queries (mimics get_channels firing many REQs).
+    for i in 0..15 {
+        query_relay(
+            &state,
+            &[serde_json::json!({"kinds":[39000],"#d":[format!("burst-{i}")],"limit":1})],
+        )
+        .await
+        .unwrap_or_else(|e| panic!("query {i} failed (rate-limited?): {e}"));
+    }
+    eprintln!("✅ 15 sequential queries reused one pooled connection");
+
+    // Burst of publishes (mimics create channel + messages). All must be
+    // accepted — a rate-limit rejection here is the bug we fixed.
+    for i in 0..6 {
+        let channel = uuid::Uuid::new_v4();
+        let builder = crate::events::build_message(
+            channel,
+            &format!("burst message {i} from {}", &pk[..8]),
+            None,
+            &[],
+            &[],
+        )
+        .expect("build message");
+        let resp = submit_event(builder, &state)
+            .await
+            .unwrap_or_else(|e| panic!("publish {i} failed (rate-limited?): {e}"));
+        assert!(
+            !resp.message.contains("rate-limit"),
+            "publish {i} was rate-limited — connection pool not reusing socket: {}",
+            resp.message
+        );
+    }
+    eprintln!("✅ 6 sequential publishes reused one pooled connection — no rate limit");
+}

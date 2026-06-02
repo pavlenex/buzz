@@ -14,17 +14,11 @@
 //! (channels, DMs, agents) is transport-agnostic: it calls `query_relay` /
 //! `submit_event`, which dispatch here when `state.is_serverless()`.
 
-use std::time::Duration;
-
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use nostr::EventBuilder;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::app_state::AppState;
 use crate::relay::SubmitEventResponse;
-
-const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
-const PUBLISH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Execute one or more filters as a single `REQ` and collect matching events
 /// until the relay sends `EOSE`. Mirrors `relay::query_relay` but over a plain
@@ -71,101 +65,7 @@ async fn query_relay_ws_one(
         let guard = state.keys.lock().map_err(|e| e.to_string())?;
         guard.clone()
     };
-
-    let (ws, _) = connect_async(relay_url)
-        .await
-        .map_err(|e| format!("relay connection failed: {e}"))?;
-    let (mut write, mut read) = ws.split();
-
-    // Build ["REQ", <sub>, <filter>, <filter>, ...]
-    let sub_id = format!("q-{}", uuid::Uuid::new_v4());
-    let mut req = vec![
-        serde_json::Value::String("REQ".into()),
-        serde_json::Value::String(sub_id.clone()),
-    ];
-    req.extend(filters.iter().cloned());
-    let req_json = serde_json::Value::Array(req).to_string();
-
-    write
-        .send(Message::Text(req_json.into()))
-        .await
-        .map_err(|e| format!("failed to send REQ: {e}"))?;
-
-    let mut events: Vec<nostr::Event> = Vec::new();
-
-    let collect = tokio::time::timeout(QUERY_TIMEOUT, async {
-        loop {
-            let msg = match read.next().await {
-                Some(Ok(m)) => m,
-                Some(Err(e)) => return Err(format!("WS read error: {e}")),
-                None => return Err("relay closed during query".to_string()),
-            };
-            let Message::Text(text) = msg else { continue };
-            let Ok(arr) = serde_json::from_str::<serde_json::Value>(&text) else {
-                continue;
-            };
-            let Some(arr) = arr.as_array() else { continue };
-            let Some(tag) = arr.first().and_then(|v| v.as_str()) else {
-                continue;
-            };
-
-            // For EVENT/EOSE/CLOSED, arr[1] is the subscription id.
-            let sub_matches = arr.get(1).and_then(|v| v.as_str()) == Some(sub_id.as_str());
-
-            match tag {
-                "EVENT" if sub_matches => {
-                    // ["EVENT", <sub>, <event>]
-                    if let Some(ev) = arr
-                        .get(2)
-                        .and_then(|v| serde_json::from_value::<nostr::Event>(v.clone()).ok())
-                    {
-                        events.push(ev);
-                    }
-                }
-                "EOSE" if sub_matches => return Ok(()),
-                "CLOSED" if sub_matches => {
-                    let reason = arr
-                        .get(2)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("subscription closed by relay");
-                    return Err(format!("relay closed subscription: {reason}"));
-                }
-                "AUTH" => {
-                    // Relay wants NIP-42 auth. Sign and send, then keep reading.
-                    if let Some(challenge) = arr.get(1).and_then(|v| v.as_str()) {
-                        if let Ok(auth_json) = build_auth_message(&keys, relay_url, challenge) {
-                            let _ = write.send(Message::Text(auth_json.into())).await;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    })
-    .await;
-
-    // Best-effort CLOSE so we don't leave a dangling sub.
-    let close_json = serde_json::json!(["CLOSE", sub_id]).to_string();
-    let _ = write.send(Message::Text(close_json.into())).await;
-    let _ = write.close().await;
-
-    match collect {
-        Ok(Ok(())) => Ok(events),
-        Ok(Err(e)) => {
-            // A relay that CLOSED for auth reasons but we still got some events:
-            // return what we have rather than failing hard.
-            if !events.is_empty() {
-                Ok(events)
-            } else {
-                Err(e)
-            }
-        }
-        Err(_) => {
-            // Timed out waiting for EOSE — return whatever arrived. Many public
-            // relays are slow to EOSE; partial results are better than nothing.
-            Ok(events)
-        }
-    }
+    state.relay_pool.query(relay_url, &keys, filters).await
 }
 
 /// Publish a signed event over a plain WebSocket and wait for the relay's
@@ -184,23 +84,23 @@ pub async fn submit_event_ws(
         .sign_with_keys(&keys)
         .map_err(|e| format!("failed to sign event: {e}"))?;
 
-    // Publish to all relays, succeeding if any accepts. Public relays often
-    // rate-limit bursts ("noting too much"); since the same event going to N
-    // relays is idempotent (dedup by id), a transient rate-limit on one relay
-    // is fine as long as another accepts. If ALL relays rate-limit, retry once
-    // after a short backoff — adding an agent fires several writes in quick
-    // succession, which is the usual trigger.
+    // Publish to all relays concurrently and return as soon as ONE accepts —
+    // don't block on slow/unreachable relays (a stalled public relay must not
+    // freeze the UI). The same event to N relays is idempotent (dedup by id),
+    // so the first acceptance is authoritative. Public relays rate-limit bursts
+    // per connection; with multiple relays another usually accepts. If all
+    // relays rate-limit, retry once after a short backoff.
     for attempt in 0..2 {
-        let futures = relay_urls
+        let mut futures: futures_util::stream::FuturesUnordered<_> = relay_urls
             .iter()
-            .map(|url| submit_event_ws_one(&event, &keys, url));
-        let results = futures_util::future::join_all(futures).await;
+            .map(|url| submit_event_ws_one(state, &event, &keys, url))
+            .collect();
 
         let mut last_err = None;
-        let mut all_rate_limited = !results.is_empty();
-        for r in results {
+        let mut all_rate_limited = true;
+        while let Some(r) = futures.next().await {
             match r {
-                Ok(resp) if resp.accepted => return Ok(resp),
+                Ok(resp) if resp.accepted => return Ok(resp), // first acceptance wins
                 Ok(resp) => {
                     if !resp.message.contains("rate-limit") {
                         all_rate_limited = false;
@@ -214,9 +114,7 @@ pub async fn submit_event_ws(
             }
         }
 
-        // Only the rate-limit case is worth retrying; other rejections won't
-        // change on retry.
-        if attempt == 0 && all_rate_limited {
+        if attempt == 0 && all_rate_limited && !relay_urls.is_empty() {
             tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
             continue;
         }
@@ -226,89 +124,12 @@ pub async fn submit_event_ws(
 }
 
 async fn submit_event_ws_one(
+    state: &AppState,
     event: &nostr::Event,
     keys: &nostr::Keys,
     relay_url: &str,
 ) -> Result<SubmitEventResponse, String> {
-    let event_id = event.id.to_hex();
-    let event_json = serde_json::json!(["EVENT", event]).to_string();
-
-    let (ws, _) = connect_async(relay_url)
-        .await
-        .map_err(|e| format!("relay connection failed: {e}"))?;
-    let (mut write, mut read) = ws.split();
-
-    write
-        .send(Message::Text(event_json.clone().into()))
-        .await
-        .map_err(|e| format!("failed to send EVENT: {e}"))?;
-
-    let result = tokio::time::timeout(PUBLISH_TIMEOUT, async {
-        loop {
-            let msg = match read.next().await {
-                Some(Ok(m)) => m,
-                Some(Err(e)) => return Err(format!("WS read error: {e}")),
-                None => return Err("relay closed during publish".to_string()),
-            };
-            let Message::Text(text) = msg else { continue };
-            let Ok(arr) = serde_json::from_str::<serde_json::Value>(&text) else {
-                continue;
-            };
-            let Some(arr) = arr.as_array() else { continue };
-            let Some(tag) = arr.first().and_then(|v| v.as_str()) else {
-                continue;
-            };
-
-            match tag {
-                // ["OK", <event_id>, <accepted: bool>, <message>]
-                "OK" if arr.get(1).and_then(|v| v.as_str()) == Some(event_id.as_str()) => {
-                    let accepted = arr.get(2).and_then(|v| v.as_bool()).unwrap_or(false);
-                    let message = arr
-                        .get(3)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    return Ok(SubmitEventResponse {
-                        event_id: event_id.clone(),
-                        accepted,
-                        message,
-                    });
-                }
-                "AUTH" => {
-                    if let Some(challenge) = arr.get(1).and_then(|v| v.as_str()) {
-                        if let Ok(auth_json) = build_auth_message(keys, relay_url, challenge) {
-                            let _ = write.send(Message::Text(auth_json.into())).await;
-                            // Re-send the event after authenticating.
-                            let _ = write.send(Message::Text(event_json.clone().into())).await;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    })
-    .await;
-
-    let _ = write.close().await;
-
-    match result {
-        Ok(Ok(resp)) => {
-            if !resp.accepted {
-                return Err(format!("relay rejected event: {}", resp.message));
-            }
-            Ok(resp)
-        }
-        Ok(Err(e)) => Err(e),
-        Err(_) => {
-            // Many relays accept silently or are slow to OK. Treat a timeout as
-            // best-effort success so writes don't spuriously fail in the UI.
-            Ok(SubmitEventResponse {
-                event_id,
-                accepted: true,
-                message: "published (no OK received before timeout)".to_string(),
-            })
-        }
-    }
+    state.relay_pool.publish(relay_url, keys, event).await
 }
 
 /// Publish an already-signed event over a plain WebSocket and wait for `OK`.
@@ -318,85 +139,23 @@ async fn submit_event_ws_one(
 /// agent-profile sync, where the event is signed by the agent's keys rather
 /// than the user's identity key.
 pub async fn publish_signed_event_ws(
+    state: &AppState,
     event: &nostr::Event,
     keys: &nostr::Keys,
     relay_urls: &[String],
 ) -> Result<(), String> {
-    let futures = relay_urls
-        .iter()
-        .map(|url| publish_signed_event_ws_one(event, keys, url));
-    let results = futures_util::future::join_all(futures).await;
     let mut last_err = None;
-    for r in results {
-        match r {
-            Ok(()) => return Ok(()),
+    for url in relay_urls {
+        match state.relay_pool.publish(url, keys, event).await {
+            Ok(_) => return Ok(()),
             Err(e) => last_err = Some(e),
         }
     }
     Err(last_err.unwrap_or_else(|| "all relays failed".to_string()))
 }
 
-async fn publish_signed_event_ws_one(
-    event: &nostr::Event,
-    keys: &nostr::Keys,
-    relay_url: &str,
-) -> Result<(), String> {
-    let event_id = event.id.to_hex();
-    let event_json = serde_json::json!(["EVENT", event]).to_string();
-
-    let (ws, _) = connect_async(relay_url)
-        .await
-        .map_err(|e| format!("relay connection failed: {e}"))?;
-    let (mut write, mut read) = ws.split();
-
-    write
-        .send(Message::Text(event_json.clone().into()))
-        .await
-        .map_err(|e| format!("failed to send EVENT: {e}"))?;
-
-    let result = tokio::time::timeout(PUBLISH_TIMEOUT, async {
-        loop {
-            let msg = match read.next().await {
-                Some(Ok(m)) => m,
-                Some(Err(e)) => return Err(format!("WS read error: {e}")),
-                None => return Err("relay closed during publish".to_string()),
-            };
-            let Message::Text(text) = msg else { continue };
-            let Ok(arr) = serde_json::from_str::<serde_json::Value>(&text) else {
-                continue;
-            };
-            let Some(arr) = arr.as_array() else { continue };
-            let Some(tag) = arr.first().and_then(|v| v.as_str()) else {
-                continue;
-            };
-            match tag {
-                "OK" if arr.get(1).and_then(|v| v.as_str()) == Some(event_id.as_str()) => {
-                    return Ok(());
-                }
-                "AUTH" => {
-                    if let Some(challenge) = arr.get(1).and_then(|v| v.as_str()) {
-                        if let Ok(auth_json) = build_auth_message(keys, relay_url, challenge) {
-                            let _ = write.send(Message::Text(auth_json.into())).await;
-                            let _ = write.send(Message::Text(event_json.clone().into())).await;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    })
-    .await;
-
-    let _ = write.close().await;
-
-    match result {
-        Ok(Ok(())) | Err(_) => Ok(()), // best-effort: tolerate slow/silent relays
-        Ok(Err(e)) => Err(e),
-    }
-}
-
 /// Build a NIP-42 `["AUTH", <event>]` message string.
-fn build_auth_message(
+pub(crate) fn build_auth_message(
     keys: &nostr::Keys,
     relay_url: &str,
     challenge: &str,

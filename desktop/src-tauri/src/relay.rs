@@ -284,7 +284,7 @@ pub async fn sync_managed_agent_profile(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        return crate::ws_relay::publish_signed_event_ws(&event, agent_keys, &relay_urls)
+        return crate::ws_relay::publish_signed_event_ws(state, &event, agent_keys, &relay_urls)
             .await
             .map_err(|e| {
                 format!("Created the agent, but could not sync its profile metadata: {e}")

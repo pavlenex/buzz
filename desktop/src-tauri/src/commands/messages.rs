@@ -117,7 +117,7 @@ async fn send_encrypted_message(
     let mut published = 0;
     let mut last_err = None;
     for wrap in &wraps {
-        match crate::ws_relay::publish_signed_event_ws(wrap, &keys, &relay_urls).await {
+        match crate::ws_relay::publish_signed_event_ws(state, wrap, &keys, &relay_urls).await {
             Ok(()) => published += 1,
             Err(e) => last_err = Some(e),
         }
