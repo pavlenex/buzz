@@ -434,7 +434,12 @@ pub async fn send_channel_message(
     // (the encrypted inner event), so threading is preserved without leaking
     // the reply as plaintext to the relays.
     if kind_num == sprout_core::kind::KIND_STREAM_MESSAGE {
-        if let Some(members) = encrypted_recipients(&state, &channel_id).await? {
+        let recip = encrypted_recipients(&state, &channel_id).await?;
+        eprintln!(
+            "sprout-desktop: [serverless] send to {channel_id}: encrypted_recipients = {:?}",
+            recip.as_ref().map(|m| m.len())
+        );
+        if let Some(members) = recip {
             // Build the in-rumor thread ref from caller-supplied ids (no relay
             // lookup — the parent rumor isn't stored plaintext on the relay).
             let thread_ref = match &parent_event_id {
