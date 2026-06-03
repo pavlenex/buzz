@@ -13,6 +13,16 @@
 //! dispatches incoming messages to in-flight requests by subscription id
 //! (queries) or event id (OK acks). Connections are re-established on demand
 //! after a drop. NIP-42 AUTH challenges are answered automatically.
+//!
+//! **Why hand-rolled here, but `nostr-relay-pool` in the agent (`sprout-acp`):**
+//! the standalone agent binary adopts `nostr-relay-pool` for free auto-reconnect
+//! / auto-resubscribe / dedup. The desktop deliberately does NOT, to avoid
+//! pulling a *second* rustls/TLS stack (`async-wsocket`) into the Tauri process,
+//! which already runs aws-lc-rs rustls for reqwest/media/tungstenite — two
+//! crypto providers in one process risks a `CryptoProvider` install panic. This
+//! pool is serverless-only and already self-heals (drops are detected via the
+//! `alive` flag and reconnected on next use), so the agent's missed-message bug
+//! does not apply here.
 
 use std::collections::HashMap;
 use std::sync::Arc;
