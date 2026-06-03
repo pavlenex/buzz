@@ -111,8 +111,8 @@ Each release produces two GitHub releases:
   | `SPROUT_UPDATER_PUBLIC_KEY` | Tauri updater public key (minisign) |
   | `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater private key |
   | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the private key |
-  | `RELEASE_APP_CLIENT_ID` (variable) | GitHub App client ID for release automation |
-  | `RELEASE_APP_PRIVATE_KEY` (secret) | GitHub App private key for release automation |
+  | `SPROUT_RELEASE_BOT_CLIENT_ID` (variable) | GitHub App client ID for release automation |
+  | `SPROUT_RELEASE_BOT_PRIVATE_KEY` (secret) | GitHub App private key for release automation |
   | `BUILDKITE_API_TOKEN` | Runway Buildkite API token (`write_builds` scope) |
 
 ---
