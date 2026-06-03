@@ -12,6 +12,7 @@ import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
+import { useSettingsShortcuts } from "@/app/useSettingsShortcuts";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 import {
   channelsQueryKey,
@@ -588,34 +589,12 @@ export function AppShell() {
     settingsOpen,
   ]);
 
-  React.useLayoutEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      const hasSettingsShortcutModifiers =
-        hasPrimaryShortcutModifier(event) && !event.altKey && !event.shiftKey;
-      const isSettingsShortcut =
-        hasSettingsShortcutModifiers &&
-        (event.key === "," || event.code === "Comma");
-      const isProfileShortcut =
-        hasSettingsShortcutModifiers && event.key.toLowerCase() === "u";
-
-      if (!isSettingsShortcut && !isProfileShortcut) {
-        return;
-      }
-
-      event.preventDefault();
-      if (settingsOpen && (!isProfileShortcut || settingsMode === "profile")) {
-        handleCloseSettings();
-        return;
-      }
-
-      handleOpenSettings(isProfileShortcut ? "profile" : undefined);
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [handleCloseSettings, handleOpenSettings, settingsMode, settingsOpen]);
+  useSettingsShortcuts({
+    mode: settingsMode,
+    onClose: handleCloseSettings,
+    onOpenSettings: handleOpenSettings,
+    open: settingsOpen,
+  });
 
   useMarkAsReadShortcuts({
     activeChannelId: activeChannel?.id ?? null,
