@@ -21,6 +21,7 @@ import {
   useOpenDmMutation,
 } from "@/features/channels/hooks";
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
+import { getThreadReference } from "@/features/messages/lib/threading";
 import { useThreadFollows } from "@/features/messages/lib/useThreadFollows";
 import {
   useHomeFeedNotifications,
@@ -31,7 +32,7 @@ import {
   requestDockBounce,
   revealDesktopAppWindow,
   sendDesktopNotification,
-  setDesktopAppBadgeCount,
+  setDesktopAppBadge,
   type DesktopNotificationTarget,
 } from "@/features/notifications/lib/desktop";
 import { playNotificationSound } from "@/features/notifications/lib/sound";
@@ -45,16 +46,18 @@ import {
   useUserStatusQuery,
   useUserStatusSubscription,
 } from "@/features/user-status/hooks";
+import { useWorkspaceEmojiLiveUpdates } from "@/features/custom-emoji/hooks";
 import { useProfileQuery } from "@/features/profile/hooks";
 import {
   DEFAULT_SETTINGS_SECTION,
   type SettingsSection,
 } from "@/features/settings/ui/SettingsPanels";
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
+import { useMeshRelayOrchestrator } from "@/features/mesh-compute/hooks/useMeshRelayOrchestrator";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
-import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { ServerlessProvider } from "@/features/workspaces/ServerlessContext";
 import { isServerlessWorkspace } from "@/features/workspaces/workspaceStorage";
+import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -109,6 +112,7 @@ function toSearchHit(target: DesktopNotificationTarget): SearchHit | null {
     channelName: target.channelName ?? null,
     createdAt: target.createdAt ?? Math.floor(Date.now() / 1_000),
     score: 0,
+    threadRootId: target.threadRootId ?? null,
   };
 }
 
@@ -176,6 +180,7 @@ export function AppShell() {
   const [browseDialogType, setBrowseDialogType] =
     React.useState<BrowseDialogType>(null);
   const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
+  const [isCreateChannelOpen, setIsCreateChannelOpen] = React.useState(false);
   const location = useLocation();
   const queryClient = useQueryClient();
   const {
@@ -197,10 +202,12 @@ export function AppShell() {
   const startupReady = useDeferredStartup();
 
   const identityQuery = useIdentityQuery();
+  useMeshRelayOrchestrator(identityQuery.data?.pubkey);
   const profileQuery = useProfileQuery();
   const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
   usePresenceSubscription();
   useUserStatusSubscription();
+  useWorkspaceEmojiLiveUpdates();
   const presenceSession = usePresenceSession(deferredPubkey);
   const selfStatusQuery = useUserStatusQuery(
     deferredPubkey ? [deferredPubkey] : [],
@@ -231,6 +238,8 @@ export function AppShell() {
             : content
           : "New message";
 
+      const threadRootId = getThreadReference(event.tags).rootId ?? null;
+
       void sendDesktopNotification({
         title: channelName,
         body,
@@ -242,6 +251,7 @@ export function AppShell() {
           eventId: event.id,
           kind: event.kind,
           pubkey: event.pubkey,
+          threadRootId,
         },
       }).then((didSend) => {
         if (!didSend) return;
@@ -282,6 +292,7 @@ export function AppShell() {
     markChannelRead,
     markChannelUnread,
     unreadChannelIds,
+    highPriorityUnreadChannelIds,
     getEffectiveTimestamp: getChannelReadAt,
     readStateVersion,
     participatedRootIds,
@@ -312,16 +323,18 @@ export function AppShell() {
   // ReadStateManager mounted via useUnreadChannels above. Channel-backed
   // feed items contribute to the badge iff strictly newer than that
   // channel's read marker; non-channel items keep their seen-set fallback.
-  const homeBadgeCount = useHomeFeedNotificationState(
-    homeFeedQuery.data,
-    identityQuery.data?.pubkey,
-    notificationSettings.settings,
-    notificationSettings.setDesktopEnabled,
-    selectedView === "home",
-    getChannelReadAt,
-    readStateVersion,
-    feedProfilesQuery.data?.profiles,
-  );
+  const { homeBadgeCount, homeBadgeCountExcludingHighPriority } =
+    useHomeFeedNotificationState(
+      homeFeedQuery.data,
+      identityQuery.data?.pubkey,
+      notificationSettings.settings,
+      notificationSettings.setDesktopEnabled,
+      selectedView === "home",
+      getChannelReadAt,
+      readStateVersion,
+      highPriorityUnreadChannelIds,
+      feedProfilesQuery.data?.profiles,
+    );
 
   const isNotifiedForThread = React.useCallback(
     (rootId: string) =>
@@ -485,8 +498,20 @@ export function AppShell() {
   }, []);
 
   React.useEffect(() => {
-    void setDesktopAppBadgeCount(unreadChannelIds.size + homeBadgeCount);
-  }, [homeBadgeCount, unreadChannelIds.size]);
+    const numericCount =
+      highPriorityUnreadChannelIds.size + homeBadgeCountExcludingHighPriority;
+    if (numericCount > 0) {
+      void setDesktopAppBadge({ kind: "count", count: numericCount });
+    } else if (unreadChannelIds.size > 0) {
+      void setDesktopAppBadge({ kind: "dot" });
+    } else {
+      void setDesktopAppBadge({ kind: "none" });
+    }
+  }, [
+    homeBadgeCountExcludingHighPriority,
+    highPriorityUnreadChannelIds.size,
+    unreadChannelIds.size,
+  ]);
 
   // Dispatch `sprout://message` deep links into the router.
   useMessageDeepLinks();
@@ -520,6 +545,10 @@ export function AppShell() {
     setIsNewDmOpen(true);
   }, []);
 
+  const handleOpenCreateChannel = React.useCallback(() => {
+    setIsCreateChannelOpen(true);
+  }, []);
+
   React.useLayoutEffect(() => {
     if (settingsOpen) {
       return;
@@ -543,6 +572,12 @@ export function AppShell() {
         return;
       }
 
+      if (key === "n" && event.shiftKey) {
+        event.preventDefault();
+        handleOpenCreateChannel();
+        return;
+      }
+
       if (key === "o" && event.shiftKey) {
         event.preventDefault();
         handleOpenBrowseChannels();
@@ -563,6 +598,7 @@ export function AppShell() {
   }, [
     handleOpenBrowseChannels,
     handleOpenNewDm,
+    handleOpenCreateChannel,
     handleOpenSearch,
     goHome,
     settingsOpen,
@@ -687,6 +723,7 @@ export function AppShell() {
                     isLoading={channelsQuery.isLoading}
                     isOpeningDm={openDmMutation.isPending}
                     isNewDmOpen={isNewDmOpen}
+                    isCreateChannelOpen={isCreateChannelOpen}
                     isPresencePending={presenceSession.isPending}
                     onAddWorkspace={(workspace) => {
                       const id = workspacesHook.addWorkspace(workspace);
@@ -694,6 +731,7 @@ export function AppShell() {
                     }}
                     onAddWorkspaceOpenChange={setIsAddWorkspaceOpen}
                     onNewDmOpenChange={setIsNewDmOpen}
+                    onCreateChannelOpenChange={setIsCreateChannelOpen}
                     onOpenAddWorkspace={() => setIsAddWorkspaceOpen(true)}
                     onUpdateWorkspace={workspacesHook.updateWorkspace}
                     onRemoveWorkspace={workspacesHook.removeWorkspace}

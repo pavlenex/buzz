@@ -6,6 +6,8 @@ use std::{
 
 use nostr::{Keys, ToBech32};
 use tauri::{AppHandle, Manager};
+#[cfg(feature = "mesh-llm")]
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::huddle::HuddleState;
 use crate::managed_agents::ManagedAgentProcess;
@@ -48,6 +50,9 @@ pub struct AppState {
     pub media_proxy_port: AtomicU16,
     /// IOKit power assertion state — prevents idle sleep while agents run.
     pub prevent_sleep: Arc<Mutex<crate::prevent_sleep::PreventSleepState>>,
+    /// In-process mesh-llm node started by Sprout Desktop.
+    #[cfg(feature = "mesh-llm")]
+    pub mesh_llm_runtime: AsyncMutex<Option<crate::mesh_llm::DesktopMeshRuntime>>,
 }
 
 pub fn build_app_state() -> AppState {
@@ -96,6 +101,8 @@ pub fn build_app_state() -> AppState {
         prevent_sleep: Arc::new(Mutex::new(
             crate::prevent_sleep::PreventSleepState::default(),
         )),
+        #[cfg(feature = "mesh-llm")]
+        mesh_llm_runtime: AsyncMutex::new(None),
     }
 }
 

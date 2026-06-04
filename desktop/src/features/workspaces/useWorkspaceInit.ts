@@ -10,6 +10,7 @@ import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
 import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
+import { resetSyncState } from "@/features/sidebar/lib/channelSectionsSync";
 
 import { initFirstWorkspace, isServerlessWorkspace } from "./workspaceStorage";
 import type { Workspace } from "./types";
@@ -26,6 +27,7 @@ function resetWorkspaceState(): void {
   resetMediaCaches();
   clearSearchHitEventCache();
   clearAllDrafts();
+  resetSyncState();
   // NOTE: the React Query cache is intentionally NOT cleared here.
   // `useWorkspaceInit` runs ABOVE the QueryClientProvider, so it has no query
   // client. The cache is made per-workspace by `WorkspaceQueryProvider` /

@@ -3,6 +3,7 @@ import {
   BellRing,
   Bot,
   Check,
+  Cpu,
   Download,
   Keyboard,
   LayoutTemplate,
@@ -11,6 +12,7 @@ import {
   Moon,
   Search,
   Smartphone,
+  Smile,
   Stethoscope,
   Sun,
   UserRound,
@@ -21,6 +23,7 @@ import type {
   NotificationSettings,
 } from "@/features/notifications/hooks";
 import { RelayMembersSettingsCard } from "@/features/relay-members/ui/RelayMembersSettingsCard";
+import { CustomEmojiSettingsCard } from "@/features/custom-emoji/ui/CustomEmojiSettingsCard";
 import { cn } from "@/shared/lib/cn";
 import {
   ACCENT_COLORS,
@@ -31,6 +34,7 @@ import { SYNTAX_THEMES, isLightTheme } from "@/shared/theme/theme-loader";
 import { ChannelTemplatesSettingsCard } from "./ChannelTemplatesSettingsCard";
 import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
 import { KeyboardShortcutsCard } from "./KeyboardShortcutsCard";
+import { MeshComputeSettingsCard } from "@/features/mesh-compute/ui/MeshComputeSettingsCard";
 import { MobilePairingCard } from "./MobilePairingCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { PreventSleepSettingsCard } from "./PreventSleepSettingsCard";
@@ -42,9 +46,11 @@ export type SettingsSection =
   | "notifications"
   | "agents"
   | "channel-templates"
+  | "compute"
   | "appearance"
   | "shortcuts"
   | "relay-members"
+  | "custom-emoji"
   | "mobile"
   | "updates"
   | "doctor";
@@ -93,6 +99,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     icon: LayoutTemplate,
   },
   {
+    value: "compute",
+    label: "Compute",
+    icon: Cpu,
+  },
+  {
     value: "appearance",
     label: "Appearance",
     icon: MonitorCog,
@@ -106,6 +117,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "relay-members",
     label: "Relay Access",
     icon: LockKeyhole,
+  },
+  {
+    value: "custom-emoji",
+    label: "Custom Emoji",
+    icon: Smile,
   },
   {
     value: "mobile",
@@ -284,12 +300,16 @@ export function renderSettingsSection(
       return <PreventSleepSettingsCard />;
     case "channel-templates":
       return <ChannelTemplatesSettingsCard />;
+    case "compute":
+      return <MeshComputeSettingsCard />;
     case "appearance":
       return <ThemeSettingsCard />;
     case "shortcuts":
       return <KeyboardShortcutsCard />;
     case "relay-members":
       return <RelayMembersSettingsCard currentPubkey={props.currentPubkey} />;
+    case "custom-emoji":
+      return <CustomEmojiSettingsCard />;
     case "mobile":
       return <MobilePairingCard currentPubkey={props.currentPubkey} />;
     case "updates":
