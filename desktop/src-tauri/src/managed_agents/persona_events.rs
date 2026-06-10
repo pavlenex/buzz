@@ -27,8 +27,6 @@ pub struct PersonaEventContent {
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub name_pool: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub env_vars: BTreeMap<String, String>,
 }
 
 /// Derive the d-tag (persona slug) from a `PersonaRecord`.
@@ -54,7 +52,6 @@ pub fn build_persona_event(record: &PersonaRecord) -> Result<EventBuilder, Strin
         model: record.model.clone(),
         provider: record.provider.clone(),
         name_pool: record.name_pool.clone(),
-        env_vars: record.env_vars.clone(),
     };
 
     let content_json = serde_json::to_string(&content)
@@ -101,7 +98,7 @@ pub fn persona_from_event(event: &nostr::Event) -> Result<PersonaRecord, String>
         is_active: true,
         source_team: None,
         source_team_persona_slug: Some(d_tag),
-        env_vars: content.env_vars,
+        env_vars: BTreeMap::new(),
         created_at: created_at.clone(),
         updated_at: created_at,
     })
@@ -197,7 +194,9 @@ mod tests {
         assert_eq!(restored.model, Some("claude-opus-4".to_string()));
         assert_eq!(restored.provider, Some("anthropic".to_string()));
         assert_eq!(restored.name_pool, vec!["Alpha", "Beta"]);
-        assert_eq!(restored.env_vars.get("KEY"), Some(&"value".to_string()));
+        // env_vars are not included in public persona events (secrets travel
+        // via NIP-44-encrypted engrams only).
+        assert!(restored.env_vars.is_empty());
         assert_eq!(
             restored.source_team_persona_slug,
             Some("test-slug".to_string())
