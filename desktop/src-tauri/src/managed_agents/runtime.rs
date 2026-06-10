@@ -5,8 +5,8 @@ use tauri::AppHandle;
 use crate::{
     managed_agents::{
         append_log_marker, known_acp_runtime, login_shell_path, managed_agent_log_path,
-        missing_command_message, normalize_agent_args, open_log_file, resolve_command,
-        ManagedAgentProcess, ManagedAgentRecord, ManagedAgentSummary,
+        managed_agents_base_dir, missing_command_message, normalize_agent_args, open_log_file,
+        resolve_command, ManagedAgentProcess, ManagedAgentRecord, ManagedAgentSummary,
     },
     util::now_iso,
 };
@@ -788,6 +788,123 @@ fn resolve_effective_prompt_model_provider(
     }
 }
 
+/// Write a persona-snapshot engram at spawn time (provenance only).
+///
+/// Records the effective persona state (prompt, model, provider) as a NIP-AE
+/// encrypted engram signed by the agent. This is write-only — the engram is
+/// never read back into the prompt path (dead code until PR 3 wires the read
+/// side). Errors are logged but never block agent spawn.
+fn write_persona_engram_at_spawn(
+    app: &AppHandle,
+    record: &ManagedAgentRecord,
+    owner_hex: Option<&str>,
+    effective_prompt: Option<&str>,
+    effective_model: Option<&str>,
+    effective_provider: Option<&str>,
+) {
+    let db_path = match managed_agents_base_dir(app) {
+        Ok(dir) => dir.join("retention.db"),
+        Err(e) => {
+            eprintln!(
+                "sprout-desktop: persona-engram: failed to resolve retention path for {}: {e}",
+                record.name
+            );
+            return;
+        }
+    };
+
+    if let Err(e) = write_persona_engram_to_db(
+        &db_path,
+        record,
+        owner_hex,
+        effective_prompt,
+        effective_model,
+        effective_provider,
+    ) {
+        eprintln!("sprout-desktop: persona-engram: {} — {e}", record.name);
+    }
+}
+
+/// Core engram-write logic, decoupled from `AppHandle` for testing.
+///
+/// Builds a NIP-AE encrypted engram containing the persona snapshot and
+/// writes it to the retention store at `db_path`. Returns `Err` on any
+/// failure; the caller decides whether to log or propagate.
+fn write_persona_engram_to_db(
+    db_path: &std::path::Path,
+    record: &ManagedAgentRecord,
+    owner_hex: Option<&str>,
+    effective_prompt: Option<&str>,
+    effective_model: Option<&str>,
+    effective_provider: Option<&str>,
+) -> Result<(), String> {
+    use nostr::{Keys, PublicKey};
+    use serde::Serialize;
+    use sprout_core::engram::{self, Body};
+    use sprout_core::kind::KIND_AGENT_ENGRAM;
+
+    use super::retention::{open_retention_db, retain_event, RetainedEvent};
+
+    let owner = owner_hex.ok_or("no owner pubkey available")?;
+
+    let owner_pubkey =
+        PublicKey::from_hex(owner).map_err(|e| format!("invalid owner pubkey: {e}"))?;
+
+    let agent_keys =
+        Keys::parse(&record.private_key_nsec).map_err(|e| format!("invalid agent keys: {e}"))?;
+
+    #[derive(Serialize)]
+    struct PersonaSnapshot<'a> {
+        persona_id: Option<&'a str>,
+        system_prompt: Option<&'a str>,
+        model: Option<&'a str>,
+        provider: Option<&'a str>,
+        source_version: &'a str,
+    }
+
+    let snapshot = PersonaSnapshot {
+        persona_id: record.persona_id.as_deref(),
+        system_prompt: effective_prompt,
+        model: effective_model,
+        provider: effective_provider,
+        source_version: &record.updated_at,
+    };
+
+    let value =
+        serde_json::to_string(&snapshot).map_err(|e| format!("failed to serialize: {e}"))?;
+
+    let slug = "mem/persona-snapshot";
+    let body = Body::Memory {
+        slug: slug.to_string(),
+        value: Some(value),
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let event = engram::build_event(&agent_keys, &owner_pubkey, &body, now)
+        .map_err(|e| format!("failed to build engram: {e}"))?;
+
+    let conn = open_retention_db(db_path).map_err(|e| format!("failed to open db: {e}"))?;
+
+    let k_c = engram::conversation_key(agent_keys.secret_key(), &owner_pubkey);
+    let d = engram::d_tag(&k_c, slug);
+
+    let retained = RetainedEvent {
+        kind: KIND_AGENT_ENGRAM,
+        pubkey: agent_keys.public_key().to_hex(),
+        d_tag: d,
+        content: event.content.to_string(),
+        created_at: event.created_at.as_secs() as i64,
+        raw_event: nostr::JsonUtil::as_json(&event),
+        pending_sync: true,
+    };
+
+    retain_event(&conn, &retained).map_err(|e| format!("failed to retain: {e}"))
+}
+
 /// Spawn an agent process without holding any locks on records or runtimes.
 /// Returns the child process and log path on success. The caller is responsible
 /// for updating `ManagedAgentRecord` fields and inserting into the runtimes map.
@@ -932,6 +1049,17 @@ pub fn spawn_agent_child(
             record.system_prompt.clone(),
             record.model.clone(),
         );
+
+    // Write persona snapshot as a NIP-AE engram (provenance only — never read
+    // back into the prompt path until PR 3 wires the read side).
+    write_persona_engram_at_spawn(
+        app,
+        record,
+        owner_hex,
+        effective_prompt.as_deref(),
+        effective_model.as_deref(),
+        effective_provider.as_deref(),
+    );
 
     if let Some(prompt) = &effective_prompt {
         command.env("SPROUT_ACP_SYSTEM_PROMPT", prompt);

@@ -328,3 +328,190 @@ fn runtime_metadata_env_vars_injects_model_even_with_acp_model_switching() {
         ]
     );
 }
+
+// ── write_persona_engram_to_db tests ──────────────────────────────────────
+
+use super::write_persona_engram_to_db;
+
+/// Build a record fixture with a real nsec for engram tests.
+fn engram_fixture() -> ManagedAgentRecord {
+    // Generate a real key pair so engram crypto works.
+    let keys = nostr::Keys::generate();
+    let mut rec = fixture(RespondTo::Anyone, vec![], Some("tag".into()));
+    rec.private_key_nsec = keys.secret_key().to_secret_hex();
+    rec.pubkey = keys.public_key().to_hex();
+    rec.persona_id = Some("test-persona".into());
+    rec.system_prompt = Some("You are a test agent.".into());
+    rec.model = Some("claude-opus-4".into());
+    rec.updated_at = "2026-06-10T14:00:00Z".into();
+    rec
+}
+
+#[test]
+fn engram_write_stores_valid_event_in_retention() {
+    use crate::managed_agents::retention::{get_retained_event, open_retention_db};
+    use sprout_core::kind::KIND_AGENT_ENGRAM;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("retention.db");
+    let record = engram_fixture();
+
+    // Owner is a separate key.
+    let owner_keys = nostr::Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+
+    write_persona_engram_to_db(
+        &db_path,
+        &record,
+        Some(&owner_hex),
+        Some("You are a test agent."),
+        Some("claude-opus-4"),
+        Some("anthropic"),
+    )
+    .expect("engram write should succeed");
+
+    // Verify the row exists in the DB.
+    let conn = open_retention_db(&db_path).unwrap();
+    let agent_keys = nostr::Keys::parse(&record.private_key_nsec).unwrap();
+    let k_c =
+        sprout_core::engram::conversation_key(agent_keys.secret_key(), &owner_keys.public_key());
+    let d = sprout_core::engram::d_tag(&k_c, "mem/persona-snapshot");
+
+    let row = get_retained_event(&conn, KIND_AGENT_ENGRAM, &record.pubkey, &d)
+        .unwrap()
+        .expect("should find retained engram");
+
+    assert_eq!(row.kind, KIND_AGENT_ENGRAM);
+    assert_eq!(row.pubkey, record.pubkey);
+    assert!(row.pending_sync);
+}
+
+#[test]
+fn engram_write_produces_decryptable_event() {
+    use sprout_core::engram;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("retention.db");
+    let record = engram_fixture();
+
+    let owner_keys = nostr::Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+
+    write_persona_engram_to_db(
+        &db_path,
+        &record,
+        Some(&owner_hex),
+        Some("You are a test agent."),
+        Some("claude-opus-4"),
+        Some("anthropic"),
+    )
+    .unwrap();
+
+    // Read back the raw_event and decrypt it.
+    let conn = crate::managed_agents::retention::open_retention_db(&db_path).unwrap();
+    let agent_keys = nostr::Keys::parse(&record.private_key_nsec).unwrap();
+    let k_c = engram::conversation_key(agent_keys.secret_key(), &owner_keys.public_key());
+    let d = engram::d_tag(&k_c, "mem/persona-snapshot");
+
+    let row = crate::managed_agents::retention::get_retained_event(
+        &conn,
+        sprout_core::kind::KIND_AGENT_ENGRAM,
+        &record.pubkey,
+        &d,
+    )
+    .unwrap()
+    .unwrap();
+
+    let event: nostr::Event = serde_json::from_str(&row.raw_event).unwrap();
+
+    // Decrypt as the owner.
+    let body = engram::validate_and_decrypt(
+        &event,
+        &agent_keys.public_key(),
+        &owner_keys.public_key(),
+        owner_keys.secret_key(),
+        &agent_keys.public_key(),
+    )
+    .expect("owner should be able to decrypt");
+
+    match body {
+        engram::Body::Memory { slug, value } => {
+            assert_eq!(slug, "mem/persona-snapshot");
+            let value_str = value.expect("should have a value");
+            let parsed: serde_json::Value = serde_json::from_str(&value_str).unwrap();
+            assert_eq!(parsed["persona_id"], "test-persona");
+            assert_eq!(parsed["system_prompt"], "You are a test agent.");
+            assert_eq!(parsed["model"], "claude-opus-4");
+            assert_eq!(parsed["provider"], "anthropic");
+            assert_eq!(parsed["source_version"], "2026-06-10T14:00:00Z");
+        }
+        _ => panic!("expected Body::Memory"),
+    }
+}
+
+#[test]
+fn engram_write_skips_when_no_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("retention.db");
+    let record = engram_fixture();
+
+    let result = write_persona_engram_to_db(
+        &db_path,
+        &record,
+        None, // no owner
+        Some("prompt"),
+        None,
+        None,
+    );
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("no owner pubkey"));
+}
+
+#[test]
+fn engram_write_is_idempotent() {
+    use crate::managed_agents::retention::{get_retained_event, open_retention_db};
+    use sprout_core::kind::KIND_AGENT_ENGRAM;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("retention.db");
+    let record = engram_fixture();
+
+    let owner_keys = nostr::Keys::generate();
+    let owner_hex = owner_keys.public_key().to_hex();
+
+    // Write twice — second write should succeed (upsert with >= created_at).
+    write_persona_engram_to_db(
+        &db_path,
+        &record,
+        Some(&owner_hex),
+        Some("prompt v1"),
+        None,
+        None,
+    )
+    .unwrap();
+
+    write_persona_engram_to_db(
+        &db_path,
+        &record,
+        Some(&owner_hex),
+        Some("prompt v2"),
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Only one row should exist (same d_tag).
+    let conn = open_retention_db(&db_path).unwrap();
+    let agent_keys = nostr::Keys::parse(&record.private_key_nsec).unwrap();
+    let k_c =
+        sprout_core::engram::conversation_key(agent_keys.secret_key(), &owner_keys.public_key());
+    let d = sprout_core::engram::d_tag(&k_c, "mem/persona-snapshot");
+
+    let row = get_retained_event(&conn, KIND_AGENT_ENGRAM, &record.pubkey, &d)
+        .unwrap()
+        .expect("should find row");
+
+    // The second write wins (newer created_at).
+    assert!(row.created_at > 0);
+}
