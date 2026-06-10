@@ -46,7 +46,10 @@ pub struct Llm {
 impl Llm {
     pub fn new(cfg: &Config) -> Result<Self, AgentError> {
         let http = Client::builder()
-            .connect_timeout(cfg.llm_timeout)
+            // Fixed short connect timeout: a dead/unroutable endpoint must
+            // fail fast at the TCP/TLS handshake, independent of llm_timeout
+            // (which governs in-flight inter-chunk stalls, a different concern).
+            .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|e| AgentError::Llm(format!("http: {e}")))?;
         let auth = build_token_source(cfg)?;
@@ -777,7 +780,11 @@ async fn backoff_with_jitter(attempt: u32) {
 /// Body-serialization happens before the retry loop, so `is_request()` here
 /// is always a network failure, never a malformed request we'd just resend.
 fn is_retryable_transport_error(e: &reqwest::Error) -> bool {
-    e.is_timeout() || e.is_connect() || e.is_request()
+    // `is_decode` covers mid-body read failures: reqwest's `chunk()` wraps a
+    // reset/truncated response body as a decode error, which is a transient
+    // transport fault and safe to resend. JSON-parse failures take a separate
+    // path (`serde_json` on the fully-buffered body), so they never reach here.
+    e.is_timeout() || e.is_connect() || e.is_request() || e.is_decode()
 }
 
 async fn post<F>(
@@ -884,7 +891,24 @@ where
                     return serde_json::from_slice(&buf)
                         .map_err(|e| AgentError::Llm(format!("json: {e}")));
                 }
-                Err(e) => return Err(AgentError::Llm(format!("read: {e}"))),
+                Err(e) => {
+                    // A read error mid-body (connection reset, broken pipe,
+                    // TLS failure) is transport-class, same as a stall. With
+                    // the total request timeout gone this is the main body-read
+                    // failure, so retry the whole request when attempts remain
+                    // and the error is transient, mirroring the stall arm.
+                    if attempt + 1 < MAX_RETRIES && is_retryable_transport_error(&e) {
+                        tracing::warn!(
+                            attempt = attempt + 1,
+                            max_attempts = MAX_RETRIES,
+                            error = %e,
+                            "llm: response body read error, retrying"
+                        );
+                        backoff_with_jitter(attempt).await;
+                        break;
+                    }
+                    return Err(AgentError::Llm(format!("read: {e}")));
+                }
             }
         }
     }
@@ -1516,6 +1540,86 @@ mod tests {
             .await
             .expect("slow-but-progressing response should succeed");
         assert_eq!(out, serde_json::json!({ "ok": true }));
+    }
+
+    /// A connection that delivers partial body bytes then is reset mid-body
+    /// (before the terminating chunk) surfaces as a transport read error on
+    /// `chunk().await`. That error is transient and must retry like a stall:
+    /// the next attempt serves a complete body and the call succeeds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_retries_on_read_error_mid_body() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/x", listener.local_addr().unwrap());
+        let accepts = Arc::new(AtomicU32::new(0));
+        let accepts_srv = accepts.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                let n = accepts_srv.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 4096];
+                    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match sock.read(&mut tmp).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(k) => buf.extend_from_slice(&tmp[..k]),
+                        }
+                    }
+                    if n == 0 {
+                        // First attempt: send chunked headers and a partial
+                        // chunk, then drop the socket without the terminating
+                        // chunk. The truncated chunked body makes reqwest's
+                        // `chunk()` return a transport read error.
+                        let headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                             Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                        let _ = sock.write_all(headers.as_bytes()).await;
+                        let _ = sock.write_all(b"4\r\n{\"ok\r\n").await;
+                        let _ = sock.flush().await;
+                        drop(sock);
+                        return;
+                    }
+                    // Subsequent attempts: serve a complete body.
+                    let body = "{\"ok\":true}";
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body,
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+
+        // Fresh socket per retry so the reset connection isn't reused.
+        let client = Client::builder().pool_max_idle_per_host(0).build().unwrap();
+        // Generous chunk timeout: this test exercises the read-error arm, not
+        // the stall arm — the failure must come from the reset, not a timeout.
+        let out = post(
+            &client,
+            &url,
+            &serde_json::json!({}),
+            Duration::from_secs(5),
+            |b| b,
+        )
+        .await
+        .expect("post should succeed after retrying the read error");
+        assert_eq!(out, serde_json::json!({ "ok": true }));
+        assert!(
+            accepts.load(Ordering::SeqCst) >= 2,
+            "server should have seen at least 2 connection attempts, saw {}",
+            accepts.load(Ordering::SeqCst)
+        );
     }
 
     // ---- usage / input-token extraction -------------------------------------
