@@ -524,6 +524,7 @@ pub fn run() {
             migration::reconcile_persona_team_dirs(&app_handle);
             migration::reconcile_provider_mcp_commands(&app_handle);
             migration::migrate_persona_provider_to_runtime(&app_handle);
+            migration::migrate_personas_to_events(&app_handle);
 
             if let Err(e) = managed_agents::sync_team_personas(&app_handle) {
                 eprintln!("sprout-desktop: sync-team-personas: {e}");
