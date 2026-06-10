@@ -398,6 +398,44 @@ pub async fn submit_event(
     Ok(result)
 }
 
+/// POST an already-signed event to `/events`, authenticating the HTTP request
+/// with a NIP-98 header signed by `signer_keys` (the event's author).
+///
+/// Unlike [`submit_event`], this returns the parsed [`SubmitEventResponse`]
+/// without treating `accepted == false` as an error — callers that need to act
+/// on the relay's accept/reject decision (e.g. the best-effort engram write,
+/// which verifies acceptance before a round-trip read) inspect the flag
+/// themselves rather than collapsing it into a transport error.
+pub async fn submit_signed_event(
+    event: &nostr::Event,
+    signer_keys: &Keys,
+    relay_url: &str,
+    state: &AppState,
+) -> Result<SubmitEventResponse, String> {
+    let url = format!("{}/events", relay_http_base_url(relay_url));
+    let body_bytes = event.as_json().into_bytes();
+    let auth = build_nip98_auth_header_for_keys(signer_keys, &Method::POST, &url, &body_bytes)?;
+
+    let response = state
+        .http_client
+        .post(&url)
+        .header("Authorization", auth)
+        .header("Content-Type", "application/json")
+        .body(body_bytes)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+
+    response
+        .json::<SubmitEventResponse>()
+        .await
+        .map_err(|e| format!("failed to parse response: {e}"))
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

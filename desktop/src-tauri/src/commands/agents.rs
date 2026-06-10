@@ -27,6 +27,41 @@ fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
     Ok(keys.public_key().to_hex())
 }
 
+/// Resolve `persona_id` to its record and write the agent's `mem/persona`
+/// snapshot engram. Skips silently if the persona is no longer present (it may
+/// have been deleted between key generation and this point). All relay I/O is
+/// the caller's responsibility to treat as best-effort.
+async fn write_persona_engram_for_agent(
+    app: &AppHandle,
+    state: &AppState,
+    agent_keys: &Keys,
+    owner_hex: &str,
+    persona_id: &str,
+) -> Result<(), String> {
+    let record = {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let personas = load_personas(app)?;
+        match personas.into_iter().find(|p| p.id == persona_id) {
+            Some(record) => record,
+            None => return Ok(()),
+        }
+    };
+    let owner_pubkey =
+        nostr::PublicKey::from_hex(owner_hex).map_err(|e| format!("invalid owner pubkey: {e}"))?;
+    let relay_url = relay_ws_url_with_override(state);
+    crate::managed_agents::persona_events::write_persona_engram(
+        agent_keys,
+        &owner_pubkey,
+        &record,
+        &relay_url,
+        state,
+    )
+    .await
+}
+
 fn normalize_relay_mesh(
     config: Option<&RelayMeshConfig>,
     backend: &BackendKind,
@@ -617,6 +652,23 @@ pub async fn create_managed_agent(
     )
     .await)
         .err();
+
+    // ── Phase 4b: persona-snapshot engram (async, best-effort) ───────────────
+    // Write a `mem/persona` engram capturing the persona this agent was
+    // instantiated from. Snapshot/provenance only — never read back into the
+    // prompt path this release (live resolve stays the runtime source). This
+    // runs after `create_managed_agent` has done its synchronous work, on the
+    // command's own async path — never on the restore `std::thread::scope`
+    // path — so a slow or unreachable relay cannot stall agent spawn. Any
+    // failure is logged and ignored: NIP-33 replaceable semantics mean a
+    // rejected write never destroys prior state.
+    if let Some(persona_id) = requested_persona_id.as_deref() {
+        if let Err(e) =
+            write_persona_engram_for_agent(&app, &state, &agent_keys, &owner_hex, persona_id).await
+        {
+            eprintln!("sprout-desktop: persona engram write for {pubkey}: {e}");
+        }
+    }
 
     // ── Phase 5: provider deploy (async, outside lock) ───────────────────────
     let spawn_error = if input.spawn_after_create && input.backend != BackendKind::Local {

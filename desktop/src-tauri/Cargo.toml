@@ -17,8 +17,12 @@ name = "sprout_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
-default = []
+default = ["legacy_team_sync"]
 mesh-llm = ["dep:mesh-llm-sdk", "dep:mesh-llm-host-runtime"]
+# Legacy launch-time directory→persona file sync. The engram/event path is
+# replacing it; kept compilable (and on by default this release) so the old
+# path can be re-enabled for rollback without a revert.
+legacy_team_sync = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

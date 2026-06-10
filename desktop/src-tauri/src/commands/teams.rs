@@ -7,11 +7,14 @@ use crate::{
     managed_agents::{
         delete_team_with_cascade, encode_team_json, ensure_persona_ids_are_active,
         import_team_from_directory as do_import_team, load_personas, load_teams, parse_team_json,
-        save_teams, sync_team_from_dir as do_sync_team, try_regenerate_nest, CreateTeamRequest,
-        ParsedTeamPreview, SyncResult, TeamRecord, UpdateTeamRequest,
+        save_teams, try_regenerate_nest, CreateTeamRequest, ParsedTeamPreview, SyncResult,
+        TeamRecord, UpdateTeamRequest,
     },
     util::now_iso,
 };
+
+#[cfg(feature = "legacy_team_sync")]
+use crate::managed_agents::sync_team_from_dir as do_sync_team;
 
 fn trim_required(value: &str, label: &str) -> Result<String, String> {
     let trimmed = value.trim();
@@ -115,21 +118,17 @@ pub fn delete_team(id: String, app: AppHandle, state: State<'_, AppState>) -> Re
 }
 
 #[tauri::command]
-pub fn install_team_from_directory(
+pub async fn install_team_from_directory(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
     symlink: Option<bool>,
 ) -> Result<TeamRecord, String> {
-    let _store_guard = state
-        .managed_agents_store_lock
-        .lock()
-        .map_err(|e| e.to_string())?;
     let source = std::path::PathBuf::from(&path);
     if !source.is_dir() {
         return Err(format!("team path is not a directory: {path}"));
     }
-    let result = do_import_team(&app, &source, symlink.unwrap_or(false))?;
+    let result = do_import_team(&app, &state, &source, symlink.unwrap_or(false)).await?;
     try_regenerate_nest(&app);
     Ok(result)
 }
@@ -140,13 +139,21 @@ pub fn sync_team_directory(
     state: State<'_, AppState>,
     team_id: String,
 ) -> Result<SyncResult, String> {
-    let _store_guard = state
-        .managed_agents_store_lock
-        .lock()
-        .map_err(|e| e.to_string())?;
-    let result = do_sync_team(&app, &team_id)?;
-    try_regenerate_nest(&app);
-    Ok(result)
+    #[cfg(feature = "legacy_team_sync")]
+    {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let result = do_sync_team(&app, &team_id)?;
+        try_regenerate_nest(&app);
+        Ok(result)
+    }
+    #[cfg(not(feature = "legacy_team_sync"))]
+    {
+        let _ = (&app, &state, &team_id);
+        Err("team sync moved to directory re-import; reinstall the team instead".to_string())
+    }
 }
 
 #[tauri::command]

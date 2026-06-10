@@ -5,12 +5,18 @@
 
 use std::collections::BTreeMap;
 
-use nostr::{EventBuilder, Kind, Tag};
+use nostr::{EventBuilder, Keys, Kind, PublicKey, Tag};
 use serde::{Deserialize, Serialize};
-use sprout_core::kind::KIND_PERSONA;
+use sprout_core::engram::{self, Body};
+use sprout_core::kind::{KIND_AGENT_ENGRAM, KIND_PERSONA};
 
 use super::PersonaRecord;
 use crate::app_state::AppState;
+
+/// Engram slug under which a managed agent stores the snapshot of the persona
+/// it was instantiated from. A `mem/` slug so it passes `engram::validate_slug`
+/// and the relay's envelope check.
+pub const PERSONA_ENGRAM_SLUG: &str = "mem/persona";
 
 /// The JSON body stored in a persona event's content field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +138,166 @@ pub async fn fetch_persona_events(state: &AppState) -> Result<Vec<nostr::Event>,
     crate::relay::query_relay(state, &[filter]).await
 }
 
+// ── Persona-snapshot engram ──────────────────────────────────────────────────
+
+/// Provenance recorded inside the encrypted engram body, linking the snapshot
+/// back to the persona definition it was taken from. Kept inside the NIP-44
+/// ciphertext (never a plaintext tag) so the agent→persona linkage is not
+/// leaked to relay observers and the HMAC-blinded `d` tag stays the only
+/// correlation surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonaProvenance {
+    /// Owner (workspace) pubkey, hex.
+    pub owner: String,
+    /// Source persona event kind (`KIND_PERSONA`, 30175).
+    pub kind: u32,
+    /// Source persona slug (the kind:30175 `d` tag).
+    pub slug: String,
+    /// Content version of the source persona — its `updated_at`. Changes
+    /// whenever the persona definition changes, so a future fleet-update pass
+    /// can diff snapshots without a timestamp comparison.
+    pub version: String,
+}
+
+/// The decrypted payload of a `mem/persona` engram: the persona definition
+/// plus its provenance. Serialized to JSON and carried as the engram body's
+/// `value` string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonaSnapshot {
+    #[serde(flatten)]
+    pub content: PersonaEventContent,
+    pub provenance: PersonaProvenance,
+}
+
+impl PartialEq for PersonaEventContent {
+    fn eq(&self, other: &Self) -> bool {
+        self.display_name == other.display_name
+            && self.avatar_url == other.avatar_url
+            && self.system_prompt == other.system_prompt
+            && self.runtime == other.runtime
+            && self.model == other.model
+            && self.provider == other.provider
+            && self.name_pool == other.name_pool
+            && self.env_vars == other.env_vars
+    }
+}
+impl Eq for PersonaEventContent {}
+
+/// Build the `PersonaSnapshot` for a persona record and owner.
+fn persona_snapshot(record: &PersonaRecord, owner_pubkey: &PublicKey) -> PersonaSnapshot {
+    PersonaSnapshot {
+        content: PersonaEventContent {
+            display_name: record.display_name.clone(),
+            avatar_url: record.avatar_url.clone(),
+            system_prompt: record.system_prompt.clone(),
+            runtime: record.runtime.clone(),
+            model: record.model.clone(),
+            provider: record.provider.clone(),
+            name_pool: record.name_pool.clone(),
+            env_vars: record.env_vars.clone(),
+        },
+        provenance: PersonaProvenance {
+            owner: owner_pubkey.to_hex(),
+            kind: KIND_PERSONA,
+            slug: persona_d_tag(record),
+            version: record.updated_at.clone(),
+        },
+    }
+}
+
+/// Build a signed `mem/persona` engram (kind:30174) snapshotting `record`.
+///
+/// The agent signs the event; the owner is the NIP-44 counterparty. The body
+/// is `Body::Memory { slug: "mem/persona", value: <PersonaSnapshot JSON> }`,
+/// so it satisfies `validate_and_decrypt` (the body slug re-derives to the
+/// HMAC-blinded `d` tag).
+pub fn build_persona_engram(
+    agent_keys: &Keys,
+    owner_pubkey: &PublicKey,
+    record: &PersonaRecord,
+    created_at: u64,
+) -> Result<nostr::Event, String> {
+    let snapshot = persona_snapshot(record, owner_pubkey);
+    let value = serde_json::to_string(&snapshot)
+        .map_err(|e| format!("failed to serialize persona snapshot: {e}"))?;
+    let body = Body::Memory {
+        slug: PERSONA_ENGRAM_SLUG.to_string(),
+        value: Some(value),
+    };
+    engram::build_event(agent_keys, owner_pubkey, &body, created_at)
+        .map_err(|e| format!("failed to build persona engram: {e}"))
+}
+
+/// Write the persona-snapshot engram at instantiation, best-effort.
+///
+/// Sequence per the canonical spec: publish → assert the relay `accepted`
+/// flag → re-fetch and pick the head with `select_head` (latest-wins, not
+/// `events[0]`) → `validate_and_decrypt` → assert the decrypted body equals
+/// what we published. Any failure is returned as `Err`; the caller logs and
+/// continues — a bad write never blocks agent creation, and NIP-33 replaceable
+/// semantics mean a rejected write leaves prior state intact.
+pub async fn write_persona_engram(
+    agent_keys: &Keys,
+    owner_pubkey: &PublicKey,
+    record: &PersonaRecord,
+    relay_url: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    let created_at = engram::monotonic_created_at(nostr::Timestamp::now().as_secs(), None);
+    let event = build_persona_engram(agent_keys, owner_pubkey, record, created_at)?;
+
+    let response = crate::relay::submit_signed_event(&event, agent_keys, relay_url, state).await?;
+    if !response.accepted {
+        return Err(format!(
+            "relay rejected persona engram: {}",
+            response.message
+        ));
+    }
+
+    // Re-fetch by the HMAC-blinded d tag and verify the round-trip. We
+    // re-derive the d tag from (agent_sk, owner_pk, slug) rather than trust
+    // the event we built, so the read path is genuinely end-to-end.
+    let k_c = engram::conversation_key(agent_keys.secret_key(), owner_pubkey);
+    let d = engram::d_tag(&k_c, PERSONA_ENGRAM_SLUG);
+    let filter = serde_json::json!({
+        "kinds": [KIND_AGENT_ENGRAM],
+        "authors": [agent_keys.public_key().to_hex()],
+        "#d": [d],
+    });
+    let events = crate::relay::query_relay_at(
+        state,
+        &crate::relay::relay_http_base_url(relay_url),
+        &[filter],
+    )
+    .await?;
+
+    let head = engram::select_head(events)
+        .ok_or_else(|| "persona engram not found on re-fetch".to_string())?;
+    let body = engram::validate_and_decrypt(
+        &head,
+        &agent_keys.public_key(),
+        owner_pubkey,
+        agent_keys.secret_key(),
+        owner_pubkey,
+    )
+    .map_err(|e| format!("persona engram failed validation on re-fetch: {e}"))?;
+
+    let Body::Memory {
+        value: Some(read_value),
+        ..
+    } = body
+    else {
+        return Err("persona engram re-fetch returned an unexpected body shape".to_string());
+    };
+    let read_snapshot: PersonaSnapshot = serde_json::from_str(&read_value)
+        .map_err(|e| format!("persona engram re-fetch body is not a PersonaSnapshot: {e}"))?;
+
+    if read_snapshot != persona_snapshot(record, owner_pubkey) {
+        return Err("persona engram re-fetch body does not match what was published".to_string());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +408,106 @@ mod tests {
         // Deserialized persona is always non-builtin and active
         assert!(!restored.is_builtin);
         assert!(restored.is_active);
+    }
+
+    // ── Persona-snapshot engram ──────────────────────────────────────────────
+
+    /// The engram built at instantiation must survive the full validation the
+    /// relay enforces: kind, agent author, single 64-hex `d`, single owner `p`,
+    /// NIP-44 decrypt, and body-slug re-derivation — and decrypt back to the
+    /// exact persona plus provenance we put in.
+    #[test]
+    fn persona_engram_round_trips_through_validate_and_decrypt() {
+        let record = sample_persona();
+        let agent = nostr::Keys::generate();
+        let owner = nostr::Keys::generate();
+        let owner_pk = owner.public_key();
+
+        let event = build_persona_engram(&agent, &owner_pk, &record, 1_700_000_000).unwrap();
+
+        // Relay-side envelope: kind 30174, agent author, one 64-hex d, one p == owner.
+        assert_eq!(event.kind.as_u16() as u32, KIND_AGENT_ENGRAM);
+        assert_eq!(event.pubkey, agent.public_key());
+        let d_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|t| t.kind().to_string() == "d")
+            .collect();
+        assert_eq!(d_tags.len(), 1);
+        assert_eq!(d_tags[0].content().unwrap().len(), 64);
+        assert!(d_tags[0]
+            .content()
+            .unwrap()
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+
+        // Owner decrypts with its own seckey against the agent pubkey (K_c is symmetric).
+        let body = engram::validate_and_decrypt(
+            &event,
+            &agent.public_key(),
+            &owner_pk,
+            owner.secret_key(),
+            &agent.public_key(),
+        )
+        .unwrap();
+
+        let Body::Memory {
+            slug,
+            value: Some(value),
+        } = body
+        else {
+            panic!("expected memory body with value");
+        };
+        assert_eq!(slug, PERSONA_ENGRAM_SLUG);
+
+        let snapshot: PersonaSnapshot = serde_json::from_str(&value).unwrap();
+        assert_eq!(snapshot, persona_snapshot(&record, &owner_pk));
+        assert_eq!(snapshot.content.system_prompt, "You are a test assistant.");
+        assert_eq!(snapshot.provenance.owner, owner_pk.to_hex());
+        assert_eq!(snapshot.provenance.kind, KIND_PERSONA);
+        assert_eq!(snapshot.provenance.slug, "test-slug");
+        assert_eq!(snapshot.provenance.version, record.updated_at);
+    }
+
+    /// Provenance lives inside the ciphertext, never as a plaintext tag — the
+    /// only tags are the HMAC-blinded `d` and the owner `p`.
+    #[test]
+    fn persona_engram_leaks_no_plaintext_provenance() {
+        let record = sample_persona();
+        let agent = nostr::Keys::generate();
+        let owner = nostr::Keys::generate();
+
+        let event =
+            build_persona_engram(&agent, &owner.public_key(), &record, 1_700_000_000).unwrap();
+
+        let tag_names: Vec<String> = event.tags.iter().map(|t| t.kind().to_string()).collect();
+        assert_eq!(tag_names, vec!["d".to_string(), "p".to_string()]);
+        // No persona id, slug, kind, or "provenance" string in any plaintext field.
+        let plaintext_tags = format!("{:?}", event.tags);
+        assert!(!plaintext_tags.contains("test-slug"));
+        assert!(!plaintext_tags.contains("provenance"));
+        assert!(!plaintext_tags.contains(&KIND_PERSONA.to_string()));
+    }
+
+    /// The d tag must re-derive from (agent_sk, owner_pk, slug), so a fleet
+    /// update can locate the engram without any stored tag.
+    #[test]
+    fn persona_engram_d_tag_is_derivable() {
+        let record = sample_persona();
+        let agent = nostr::Keys::generate();
+        let owner = nostr::Keys::generate();
+
+        let event =
+            build_persona_engram(&agent, &owner.public_key(), &record, 1_700_000_000).unwrap();
+
+        let k_c = engram::conversation_key(agent.secret_key(), &owner.public_key());
+        let expected = engram::d_tag(&k_c, PERSONA_ENGRAM_SLUG);
+        let actual = event
+            .tags
+            .iter()
+            .find(|t| t.kind().to_string() == "d")
+            .and_then(|t| t.content())
+            .unwrap();
+        assert_eq!(actual, expected);
     }
 }

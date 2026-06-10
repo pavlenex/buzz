@@ -3,7 +3,8 @@ use std::{fs, path::PathBuf};
 use tauri::AppHandle;
 
 use crate::{
-    managed_agents::{managed_agents_base_dir, PersonaRecord, TeamRecord},
+    app_state::AppState,
+    managed_agents::{managed_agents_base_dir, persona_events, PersonaRecord, TeamRecord},
     util::now_iso,
 };
 
@@ -225,8 +226,9 @@ fn copy_dir_no_symlinks(src: &std::path::Path, dst: &std::path::Path) -> Result<
 ///
 /// Copies the directory into `<data>/agents/teams/<resolved.id>/`,
 /// creates PersonaRecords for each persona, creates a TeamRecord with source_dir set.
-pub fn import_team_from_directory(
+pub async fn import_team_from_directory(
     app: &AppHandle,
+    state: &AppState,
     source_dir: &std::path::Path,
     symlink: bool,
 ) -> Result<TeamRecord, String> {
@@ -314,8 +316,22 @@ pub fn import_team_from_directory(
 
     // 7. Save personas
     let mut personas = super::load_personas(app)?;
-    personas.extend(new_personas);
+    personas.extend(new_personas.iter().cloned());
     super::save_personas(app, &personas)?;
+
+    // 7b. Publish each persona as a kind:30175 event (best-effort). The local
+    // store is authoritative this release; the relay copy is the durable,
+    // shareable definition. A publish failure (relay unreachable, oversize
+    // body) must not fail the import — the personas are already persisted
+    // locally and a later edit-save re-publishes.
+    for record in &new_personas {
+        if let Err(e) = persona_events::publish_persona_event(record, state).await {
+            eprintln!(
+                "sprout-desktop: persona event publish for {}: {e}",
+                record.id
+            );
+        }
+    }
 
     // 8. Create and save TeamRecord
     let symlink_target = if use_symlink {
@@ -415,6 +431,7 @@ pub fn delete_team_with_cascade(app: &AppHandle, team_id: &str) -> Result<(), St
 }
 
 /// Re-reads a directory-backed team and reconciles with stored records.
+#[cfg(feature = "legacy_team_sync")]
 pub fn sync_team_from_dir(
     app: &AppHandle,
     team_id: &str,
@@ -715,6 +732,8 @@ pub fn parse_team_json(json_bytes: &[u8]) -> Result<ParsedTeamPreview, String> {
 /// Sync all directory-backed teams on launch — the team equivalent of the
 /// former `sync_pack_personas`. Silently skips teams whose source directory
 /// is missing (e.g., external drive unmounted).
+#[cfg(feature = "legacy_team_sync")]
+#[allow(dead_code)] // Kept compilable for rollback; no caller after the launch swap to dedup_team_personas.
 pub fn sync_team_personas(app: &AppHandle) -> Result<(), String> {
     let teams = load_teams(app)?;
     for team in &teams {
@@ -727,11 +746,49 @@ pub fn sync_team_personas(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Heal duplicate team-sourced personas left by a prior broken sync.
+///
+/// Runs on launch in place of the old `sync_team_personas` clobber. Only
+/// team-sourced records (both `source_team` and `source_team_persona_slug`
+/// present) are deduplicated, keyed by `(source_team, source_team_persona_slug)`
+/// — the canonical persona→team join. UI-created personas, which carry neither
+/// field, are never considered duplicates of one another and are left
+/// untouched. On a collision the most recently updated record is kept
+/// (`updated_at` descending; lexical `id` ascending as a deterministic
+/// tiebreak so the outcome does not depend on load order).
+pub fn dedup_team_personas(app: &AppHandle) -> Result<(), String> {
+    let personas = super::load_personas(app)?;
+    let deduped = dedup_team_sourced(personas);
+    super::save_personas(app, &deduped)
+}
+
+/// Pure dedup over a persona list. Extracted so the launch path and tests share
+/// one implementation.
+fn dedup_team_sourced(mut personas: Vec<PersonaRecord>) -> Vec<PersonaRecord> {
+    use std::collections::HashMap;
+
+    // Most-recent-first, then lexical id, so the first record seen per key is
+    // the survivor. `updated_at` is canonical UTC ISO-8601, lexically ordered.
+    personas.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    let mut seen: HashMap<(String, String), ()> = HashMap::new();
+    personas.retain(|p| match (&p.source_team, &p.source_team_persona_slug) {
+        (Some(team), Some(slug)) => seen.insert((team.clone(), slug.clone()), ()).is_none(),
+        // UI-created (or otherwise un-keyed) personas are never duplicates.
+        _ => true,
+    });
+    personas
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_team_json, merge_teams, parse_team_json, sort_teams, validate_team_deletion,
-        BUILT_IN_TEAMS,
+        dedup_team_sourced, encode_team_json, merge_teams, parse_team_json, sort_teams,
+        validate_team_deletion, BUILT_IN_TEAMS,
     };
     use crate::managed_agents::{PersonaRecord, TeamRecord};
 
@@ -995,5 +1052,68 @@ mod tests {
     fn validate_team_deletion_allows_custom_teams() {
         let custom = team("user-uuid", "My Team");
         assert!(validate_team_deletion(&custom).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // dedup_team_sourced tests
+    // -----------------------------------------------------------------------
+
+    /// A team-sourced persona, identified by `(source_team, slug)`.
+    fn team_persona(id: &str, team: &str, slug: &str, updated_at: &str) -> PersonaRecord {
+        let mut p = persona(id, id, "prompt");
+        p.source_team = Some(team.to_string());
+        p.source_team_persona_slug = Some(slug.to_string());
+        p.updated_at = updated_at.to_string();
+        p
+    }
+
+    #[test]
+    fn dedup_collapses_team_duplicates_keeping_latest() {
+        let older = team_persona("a", "team-1", "agent", "2026-01-01T00:00:00Z");
+        let newer = team_persona("b", "team-1", "agent", "2026-06-01T00:00:00Z");
+
+        let result = dedup_team_sourced(vec![older, newer]);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "b"); // latest updated_at survives
+    }
+
+    #[test]
+    fn dedup_breaks_updated_at_ties_by_lowest_id() {
+        let same_time = "2026-06-01T00:00:00Z";
+        let p_b = team_persona("b", "team-1", "agent", same_time);
+        let p_a = team_persona("a", "team-1", "agent", same_time);
+
+        let result = dedup_team_sourced(vec![p_b, p_a]);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "a"); // deterministic: lowest id wins on tie
+    }
+
+    #[test]
+    fn dedup_keeps_distinct_team_personas() {
+        let one = team_persona("a", "team-1", "agent-one", "2026-01-01T00:00:00Z");
+        let two = team_persona("b", "team-1", "agent-two", "2026-01-01T00:00:00Z");
+
+        let result = dedup_team_sourced(vec![one, two]);
+
+        assert_eq!(result.len(), 2); // different slugs are not duplicates
+    }
+
+    /// UI-created personas carry `(None, None)` source fields and must never be
+    /// collapsed into one another — an ungated `(source_team, slug)` dedup would
+    /// bucket them all together and delete all but one.
+    #[test]
+    fn dedup_never_collapses_ui_created_personas() {
+        let one = persona("a", "Assistant One", "prompt one");
+        let two = persona("b", "Assistant Two", "prompt two");
+        assert!(one.source_team.is_none() && one.source_team_persona_slug.is_none());
+
+        let result = dedup_team_sourced(vec![one, two]);
+
+        assert_eq!(result.len(), 2);
+        let ids: Vec<&str> = result.iter().map(|p| p.id.as_str()).collect();
+        assert!(ids.contains(&"a"));
+        assert!(ids.contains(&"b"));
     }
 }

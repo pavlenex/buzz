@@ -543,8 +543,8 @@ pub fn run() {
                 .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
             migration::migrate_personas_to_events(&app_handle, &owner_keys);
 
-            if let Err(e) = managed_agents::sync_team_personas(&app_handle) {
-                eprintln!("sprout-desktop: sync-team-personas: {e}");
+            if let Err(e) = managed_agents::dedup_team_personas(&app_handle) {
+                eprintln!("sprout-desktop: dedup-team-personas: {e}");
             }
 
             // Store the AppHandle so huddle commands can emit `huddle-state-changed`
