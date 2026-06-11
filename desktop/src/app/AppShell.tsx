@@ -59,6 +59,7 @@ import {
   type SettingsSection,
 } from "@/features/settings/ui/SettingsPanels";
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
+import { RemindMeLaterProvider } from "@/features/reminders/ui/RemindMeLaterProvider";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { useChannelMutes } from "@/features/sidebar/lib/useChannelMutes";
 import { useChannelStars } from "@/features/sidebar/lib/useChannelStars";
@@ -80,6 +81,7 @@ type AppView =
   | "home"
   | "channel"
   | "agents"
+  | "reminders"
   | "workflows"
   | "pulse"
   | "projects";
@@ -163,6 +165,13 @@ function deriveShellRoute(pathname: string): {
     };
   }
 
+  if (pathname === "/reminders") {
+    return {
+      selectedChannelId: null,
+      selectedView: "reminders",
+    };
+  }
+
   return {
     selectedChannelId: null,
     selectedView: "home",
@@ -196,6 +205,7 @@ export function AppShell() {
     goChannel,
     goHome,
     goProjects,
+    goReminders,
     goPulse,
     goWorkflows,
     openSearchHit,
@@ -746,6 +756,7 @@ export function AppShell() {
           }}
         >
           <HuddleProvider>
+            <RemindMeLaterProvider>
             <div className="flex h-dvh flex-col overflow-hidden overscroll-none">
               <SidebarProvider className="min-h-0 flex-1 overflow-hidden">
                 {!settingsOpen ? (
@@ -899,6 +910,9 @@ export function AppShell() {
                       onSelectPulse={() => {
                         void goPulse();
                       }}
+                      onSelectReminders={() => {
+                        void goReminders();
+                      }}
                       onSelectSettings={handleOpenSettings}
                       onSelectWorkflows={() => {
                         void goWorkflows();
@@ -963,6 +977,7 @@ export function AppShell() {
               </SidebarProvider>
               <HuddleBar />
             </div>
+            </RemindMeLaterProvider>
           </HuddleProvider>
         </AppShellProvider>
       </ChannelNavigationProvider>
