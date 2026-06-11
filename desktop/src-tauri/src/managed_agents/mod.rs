@@ -4,12 +4,16 @@ mod env_vars;
 mod nest;
 mod persona_avatars;
 mod persona_card;
+#[allow(dead_code)]
+pub(crate) mod persona_events;
 mod personas;
 #[cfg(windows)]
 mod process_lifecycle;
 #[cfg(feature = "mesh-llm")]
 mod relay_mesh;
 mod restore;
+#[allow(dead_code)]
+pub mod retention;
 mod runtime;
 mod storage;
 mod team_repair;
