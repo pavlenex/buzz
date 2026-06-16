@@ -3,6 +3,8 @@ import { RefreshCcw } from "lucide-react";
 
 import { useAppShell } from "@/app/AppShellContext";
 import { useChannelsQuery } from "@/features/channels/hooks";
+import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
+import { ChannelManagementSheet } from "@/features/channels/ui/ChannelManagementSheet";
 import {
   type InboxFilter,
   type InboxContextMessage,
@@ -44,6 +46,10 @@ import { topChromeInset } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { useElementWidth } from "@/shared/hooks/use-mobile";
+import {
+  THREAD_PANEL_SINGLE_COLUMN_BREAKPOINT_PX,
+  useThreadPanelWidth,
+} from "@/shared/hooks/useThreadPanelWidth";
 import { Button } from "@/shared/ui/button";
 
 type HomeViewProps = {
@@ -52,7 +58,6 @@ type HomeViewProps = {
   errorMessage?: string;
   currentPubkey?: string;
   availableChannelIds: ReadonlySet<string>;
-  onOpenChannel: (channelId: string) => void;
   onRefresh: () => void;
 };
 
@@ -62,7 +67,6 @@ export function HomeView({
   errorMessage,
   currentPubkey,
   availableChannelIds,
-  onOpenChannel,
   onRefresh,
 }: HomeViewProps) {
   const [homeInboxRef, homeInboxWidthPx] = useElementWidth<HTMLDivElement>();
@@ -75,9 +79,18 @@ export function HomeView({
   );
   const [isDeletingMessage, setIsDeletingMessage] = React.useState(false);
   const [isSendingReply, setIsSendingReply] = React.useState(false);
+  const [managedChannelId, setManagedChannelId] = React.useState<string | null>(
+    null,
+  );
   const [localRepliesByItemId, setLocalRepliesByItemId] = React.useState<
     Record<string, InboxReply[]>
   >({});
+  const {
+    canReset: canResetThreadPanelWidth,
+    onResetWidth: handleThreadPanelWidthReset,
+    onResizeStart: handleThreadPanelResizeStart,
+    widthPx: threadPanelWidthPx,
+  } = useThreadPanelWidth();
   const {
     canResetInboxListWidth,
     handleInboxListResizeStart,
@@ -118,6 +131,15 @@ export function HomeView({
       null
     );
   }, [channels, selectedChannelIdCandidate]);
+  const managedChannel = React.useMemo(() => {
+    if (!managedChannelId || !channels) return null;
+    return channels.find((channel) => channel.id === managedChannelId) ?? null;
+  }, [channels, managedChannelId]);
+  const isChannelManagementOpen = managedChannel !== null;
+  const isSinglePanelChannelManagementView =
+    isChannelManagementOpen &&
+    homeInboxWidthPx > 0 &&
+    homeInboxWidthPx < THREAD_PANEL_SINGLE_COLUMN_BREAKPOINT_PX;
 
   const channelMessagesQuery = useChannelMessagesQuery(selectedChannel);
   const toggleReactionMutation = useToggleReactionMutation();
@@ -311,14 +333,24 @@ export function HomeView({
     currentPubkey?.trim().toLowerCase() ===
       selectedItem.item.pubkey.trim().toLowerCase();
   const isSinglePanelDetailView =
-    isNarrowHomeViewport && selectedItemId !== null;
-  const showListPane = !isSinglePanelDetailView;
-  const showDetailPane = !isNarrowHomeViewport || isSinglePanelDetailView;
+    isNarrowHomeViewport &&
+    selectedItemId !== null &&
+    !isSinglePanelChannelManagementView;
+  const showListPane =
+    !isSinglePanelDetailView && !isSinglePanelChannelManagementView;
+  const showDetailPane =
+    !isSinglePanelChannelManagementView &&
+    (!isNarrowHomeViewport || isSinglePanelDetailView);
+  const channelManagementWidthPx = isSinglePanelChannelManagementView
+    ? homeInboxWidthPx
+    : threadPanelWidthPx;
   const maxEffectiveInboxListWidthPx =
     homeInboxWidthPx > 0
       ? Math.max(
           INBOX_COLUMN_MIN_WIDTH_PX,
-          homeInboxWidthPx - INBOX_COLUMN_MIN_WIDTH_PX,
+          homeInboxWidthPx -
+            INBOX_COLUMN_MIN_WIDTH_PX -
+            (isChannelManagementOpen ? channelManagementWidthPx : 0),
         )
       : undefined;
   const effectiveInboxListWidthPx =
@@ -334,14 +366,21 @@ export function HomeView({
       <div
         className={cn(
           "relative grid min-h-0 w-full flex-1",
-          showListPane && showDetailPane
-            ? "grid-cols-[var(--home-inbox-list-width)_minmax(0,1fr)]"
-            : "grid-cols-1",
+          isSinglePanelChannelManagementView
+            ? "grid-cols-1"
+            : showListPane && showDetailPane && isChannelManagementOpen
+              ? "grid-cols-[var(--home-inbox-list-width)_minmax(0,1fr)_var(--home-channel-management-width)]"
+              : showListPane && showDetailPane
+                ? "grid-cols-[var(--home-inbox-list-width)_minmax(0,1fr)]"
+                : isChannelManagementOpen
+                  ? "grid-cols-[minmax(0,1fr)_var(--home-channel-management-width)]"
+                  : "grid-cols-1",
         )}
         data-testid="home-inbox"
         ref={homeInboxRef}
         style={
           {
+            "--home-channel-management-width": `${channelManagementWidthPx}px`,
             "--home-inbox-list-width": `${effectiveInboxListWidthPx}px`,
           } as React.CSSProperties
         }
@@ -430,7 +469,7 @@ export function HomeView({
                   setIsDeletingMessage(false);
                 });
             }}
-            onOpenChannel={onOpenChannel}
+            onOpenChannel={setManagedChannelId}
             onSendReply={async ({
               content,
               mediaTags,
@@ -512,6 +551,28 @@ export function HomeView({
             }
             replies={selectedItemReplies}
           />
+        ) : null}
+        {isChannelManagementOpen ? (
+          <RightAuxiliaryPane
+            canResetWidth={canResetThreadPanelWidth}
+            constrainToAvailableSpace={false}
+            onResetWidth={handleThreadPanelWidthReset}
+            onResizeStart={handleThreadPanelResizeStart}
+            testId="home-channel-management-auxiliary-pane"
+            widthPx={channelManagementWidthPx}
+          >
+            <ChannelManagementSheet
+              channel={managedChannel}
+              currentPubkey={currentPubkey}
+              layout="split"
+              onOpenChange={(nextOpen) => {
+                if (!nextOpen) {
+                  setManagedChannelId(null);
+                }
+              }}
+              open={true}
+            />
+          </RightAuxiliaryPane>
         ) : null}
       </div>
     </div>

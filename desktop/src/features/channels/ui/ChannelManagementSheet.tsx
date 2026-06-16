@@ -1,6 +1,5 @@
 import {
   Archive,
-  ArchiveRestore,
   BookOpenText,
   ChevronLeft,
   Copy,
@@ -19,6 +18,7 @@ import {
   Zap,
 } from "lucide-react";
 import * as React from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 
 import {
@@ -42,17 +42,6 @@ import {
 import type { Channel } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { useTheme } from "@/shared/theme/ThemeProvider";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -62,15 +51,18 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
-import {
-  Sheet,
-  SheetClose,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/shared/ui/sheet";
 import { Textarea } from "@/shared/ui/textarea";
+import {
+  AuxiliaryPanelHeader,
+  AuxiliaryPanelHeaderGroup,
+  AuxiliaryPanelTitle,
+  auxiliaryPanelContentPaddingClass,
+} from "@/shared/layout/AuxiliaryPanelHeader";
+import {
+  OverlayPanelBackdrop,
+  PANEL_BASE_CLASS,
+  PANEL_OVERLAY_CLASS,
+} from "@/shared/ui/OverlayPanelBackdrop";
 import { ChannelCanvas } from "./ChannelCanvas";
 import {
   ChannelHero,
@@ -84,10 +76,12 @@ import {
   NarrativeGroup,
   ToggleRow,
 } from "./ChannelManagementSheetRows";
+import { ChannelManagementModerationActions } from "./ChannelManagementModerationActions";
 
 type ChannelManagementSheetProps = {
   channel: Channel | null;
   currentPubkey?: string;
+  layout?: "overlay" | "split";
   onDeleted?: () => void;
   onOpenChange: (open: boolean) => void;
   open: boolean;
@@ -98,11 +92,13 @@ const DEFAULT_EPHEMERAL_TTL_SECONDS = 24 * 60 * 60;
 export function ChannelManagementSheet({
   channel,
   currentPubkey,
+  layout = "overlay",
   onDeleted,
   onOpenChange,
   open,
 }: ChannelManagementSheetProps) {
   const { isDark } = useTheme();
+  const isSplitLayout = layout === "split";
   const channelId = channel?.id ?? null;
   const detailsQuery = useChannelDetailsQuery(channelId, open);
   const membersQuery = useChannelMembersQuery(channelId, open);
@@ -214,7 +210,7 @@ export function ChannelManagementSheet({
     }
   }
 
-  function handleSheetOpenChange(next: boolean) {
+  function handlePanelOpenChange(next: boolean) {
     if (!next) {
       handleDeleteDialogOpenChange(false);
     }
@@ -299,358 +295,111 @@ export function ChannelManagementSheet({
   }
 
   return (
-    <Sheet onOpenChange={handleSheetOpenChange} open={open}>
-      <SheetContent
-        className={cn(
-          "flex w-full flex-col gap-0 overflow-hidden border-l border-border/80 p-0 shadow-none sm:!max-w-[380px] [&>button]:hidden",
-          isDark
-            ? "bg-background/85 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75"
-            : "bg-background",
-        )}
-        data-testid="channel-management-sheet"
-        side="right"
-      >
-        <SheetHeader
+    <DialogPrimitive.Root
+      modal={!isSplitLayout}
+      onOpenChange={handlePanelOpenChange}
+      open={open}
+    >
+      {!isSplitLayout ? (
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay asChild>
+            <OverlayPanelBackdrop
+              onClose={() => handlePanelOpenChange(false)}
+            />
+          </DialogPrimitive.Overlay>
+        </DialogPrimitive.Portal>
+      ) : null}
+      {isSplitLayout ? (
+        <DialogPrimitive.Content
           className={cn(
-            "relative z-10 min-h-11 flex-row items-center gap-3 space-y-0 border-b border-border/35 px-3 py-1.5 text-left shadow-none",
+            PANEL_BASE_CLASS,
+            "h-full w-full cursor-default overflow-hidden border-l-0 p-0",
             isDark
-              ? "bg-background/70 backdrop-blur-xl supports-[backdrop-filter]:bg-background/55"
-              : "bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/70",
+              ? "bg-background/85 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75"
+              : "bg-background",
           )}
+          data-testid="channel-management-sheet"
+          onEscapeKeyDown={(event) => event.preventDefault()}
+          onInteractOutside={(event) => event.preventDefault()}
+          onPointerDownOutside={(event) => event.preventDefault()}
         >
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            {activeView === "canvas" ? (
-              <Button
-                aria-label="Back to channel"
-                data-testid="channel-management-back"
-                onClick={() => setActiveView("summary")}
-                size="icon"
-                type="button"
-                variant="ghost"
-              >
-                <ChevronLeft />
-              </Button>
-            ) : null}
-            <SheetTitle className="min-w-0 flex-1 translate-y-px truncate text-base font-semibold leading-6 tracking-tight">
-              {activeView === "canvas" ? "Canvas" : "Channel"}
-            </SheetTitle>
-          </div>
-          <SheetClose asChild>
-            <Button
-              aria-label="Close channel management"
-              data-testid="channel-management-close"
-              size="icon"
-              type="button"
-              variant="ghost"
-            >
-              <X />
-            </Button>
-          </SheetClose>
-          <SheetDescription className="sr-only">
-            Channel settings
-          </SheetDescription>
-        </SheetHeader>
-
-        <div className="flex-1 overflow-y-auto bg-background px-4 pb-8 pt-4">
-          {activeView === "summary" ? (
-            <div className="space-y-6">
-              <ChannelHero channel={resolvedChannel} />
-
-              {detailsQuery.error instanceof Error ? (
-                <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {detailsQuery.error.message}
-                </p>
-              ) : null}
-
-              {membersQuery.error instanceof Error ? (
-                <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {membersQuery.error.message}
-                </p>
-              ) : null}
-
-              <div className="flex flex-wrap items-start justify-center gap-6">
-                <ChannelQuickAction
-                  icon={Copy}
-                  label="Copy ID"
-                  onClick={() => {
-                    void navigator.clipboard
-                      .writeText(resolvedChannel.id)
-                      .then(() => toast.success("Copied channel ID"));
-                  }}
-                  testId="channel-management-copy-id-action"
-                />
-                {canJoin ? (
-                  <ChannelQuickAction
-                    active
-                    disabled={joinChannelMutation.isPending}
-                    icon={DoorOpen}
-                    label={
-                      joinChannelMutation.isPending ? "Joining..." : "Join"
-                    }
-                    onClick={() => {
-                      void joinChannelMutation.mutateAsync();
-                    }}
-                    testId="channel-management-join"
-                  />
-                ) : null}
-                {canLeave ? (
-                  <ChannelQuickAction
-                    disabled={leaveChannelMutation.isPending}
-                    icon={DoorClosed}
-                    label={
-                      leaveChannelMutation.isPending ? "Leaving..." : "Leave"
-                    }
-                    onClick={() => {
-                      void leaveChannelMutation.mutateAsync().then(() => {
-                        onOpenChange(false);
-                      });
-                    }}
-                    testId="channel-management-leave"
-                  />
-                ) : null}
-                {canManageChannel ? (
-                  <ChannelQuickAction
-                    icon={Pencil}
-                    label="Edit"
-                    onClick={() => setIsEditDialogOpen(true)}
-                    testId="channel-management-edit"
-                  />
-                ) : null}
-              </div>
-
-              {joinChannelMutation.error instanceof Error ? (
-                <p className="text-center text-sm text-destructive">
-                  {joinChannelMutation.error.message}
-                </p>
-              ) : null}
-              {leaveChannelMutation.error instanceof Error ? (
-                <p className="text-center text-sm text-destructive">
-                  {leaveChannelMutation.error.message}
-                </p>
-              ) : null}
-
-              {resolvedChannel.description.trim() ||
-              resolvedChannel.topic?.trim() ||
-              resolvedChannel.purpose?.trim() ? (
-                <NarrativeGroup>
-                  {resolvedChannel.description.trim() ? (
-                    <NarrativeField
-                      icon={FileText}
-                      label="Description"
-                      testId="channel-management-description"
-                      value={resolvedChannel.description.trim()}
-                    />
-                  ) : null}
-                  {resolvedChannel.topic?.trim() ? (
-                    <NarrativeField
-                      icon={MessageSquare}
-                      label="Topic"
-                      testId="channel-management-topic"
-                      value={resolvedChannel.topic.trim()}
-                    />
-                  ) : null}
-                  {resolvedChannel.purpose?.trim() ? (
-                    <NarrativeField
-                      icon={Zap}
-                      label="Purpose"
-                      testId="channel-management-purpose"
-                      value={resolvedChannel.purpose.trim()}
-                    />
-                  ) : null}
-                </NarrativeGroup>
-              ) : null}
-
-              {canOpenCanvas ? (
-                <IngressRow
-                  description={canvasPreview}
-                  icon={BookOpenText}
-                  label="Canvas"
-                  onClick={() => setActiveView("canvas")}
-                  testId="channel-canvas-ingress"
-                  trailing={canvasQuery.isLoading ? "Loading..." : undefined}
-                />
-              ) : null}
-
-              <FieldGroup>
-                <CopyFieldRow
-                  icon={Fingerprint}
-                  label="Channel ID"
-                  testId="channel-management-channel-id"
-                  value={resolvedChannel.id}
-                />
-                <InfoFieldRow
-                  icon={Type}
-                  label="Name"
-                  testId="channel-management-name-row"
-                  value={resolvedChannel.name}
-                />
-                <InfoFieldRow
-                  icon={Radio}
-                  label="Type"
-                  testId="channel-management-type"
-                  value={resolvedChannel.channelType}
-                />
-                <InfoFieldRow
-                  icon={resolvedChannel.visibility === "private" ? Lock : Eye}
-                  label="Visibility"
-                  testId="channel-management-visibility"
-                  value={resolvedChannel.visibility}
-                />
-                <InfoFieldRow
-                  icon={Users}
-                  label="Members"
-                  testId="channel-management-member-count"
-                  value={`${memberCount}`}
-                />
-                {isArchived ? (
-                  <InfoFieldRow
-                    icon={Archive}
-                    label="Status"
-                    testId="channel-management-archived"
-                    value="Archived"
-                  />
-                ) : null}
-                {resolvedChannel.ttlSeconds !== null ? (
-                  <InfoFieldRow
-                    icon={Archive}
-                    label="Ephemeral"
-                    testId="channel-management-ephemeral-row"
-                    value={formatTtlDuration(resolvedChannel.ttlSeconds)}
-                  />
-                ) : null}
-              </FieldGroup>
-
-              {canManageChannel && resolvedChannel.channelType !== "dm" ? (
-                <div className="space-y-2">
-                  <div
-                    className="grid grid-cols-2 gap-2"
-                    data-testid="channel-management-footer"
-                  >
-                    {isArchived ? (
-                      <Button
-                        className="w-full justify-center"
-                        data-testid="channel-management-unarchive"
-                        disabled={
-                          !canManageChannel ||
-                          unarchiveChannelMutation.isPending
-                        }
-                        onClick={() => {
-                          void unarchiveChannelMutation.mutateAsync();
-                        }}
-                        size="sm"
-                        type="button"
-                      >
-                        <ArchiveRestore className="h-4 w-4" />
-                        {unarchiveChannelMutation.isPending
-                          ? "Restoring..."
-                          : "Unarchive"}
-                      </Button>
-                    ) : (
-                      <Button
-                        className="w-full justify-center"
-                        data-testid="channel-management-archive"
-                        disabled={
-                          !canManageChannel || archiveChannelMutation.isPending
-                        }
-                        onClick={() => {
-                          void archiveChannelMutation.mutateAsync();
-                        }}
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                      >
-                        <Archive className="h-4 w-4" />
-                        {archiveChannelMutation.isPending
-                          ? "Archiving..."
-                          : "Archive"}
-                      </Button>
-                    )}
-                    {isOwner ? (
-                      <AlertDialog
-                        onOpenChange={handleDeleteDialogOpenChange}
-                        open={isDeleteDialogOpen}
-                      >
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            className="w-full justify-center"
-                            data-testid="channel-management-delete"
-                            disabled={deleteChannelMutation.isPending}
-                            size="sm"
-                            type="button"
-                            variant="destructive"
-                          >
-                            Delete
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent data-testid="channel-delete-confirmation-dialog">
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Delete channel?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              Delete {resolvedChannel.name} from the workspace
-                              list. This action cannot be undone.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          {deleteChannelMutation.error instanceof Error ? (
-                            <p className="text-sm text-destructive">
-                              {deleteChannelMutation.error.message}
-                            </p>
-                          ) : null}
-                          <AlertDialogFooter>
-                            <AlertDialogCancel asChild>
-                              <Button
-                                data-testid="channel-delete-cancel"
-                                disabled={deleteChannelMutation.isPending}
-                                type="button"
-                                variant="outline"
-                              >
-                                Cancel
-                              </Button>
-                            </AlertDialogCancel>
-                            <AlertDialogAction asChild>
-                              <Button
-                                data-testid="channel-delete-confirm"
-                                disabled={deleteChannelMutation.isPending}
-                                onClick={(event) => {
-                                  event.preventDefault();
-                                  void handleDeleteChannel();
-                                }}
-                                type="button"
-                                variant="destructive"
-                              >
-                                {deleteChannelMutation.isPending
-                                  ? "Deleting..."
-                                  : "Delete channel"}
-                              </Button>
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    ) : null}
-                  </div>
-                  {archiveChannelMutation.error instanceof Error ? (
-                    <p className="text-sm text-destructive">
-                      {archiveChannelMutation.error.message}
-                    </p>
-                  ) : null}
-                  {unarchiveChannelMutation.error instanceof Error ? (
-                    <p className="text-sm text-destructive">
-                      {unarchiveChannelMutation.error.message}
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div data-testid="channel-canvas-section">
-              <ChannelCanvas
-                canEdit={canEditNarrative}
-                channelId={channelId}
-                isArchived={isArchived}
-              />
-            </div>
-          )}
-        </div>
-      </SheetContent>
+          <ChannelManagementPanelContent
+            activeView={activeView}
+            archiveChannelMutation={archiveChannelMutation}
+            canEditNarrative={canEditNarrative}
+            canJoin={canJoin}
+            canLeave={canLeave}
+            canManageChannel={canManageChannel}
+            canOpenCanvas={canOpenCanvas}
+            canvasPreview={canvasPreview}
+            canvasQuery={canvasQuery}
+            channelId={channelId}
+            deleteChannelMutation={deleteChannelMutation}
+            detailsError={detailsQuery.error}
+            handleDeleteChannel={handleDeleteChannel}
+            handleDeleteDialogOpenChange={handleDeleteDialogOpenChange}
+            isArchived={isArchived}
+            isDark={isDark}
+            isDeleteDialogOpen={isDeleteDialogOpen}
+            isOwner={isOwner}
+            isSplitLayout={isSplitLayout}
+            joinChannelMutation={joinChannelMutation}
+            leaveChannelMutation={leaveChannelMutation}
+            memberCount={memberCount}
+            membersError={membersQuery.error}
+            onOpenChange={onOpenChange}
+            resolvedChannel={resolvedChannel}
+            setActiveView={setActiveView}
+            setIsEditDialogOpen={setIsEditDialogOpen}
+            unarchiveChannelMutation={unarchiveChannelMutation}
+          />
+        </DialogPrimitive.Content>
+      ) : (
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Content
+            className={cn(
+              PANEL_BASE_CLASS,
+              PANEL_OVERLAY_CLASS,
+              "w-[380px] cursor-default overflow-hidden p-0 transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right",
+              isDark
+                ? "bg-background/85 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75"
+                : "bg-background",
+            )}
+            data-testid="channel-management-sheet"
+          >
+            <ChannelManagementPanelContent
+              activeView={activeView}
+              archiveChannelMutation={archiveChannelMutation}
+              canEditNarrative={canEditNarrative}
+              canJoin={canJoin}
+              canLeave={canLeave}
+              canManageChannel={canManageChannel}
+              canOpenCanvas={canOpenCanvas}
+              canvasPreview={canvasPreview}
+              canvasQuery={canvasQuery}
+              channelId={channelId}
+              deleteChannelMutation={deleteChannelMutation}
+              detailsError={detailsQuery.error}
+              handleDeleteChannel={handleDeleteChannel}
+              handleDeleteDialogOpenChange={handleDeleteDialogOpenChange}
+              isArchived={isArchived}
+              isDark={isDark}
+              isDeleteDialogOpen={isDeleteDialogOpen}
+              isOwner={isOwner}
+              isSplitLayout={isSplitLayout}
+              joinChannelMutation={joinChannelMutation}
+              leaveChannelMutation={leaveChannelMutation}
+              memberCount={memberCount}
+              membersError={membersQuery.error}
+              onOpenChange={onOpenChange}
+              resolvedChannel={resolvedChannel}
+              setActiveView={setActiveView}
+              setIsEditDialogOpen={setIsEditDialogOpen}
+              unarchiveChannelMutation={unarchiveChannelMutation}
+            />
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      )}
 
       {canManageChannel ? (
         <Dialog onOpenChange={setIsEditDialogOpen} open={isEditDialogOpen}>
@@ -843,6 +592,373 @@ export function ChannelManagementSheet({
           </DialogContent>
         </Dialog>
       ) : null}
-    </Sheet>
+    </DialogPrimitive.Root>
+  );
+}
+
+type ChannelMutation<TArgs = void> = {
+  error: unknown;
+  isPending: boolean;
+  mutateAsync: (args: TArgs) => Promise<unknown>;
+};
+
+type ChannelManagementPanelContentProps = {
+  activeView: "summary" | "canvas";
+  archiveChannelMutation: ChannelMutation;
+  canEditNarrative: boolean;
+  canJoin: boolean;
+  canLeave: boolean;
+  canManageChannel: boolean;
+  canOpenCanvas: boolean;
+  canvasPreview?: string;
+  canvasQuery: { isLoading: boolean };
+  channelId: string | null;
+  deleteChannelMutation: ChannelMutation;
+  detailsError: unknown;
+  handleDeleteChannel: () => Promise<void>;
+  handleDeleteDialogOpenChange: (open: boolean) => void;
+  isArchived: boolean;
+  isDark: boolean;
+  isDeleteDialogOpen: boolean;
+  isOwner: boolean;
+  isSplitLayout: boolean;
+  joinChannelMutation: ChannelMutation;
+  leaveChannelMutation: ChannelMutation;
+  memberCount: number;
+  membersError: unknown;
+  onOpenChange: (open: boolean) => void;
+  resolvedChannel: Channel;
+  setActiveView: React.Dispatch<React.SetStateAction<"summary" | "canvas">>;
+  setIsEditDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  unarchiveChannelMutation: ChannelMutation;
+};
+
+function ChannelManagementPanelContent({
+  activeView,
+  archiveChannelMutation,
+  canEditNarrative,
+  canJoin,
+  canLeave,
+  canManageChannel,
+  canOpenCanvas,
+  canvasPreview,
+  canvasQuery,
+  channelId,
+  deleteChannelMutation,
+  detailsError,
+  handleDeleteChannel,
+  handleDeleteDialogOpenChange,
+  isArchived,
+  isDark,
+  isDeleteDialogOpen,
+  isOwner,
+  isSplitLayout,
+  joinChannelMutation,
+  leaveChannelMutation,
+  memberCount,
+  membersError,
+  onOpenChange,
+  resolvedChannel,
+  setActiveView,
+  setIsEditDialogOpen,
+  unarchiveChannelMutation,
+}: ChannelManagementPanelContentProps) {
+  const showModerationActions =
+    activeView === "summary" &&
+    canManageChannel &&
+    resolvedChannel.channelType !== "dm";
+
+  return (
+    <>
+      {isSplitLayout ? (
+        <AuxiliaryPanelHeader>
+          <AuxiliaryPanelHeaderGroup>
+            {activeView === "canvas" ? (
+              <Button
+                aria-label="Back to channel"
+                data-testid="channel-management-back"
+                onClick={() => setActiveView("summary")}
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <ChevronLeft />
+              </Button>
+            ) : null}
+            <DialogPrimitive.Title asChild>
+              <AuxiliaryPanelTitle>
+                {activeView === "canvas" ? "Canvas" : "Channel"}
+              </AuxiliaryPanelTitle>
+            </DialogPrimitive.Title>
+          </AuxiliaryPanelHeaderGroup>
+          <DialogPrimitive.Close asChild>
+            <Button
+              aria-label="Close channel management"
+              data-testid="channel-management-close"
+              size="icon"
+              type="button"
+              variant="ghost"
+            >
+              <X />
+            </Button>
+          </DialogPrimitive.Close>
+          <DialogPrimitive.Description className="sr-only">
+            Channel settings
+          </DialogPrimitive.Description>
+        </AuxiliaryPanelHeader>
+      ) : (
+        <div
+          className={cn(
+            "relative z-10 flex min-h-11 flex-row items-center gap-3 space-y-0 border-b border-border/35 px-3 py-1.5 text-left shadow-none",
+            isDark
+              ? "bg-background/70 backdrop-blur-xl supports-[backdrop-filter]:bg-background/55"
+              : "bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/70",
+          )}
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            {activeView === "canvas" ? (
+              <Button
+                aria-label="Back to channel"
+                data-testid="channel-management-back"
+                onClick={() => setActiveView("summary")}
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <ChevronLeft />
+              </Button>
+            ) : null}
+            <DialogPrimitive.Title className="min-w-0 flex-1 translate-y-px truncate text-base font-semibold leading-6 tracking-tight">
+              {activeView === "canvas" ? "Canvas" : "Channel"}
+            </DialogPrimitive.Title>
+          </div>
+          <DialogPrimitive.Close asChild>
+            <Button
+              aria-label="Close channel management"
+              data-testid="channel-management-close"
+              size="icon"
+              type="button"
+              variant="ghost"
+            >
+              <X />
+            </Button>
+          </DialogPrimitive.Close>
+          <DialogPrimitive.Description className="sr-only">
+            Channel settings
+          </DialogPrimitive.Description>
+        </div>
+      )}
+
+      <div
+        className={cn(
+          "flex-1 overflow-y-auto bg-background px-4",
+          showModerationActions ? "pb-20" : "pb-8",
+          isSplitLayout ? auxiliaryPanelContentPaddingClass : "pt-4",
+        )}
+      >
+        {activeView === "summary" ? (
+          <div className="space-y-6">
+            <ChannelHero channel={resolvedChannel} />
+
+            {detailsError instanceof Error ? (
+              <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {detailsError.message}
+              </p>
+            ) : null}
+
+            {membersError instanceof Error ? (
+              <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {membersError.message}
+              </p>
+            ) : null}
+
+            <div className="flex flex-wrap items-start justify-center gap-6">
+              <ChannelQuickAction
+                icon={Copy}
+                label="Copy ID"
+                onClick={() => {
+                  void navigator.clipboard
+                    .writeText(resolvedChannel.id)
+                    .then(() => toast.success("Copied channel ID"));
+                }}
+                testId="channel-management-copy-id-action"
+              />
+              {canJoin ? (
+                <ChannelQuickAction
+                  active
+                  disabled={joinChannelMutation.isPending}
+                  icon={DoorOpen}
+                  label={joinChannelMutation.isPending ? "Joining..." : "Join"}
+                  onClick={() => {
+                    void joinChannelMutation.mutateAsync();
+                  }}
+                  testId="channel-management-join"
+                />
+              ) : null}
+              {canLeave ? (
+                <ChannelQuickAction
+                  disabled={leaveChannelMutation.isPending}
+                  icon={DoorClosed}
+                  label={
+                    leaveChannelMutation.isPending ? "Leaving..." : "Leave"
+                  }
+                  onClick={() => {
+                    void leaveChannelMutation.mutateAsync().then(() => {
+                      onOpenChange(false);
+                    });
+                  }}
+                  testId="channel-management-leave"
+                />
+              ) : null}
+              {canManageChannel ? (
+                <ChannelQuickAction
+                  icon={Pencil}
+                  label="Edit"
+                  onClick={() => setIsEditDialogOpen(true)}
+                  testId="channel-management-edit"
+                />
+              ) : null}
+            </div>
+
+            {joinChannelMutation.error instanceof Error ? (
+              <p className="text-center text-sm text-destructive">
+                {joinChannelMutation.error.message}
+              </p>
+            ) : null}
+            {leaveChannelMutation.error instanceof Error ? (
+              <p className="text-center text-sm text-destructive">
+                {leaveChannelMutation.error.message}
+              </p>
+            ) : null}
+
+            {resolvedChannel.description.trim() ||
+            resolvedChannel.topic?.trim() ||
+            resolvedChannel.purpose?.trim() ? (
+              <NarrativeGroup>
+                {resolvedChannel.description.trim() ? (
+                  <NarrativeField
+                    icon={FileText}
+                    label="Description"
+                    testId="channel-management-description"
+                    value={resolvedChannel.description.trim()}
+                  />
+                ) : null}
+                {resolvedChannel.topic?.trim() ? (
+                  <NarrativeField
+                    icon={MessageSquare}
+                    label="Topic"
+                    testId="channel-management-topic"
+                    value={resolvedChannel.topic.trim()}
+                  />
+                ) : null}
+                {resolvedChannel.purpose?.trim() ? (
+                  <NarrativeField
+                    icon={Zap}
+                    label="Purpose"
+                    testId="channel-management-purpose"
+                    value={resolvedChannel.purpose.trim()}
+                  />
+                ) : null}
+              </NarrativeGroup>
+            ) : null}
+
+            {canOpenCanvas ? (
+              <IngressRow
+                description={canvasPreview}
+                icon={BookOpenText}
+                label="Canvas"
+                onClick={() => setActiveView("canvas")}
+                testId="channel-canvas-ingress"
+                trailing={canvasQuery.isLoading ? "Loading..." : undefined}
+              />
+            ) : null}
+
+            <FieldGroup>
+              <CopyFieldRow
+                icon={Fingerprint}
+                label="Channel ID"
+                testId="channel-management-channel-id"
+                value={resolvedChannel.id}
+              />
+              <InfoFieldRow
+                icon={Type}
+                label="Name"
+                testId="channel-management-name-row"
+                value={resolvedChannel.name}
+              />
+              <InfoFieldRow
+                icon={Radio}
+                label="Type"
+                testId="channel-management-type"
+                value={resolvedChannel.channelType}
+              />
+              <InfoFieldRow
+                icon={resolvedChannel.visibility === "private" ? Lock : Eye}
+                label="Visibility"
+                testId="channel-management-visibility"
+                value={resolvedChannel.visibility}
+              />
+              <InfoFieldRow
+                icon={Users}
+                label="Members"
+                testId="channel-management-member-count"
+                value={`${memberCount}`}
+              />
+              {isArchived ? (
+                <InfoFieldRow
+                  icon={Archive}
+                  label="Status"
+                  testId="channel-management-archived"
+                  value="Archived"
+                />
+              ) : null}
+              {resolvedChannel.ttlSeconds !== null ? (
+                <InfoFieldRow
+                  icon={Archive}
+                  label="Ephemeral"
+                  testId="channel-management-ephemeral-row"
+                  value={formatTtlDuration(resolvedChannel.ttlSeconds)}
+                />
+              ) : null}
+            </FieldGroup>
+
+            {archiveChannelMutation.error instanceof Error ? (
+              <p className="text-sm text-destructive">
+                {archiveChannelMutation.error.message}
+              </p>
+            ) : null}
+            {unarchiveChannelMutation.error instanceof Error ? (
+              <p className="text-sm text-destructive">
+                {unarchiveChannelMutation.error.message}
+              </p>
+            ) : null}
+          </div>
+        ) : (
+          <div data-testid="channel-canvas-section">
+            <ChannelCanvas
+              canEdit={canEditNarrative}
+              channelId={channelId}
+              isArchived={isArchived}
+            />
+          </div>
+        )}
+      </div>
+
+      {showModerationActions ? (
+        <ChannelManagementModerationActions
+          archiveChannelMutation={archiveChannelMutation}
+          canManageChannel={canManageChannel}
+          deleteChannelMutation={deleteChannelMutation}
+          handleDeleteChannel={handleDeleteChannel}
+          handleDeleteDialogOpenChange={handleDeleteDialogOpenChange}
+          isArchived={isArchived}
+          isDark={isDark}
+          isDeleteDialogOpen={isDeleteDialogOpen}
+          isOwner={isOwner}
+          resolvedChannelName={resolvedChannel.name}
+          unarchiveChannelMutation={unarchiveChannelMutation}
+        />
+      ) : null}
+    </>
   );
 }

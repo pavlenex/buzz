@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useAppShell } from "@/app/AppShellContext";
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
 import {
@@ -93,6 +94,7 @@ export function ChannelScreen({
   targetMessageEvents,
   targetMessageId,
 }: ChannelScreenProps) {
+  const { goHome } = useAppNavigation();
   const {
     markChannelRead,
     markChannelUnread,
@@ -101,7 +103,7 @@ export function ChannelScreen({
     markThreadRead,
     setContextParentResolver,
     openCreateChannel,
-    openChannelManagement,
+    openChannelManagement: openGlobalChannelManagement,
     followThread,
     unfollowThread,
     isFollowingThread,
@@ -111,6 +113,8 @@ export function ChannelScreen({
   const [profilePanelPubkey, setProfilePanelPubkey] = React.useState<
     string | null
   >(null);
+  const [isChannelManagementOpen, setIsChannelManagementOpen] =
+    React.useState(false);
   const {
     canReset: canResetThreadPanelWidth,
     onResetWidth: handleThreadPanelWidthReset,
@@ -143,14 +147,8 @@ export function ChannelScreen({
   useChannelSubscription(activeChannel);
   const { fetchOlder, hasOlderMessages, isFetchingOlder } =
     useFetchOlderMessages(activeChannel);
-  // Newest TOP-LEVEL message only. The channel read-marker must clear the
-  // channel timeline without clearing its threads (NIP-RS Option 1): thread
-  // replies are kind-9 channel events, so taking the last message outright
-  // would advance the channel frontier past unread replies and the hierarchical
-  // effective(thread) = max(thread, channel) would silently clear every thread
-  // badge on channel entry. Scanning from the end for the last message with no
-  // reply tag keeps the frontier at the last top-level message, leaving thread
-  // badges intact until the thread itself is read.
+  // Newest top-level message only: opening a channel should clear the timeline
+  // without clearing unread thread replies.
   const latestActiveMessage = React.useMemo(() => {
     const messages = messagesQuery.data;
     if (!messages) return null;
@@ -161,22 +159,13 @@ export function ChannelScreen({
     }
     return null;
   }, [messagesQuery.data]);
-  // No `lastMessageAt` fallback: that timestamp is reply-inclusive (the backend
-  // takes MAX(created_at) over kind-9 events without a parent filter), so using
-  // it when the window has no top-level message would advance the channel
-  // marker past an unread reply and clear its thread/sidebar unread — the exact
-  // regression Fix A prevents. null suppresses the marker advance (markChannelRead
-  // early-returns on markAt === null) until a real top-level position is known.
+  // No `lastMessageAt` fallback: it is reply-inclusive and would clear unread
+  // thread/sidebar state before a real top-level position is known.
   const activeReadAt = latestActiveMessage
     ? new Date(latestActiveMessage.created_at * 1_000).toISOString()
     : null;
-  // Capture the read frontier as it stood the instant this channel was opened,
-  // BEFORE the mark-read effect below advances it to latest. Written during
-  // render (not in an effect) so the value is read prior to any effect for
-  // this commit — the divider must reflect "what was unread on open", not the
-  // post-open frontier. Keyed per channel and recomputed only when the channel
-  // id changes, never when activeReadAt advances, or the divider would vanish
-  // the moment the open marks the channel read.
+  // Capture the read frontier during render, before the mark-read effect
+  // advances it, so dividers reflect "what was unread on open."
   const openFrontierRef = React.useRef(new Map<string, number | null>());
   if (activeChannelId && !openFrontierRef.current.has(activeChannelId)) {
     openFrontierRef.current.set(
@@ -187,12 +176,8 @@ export function ChannelScreen({
   const openFrontierSeconds = activeChannelId
     ? (openFrontierRef.current.get(activeChannelId) ?? null)
     : null;
-  // Channels the user manually marked unread this session. A deliberate
-  // mark-unread has no meaningful "new" boundary inside the timeline — the
-  // open-time snapshot already covers every message — so the pill and divider
-  // would otherwise render nothing while the sidebar dot says unread. Suppress
-  // the marker for such channels to avoid that visible contradiction. The flag
-  // is cleared on re-open (a fresh snapshot is recomputed for the channel).
+  // Manual mark-unread has no meaningful in-timeline boundary, so suppress the
+  // marker until the channel is reopened and a fresh snapshot is captured.
   const forcedUnreadRef = React.useRef(new Set<string>());
   const [, forceUnreadRender] = React.useReducer((n: number) => n + 1, 0);
   const isActiveChannelForcedUnread =
@@ -209,9 +194,7 @@ export function ChannelScreen({
     };
   }, [activeChannelId]);
   // Clear the open-time frontier on channel leave so re-visiting captures a
-  // fresh read position. Without this, switching away and back would reuse the
-  // stale frontier from the first open, producing a phantom "New" divider over
-  // already-read messages.
+  // fresh read position.
   React.useEffect(() => {
     const channelId = activeChannelId;
     if (!channelId) return;
@@ -223,19 +206,12 @@ export function ChannelScreen({
     if (!activeChannelId || activeChannel?.isMember === false) {
       return;
     }
-    // Passive channel-open: advance the marker to the newest top-level message
-    // only (NIP-RS Option 1). `topLevelOnly` stops the read-state layer folding
-    // in observed thread replies, so opening a channel clears the timeline but
-    // leaves thread badges intact until each thread is opened — and leaves the
-    // channel's sidebar dot lit (the reply is still unread for the channel).
+    // Advance only to the newest top-level message; thread replies remain
+    // unread until their thread is opened.
     markChannelRead(activeChannelId, activeReadAt, { topLevelOnly: true });
   }, [activeChannel?.isMember, activeChannelId, activeReadAt, markChannelRead]);
-  // Install the NIP-RS parent resolver: every `thread:<root>` context evaluated
-  // while this channel is active belongs to it (getThreadReadAt is only ever
-  // called on the active channel's timeline messages), so the parent is always
-  // the active channel. Non-thread keys (channels) have no parent → null, which
-  // degrades effective() to the own term. Cleared on channel leave / unmount so
-  // a stale channel id never becomes the parent of another channel's threads.
+  // Install the NIP-RS parent resolver for active-channel thread contexts and
+  // clear it on leave so a stale channel id never parents another channel.
   React.useEffect(() => {
     if (!activeChannelId) {
       setContextParentResolver(null);
@@ -438,10 +414,8 @@ export function ChannelScreen({
     () => buildCreatedAtByMessageId(timelineMessages),
     [timelineMessages],
   );
-  // Newest createdAt across an expanded branch (the message itself plus every
-  // descendant). Drilling into a branch advances the thread frontier to this,
-  // consuming everything chronologically up to the deepest reply read. Returns
-  // null when the message is absent so the caller skips the read-state write.
+  // Newest createdAt across an expanded branch, used to advance its thread
+  // frontier when the branch is drilled into.
   const getSubtreeMaxCreatedAt = React.useCallback(
     (messageId: string) =>
       subtreeMaxCreatedAt(
@@ -758,6 +732,7 @@ export function ChannelScreen({
       handleCloseAgentSession();
       setEditTargetId(null);
       setProfilePanelPubkey(null);
+      setIsChannelManagementOpen(false);
     },
     [handleCloseAgentSession],
   );
@@ -810,7 +785,10 @@ export function ChannelScreen({
 
   useLoadMissingAncestors(activeChannel, resolvedMessages);
   const hasAuxiliaryPanel = Boolean(
-    openThreadHeadMessage || openAgentSessionPubkey || profilePanelPubkey,
+    openThreadHeadMessage ||
+      openAgentSessionPubkey ||
+      profilePanelPubkey ||
+      isChannelManagementOpen,
   );
   const isNarrowPanelViewport =
     channelContentWidthPx > 0 &&
@@ -851,7 +829,20 @@ export function ChannelScreen({
       isJoining={joinChannelMutation.isPending}
       onAddBotOpenChange={setIsAddBotOpen}
       onJoinChannel={joinChannelMutation.mutateAsync}
-      onManageChannel={openChannelManagement}
+      onManageChannel={() => {
+        if (activeChannel?.channelType === "forum") {
+          openGlobalChannelManagement();
+          return;
+        }
+
+        setOpenThreadHeadId(null);
+        setExpandedThreadReplyIds(new Set());
+        setThreadScrollTargetId(null);
+        setThreadReplyTargetId(null);
+        handleCloseAgentSession();
+        setProfilePanelPubkey(null);
+        setIsChannelManagementOpen(true);
+      }}
       onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
       showHeaderContent={!isSinglePanelView}
     />
@@ -891,6 +882,7 @@ export function ChannelScreen({
                   agentSessionAgents={channelAgentSessionAgents}
                   botTypingEntries={botTypingEntries}
                   channelFind={channelFind}
+                  channelManagementOpen={isChannelManagementOpen}
                   currentPubkey={currentPubkey}
                   canResetThreadPanelWidth={canResetThreadPanelWidth}
                   fetchOlder={fetchOlder}
@@ -922,6 +914,10 @@ export function ChannelScreen({
                   messages={timelineMessages}
                   onCancelEdit={handleCancelEdit}
                   onCancelThreadReply={handleCancelThreadReply}
+                  onChannelManagementDeleted={() => {
+                    setIsChannelManagementOpen(false);
+                    void goHome({ replace: true });
+                  }}
                   onFollowThread={
                     openThreadHeadId != null && !isNotifiedForCurrentThread
                       ? () => followThread(openThreadHeadId)
@@ -933,6 +929,9 @@ export function ChannelScreen({
                       : undefined
                   }
                   onCloseAgentSession={handleCloseAgentSession}
+                  onCloseChannelManagement={() =>
+                    setIsChannelManagementOpen(false)
+                  }
                   onCloseThread={handleCloseThread}
                   onDelete={
                     activeChannel?.archivedAt ? undefined : handleDelete

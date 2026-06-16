@@ -31,7 +31,7 @@ async function openChannelManagement(
 }
 
 async function closeChannelManagement(page: import("@playwright/test").Page) {
-  await page.keyboard.press("Escape");
+  await page.getByTestId("channel-management-close").click();
   await expect(page.getByTestId("channel-management-sheet")).not.toBeVisible();
 }
 
@@ -1243,6 +1243,8 @@ test("manage channel keeps canvas near the top of the sheet", async ({
   await openChannelManagement(page, "general");
 
   const sheet = page.getByTestId("channel-management-sheet");
+  const sheetBox = await sheet.boundingBox();
+  const timelineBox = await page.getByTestId("message-timeline").boundingBox();
 
   // Canvas ingress should appear before the channel metadata rows in the DOM.
   const canvasBox = await sheet
@@ -1252,6 +1254,25 @@ test("manage channel keeps canvas near the top of the sheet", async ({
     .getByTestId("channel-management-name-row")
     .boundingBox();
 
+  expect(sheetBox).not.toBeNull();
+  expect(timelineBox).not.toBeNull();
+  if (!sheetBox || !timelineBox) {
+    throw new Error("Expected channel management panel and timeline boxes.");
+  }
+  expect(timelineBox.x + timelineBox.width).toBeLessThanOrEqual(sheetBox.x + 1);
+  await page.mouse.click(timelineBox.x + 24, timelineBox.y + 180);
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeVisible();
+  await page.setViewportSize({ height: 720, width: 820 });
+  await expect(page.getByTestId("message-timeline")).toHaveCount(0);
+  await expect(page.getByTestId("channel-drop-zone")).toHaveCount(0);
+  await expect(sheet).toBeVisible();
+  const narrowSheetBox = await sheet.boundingBox();
+  if (!narrowSheetBox) {
+    throw new Error("Expected narrow channel management panel box.");
+  }
+  expect(narrowSheetBox.width).toBeGreaterThan(500);
   expect(canvasBox).not.toBeNull();
   expect(nameBox).not.toBeNull();
   expect(canvasBox?.y).toBeLessThan(nameBox?.y);
@@ -1312,6 +1333,31 @@ test("home inbox channel label opens management without leaving home", async ({
     "general",
   );
   await expect(page.getByTestId("home-inbox-list")).toBeVisible();
+  const detailBox = await page.getByTestId("home-inbox-detail").boundingBox();
+  const sheetBox = await page
+    .getByTestId("channel-management-sheet")
+    .boundingBox();
+  if (!detailBox || !sheetBox) {
+    throw new Error("Expected home detail pane and channel management boxes.");
+  }
+  expect(detailBox.x + detailBox.width).toBeLessThanOrEqual(sheetBox.x + 1);
+  expect(sheetBox.width).toBeGreaterThanOrEqual(300);
+  await page
+    .getByTestId("home-inbox-list")
+    .click({ position: { x: 24, y: 80 } });
+  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await page.setViewportSize({ height: 720, width: 820 });
+  await expect(page.getByTestId("home-inbox-list")).toHaveCount(0);
+  const narrowHomeBox = await page.getByTestId("home-inbox").boundingBox();
+  const narrowSheetBox = await page
+    .getByTestId("channel-management-sheet")
+    .boundingBox();
+  if (!narrowHomeBox || !narrowSheetBox) {
+    throw new Error("Expected narrow home and channel management boxes.");
+  }
+  expect(narrowSheetBox.width).toBeGreaterThanOrEqual(narrowHomeBox.width - 1);
   await expect(page).not.toHaveURL(/#\/channels\//);
 });
 
