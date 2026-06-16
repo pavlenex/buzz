@@ -252,6 +252,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
   const {
     highlightedMessageId,
+    introRevealed,
     isAtBottom,
     newMessageCount,
     scrollToBottom,
@@ -419,7 +420,15 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
               {showChannelIntro ? (
                 <div
-                  className="mb-0.5 mt-auto flex w-full max-w-2xl flex-col items-start px-3 py-2 text-left"
+                  aria-hidden={!introRevealed}
+                  className={cn(
+                    "mb-0.5 mt-auto flex w-full max-w-2xl flex-col items-start px-3 py-2 text-left transition-opacity",
+                    // Reserve the intro's space (feeds scrollMargin) but only
+                    // REVEAL it once the bottom pin has landed AND we're at the
+                    // genuine top — never painted up front while the list
+                    // streams in from the bottom.
+                    introRevealed ? "opacity-100" : "opacity-0",
+                  )}
                   data-testid="message-channel-intro"
                 >
                   <div
