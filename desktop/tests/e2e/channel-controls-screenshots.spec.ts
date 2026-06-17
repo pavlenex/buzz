@@ -6,12 +6,19 @@ const SHOTS = "test-results/channel-controls";
 
 // `general` seeds the mock identity as owner, so the owner/admin-gated
 // visibility + ephemeral controls are live and interactive.
-async function openManagementSheet(page: import("@playwright/test").Page) {
+async function openManagementModal(page: import("@playwright/test").Page) {
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await page.getByTestId("channel-management-trigger").click();
-  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await expect(page.getByTestId("channel-management-modal")).toBeVisible();
+}
+
+async function openManagementEdit(page: import("@playwright/test").Page) {
+  await page.getByTestId("channel-management-edit").click();
+  await expect(
+    page.getByTestId("channel-management-edit-dialog"),
+  ).toBeVisible();
 }
 
 async function settle(page: import("@playwright/test").Page) {
@@ -25,7 +32,8 @@ test.describe("channel controls screenshots", () => {
     page,
   }) => {
     await installMockBridge(page);
-    await openManagementSheet(page);
+    await openManagementModal(page);
+    await openManagementEdit(page);
 
     const lifecycle = page.getByTestId("channel-management-lifecycle");
     await lifecycle.scrollIntoViewIfNeeded();
@@ -42,7 +50,8 @@ test.describe("channel controls screenshots", () => {
 
   test("02 — Private toggled on", async ({ page }) => {
     await installMockBridge(page);
-    await openManagementSheet(page);
+    await openManagementModal(page);
+    await openManagementEdit(page);
 
     const lifecycle = page.getByTestId("channel-management-lifecycle");
     await lifecycle.scrollIntoViewIfNeeded();
@@ -61,7 +70,8 @@ test.describe("channel controls screenshots", () => {
 
   test("03 — Ephemeral on with friendly timeout field", async ({ page }) => {
     await installMockBridge(page);
-    await openManagementSheet(page);
+    await openManagementModal(page);
+    await openManagementEdit(page);
 
     const lifecycle = page.getByTestId("channel-management-lifecycle");
     await lifecycle.scrollIntoViewIfNeeded();
@@ -82,7 +92,8 @@ test.describe("channel controls screenshots", () => {
     page,
   }) => {
     await installMockBridge(page);
-    await openManagementSheet(page);
+    await openManagementModal(page);
+    await openManagementEdit(page);
 
     const lifecycle = page.getByTestId("channel-management-lifecycle");
     await lifecycle.scrollIntoViewIfNeeded();
@@ -101,7 +112,7 @@ test.describe("channel controls screenshots", () => {
 
   test("05 — sticky footer pins lifecycle buttons", async ({ page }) => {
     await installMockBridge(page);
-    await openManagementSheet(page);
+    await openManagementModal(page);
 
     const footer = page.getByTestId("channel-management-footer");
     await expect(footer).toBeVisible();
@@ -111,22 +122,23 @@ test.describe("channel controls screenshots", () => {
     await footer.screenshot({ path: `${SHOTS}/05-sticky-footer.png` });
   });
 
-  test("06 — full sheet with new controls", async ({ page }) => {
+  test("06 — full modal with new controls", async ({ page }) => {
     await installMockBridge(page);
-    await openManagementSheet(page);
+    await openManagementModal(page);
 
-    const sheet = page.getByTestId("channel-management-sheet");
-    await expect(sheet).toBeVisible();
+    const modal = page.getByTestId("channel-management-modal");
+    await expect(modal).toBeVisible();
     await settle(page);
 
-    await sheet.screenshot({ path: `${SHOTS}/06-management-sheet.png` });
+    await modal.screenshot({ path: `${SHOTS}/06-management-modal.png` });
   });
 
   test("07 — saving lifecycle leaves details save idle", async ({ page }) => {
     await installMockBridge(page, { updateChannelDelayMs: 500 });
-    await openManagementSheet(page);
+    await openManagementModal(page);
+    await openManagementEdit(page);
 
-    const sheet = page.getByTestId("channel-management-sheet");
+    const modal = page.getByTestId("channel-management-edit-dialog");
     await page.getByTestId("channel-management-ephemeral-toggle").click();
     await expect(
       page.getByTestId("channel-management-save-lifecycle"),
@@ -139,7 +151,7 @@ test.describe("channel controls screenshots", () => {
     await expect(
       page.getByTestId("channel-management-save-details"),
     ).toHaveText("Save details");
-    await sheet.screenshot({
+    await modal.screenshot({
       path: `${SHOTS}/07-lifecycle-saving-details-idle.png`,
     });
 
@@ -152,7 +164,8 @@ test.describe("channel controls screenshots", () => {
     page,
   }) => {
     await installMockBridge(page);
-    await openManagementSheet(page);
+    await openManagementModal(page);
+    await openManagementEdit(page);
 
     await page.getByTestId("channel-management-private-toggle").click();
     await page.getByTestId("channel-management-ephemeral-toggle").click();
@@ -163,9 +176,14 @@ test.describe("channel controls screenshots", () => {
 
     await page.keyboard.press("Escape");
     await expect(
-      page.getByTestId("channel-management-sheet"),
+      page.getByTestId("channel-management-edit-dialog"),
+    ).not.toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByTestId("channel-management-modal"),
     ).not.toBeVisible();
     await page.getByTestId("channel-management-trigger").click();
+    await openManagementEdit(page);
 
     const lifecycle = page.getByTestId("channel-management-lifecycle");
     await lifecycle.scrollIntoViewIfNeeded();

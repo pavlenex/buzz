@@ -12,12 +12,27 @@ async function openChannelManagement(
   await page.getByTestId(`channel-${channelName}`).click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
   await page.getByTestId("channel-management-trigger").click();
-  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await expect(page.getByTestId("channel-management-modal")).toBeVisible();
 }
 
 async function closeChannelManagement(page: import("@playwright/test").Page) {
+  if (await page.getByTestId("channel-management-edit-dialog").isVisible()) {
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByTestId("channel-management-edit-dialog"),
+    ).not.toBeVisible();
+  }
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("channel-management-sheet")).not.toBeVisible();
+  await expect(page.getByTestId("channel-management-modal")).not.toBeVisible();
+}
+
+async function openChannelManagementEdit(
+  page: import("@playwright/test").Page,
+) {
+  await page.getByTestId("channel-management-edit").click();
+  await expect(
+    page.getByTestId("channel-management-edit-dialog"),
+  ).toBeVisible();
 }
 
 async function openMembersSidebar(
@@ -1055,6 +1070,7 @@ test("manage channel updates details and context", async ({ page }) => {
 
   await page.goto("/");
   await openChannelManagement(page, "general");
+  await openChannelManagementEdit(page);
 
   await page.getByTestId("channel-management-name").fill(newName);
   await page.getByTestId("channel-management-description").fill(newDescription);
@@ -1088,7 +1104,8 @@ test("manage channel updates details and context", async ({ page }) => {
   await page.getByTestId("stream-list").getByText(newName).click();
   await expect(page.getByTestId("chat-title")).toHaveText(newName);
   await page.getByTestId("channel-management-trigger").click();
-  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await expect(page.getByTestId("channel-management-modal")).toBeVisible();
+  await openChannelManagementEdit(page);
 
   await expect(page.getByTestId("channel-management-name")).toHaveValue(
     newName,
@@ -1109,6 +1126,7 @@ test("manage channel updates visibility and ephemeral lifecycle independently", 
 }) => {
   await page.goto("/");
   await openChannelManagement(page, "general");
+  await openChannelManagementEdit(page);
 
   const saveDetailsButton = page.getByTestId("channel-management-save-details");
   const saveLifecycleButton = page.getByTestId(
@@ -1152,6 +1170,7 @@ test("manage channel updates visibility and ephemeral lifecycle independently", 
 
   await closeChannelManagement(page);
   await openChannelManagement(page, "general");
+  await openChannelManagementEdit(page);
 
   await expect(
     page.getByTestId("channel-management-private-toggle"),
@@ -1196,6 +1215,7 @@ test("manage channel updates visibility and ephemeral lifecycle independently", 
 
   await closeChannelManagement(page);
   await openChannelManagement(page, "general");
+  await openChannelManagementEdit(page);
 
   await expect(
     page.getByTestId("channel-management-private-toggle"),
@@ -1206,25 +1226,17 @@ test("manage channel updates visibility and ephemeral lifecycle independently", 
   await expect(page.getByTestId("channel-management-ttl")).toHaveCount(0);
 });
 
-test("manage channel keeps canvas near the top of the sheet", async ({
+test("manage channel includes the canvas section in the modal", async ({
   page,
 }) => {
   await page.goto("/");
   await openChannelManagement(page, "general");
 
-  const sheet = page.getByTestId("channel-management-sheet");
-
-  // Canvas section should appear before the name input in the DOM.
-  const canvasBox = await sheet
-    .getByTestId("channel-canvas-section")
-    .boundingBox();
-  const nameBox = await sheet
-    .getByTestId("channel-management-name")
-    .boundingBox();
-
-  expect(canvasBox).not.toBeNull();
-  expect(nameBox).not.toBeNull();
-  expect(canvasBox?.y).toBeLessThan(nameBox?.y);
+  await expect(
+    page
+      .getByTestId("channel-management-modal")
+      .getByTestId("channel-canvas-section"),
+  ).toBeVisible();
 });
 
 test("members sidebar can invite and remove members", async ({ page }) => {
@@ -1583,13 +1595,13 @@ test("open channel management supports join and leave", async ({ page }) => {
 
   // Open channel management — should show Leave since we just joined
   await page.getByTestId("channel-management-trigger").click();
-  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await expect(page.getByTestId("channel-management-modal")).toBeVisible();
   await expect(page.getByTestId("channel-management-join")).toHaveCount(0);
   await expect(page.getByTestId("channel-management-leave")).toBeVisible();
 
   // Leave the channel
   await page.getByTestId("channel-management-leave").click();
-  await expect(page.getByTestId("channel-management-sheet")).not.toBeVisible();
+  await expect(page.getByTestId("channel-management-modal")).not.toBeVisible();
 
   // After leaving, the app navigates away — re-open browser and find design
   await page.getByTestId("browse-channels").click();
@@ -1628,7 +1640,7 @@ test("manage channel can archive and unarchive a stream", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 
   await page.getByTestId("channel-management-trigger").click();
-  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await expect(page.getByTestId("channel-management-modal")).toBeVisible();
   await page.getByTestId("channel-management-unarchive").click();
   await expect(page.getByTestId("channel-management-archive")).toBeVisible();
 
@@ -1650,7 +1662,7 @@ test("manage channel can delete an owned stream", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 
   await page.getByTestId("channel-management-trigger").click();
-  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await expect(page.getByTestId("channel-management-modal")).toBeVisible();
   await page.getByTestId("channel-management-delete").click();
   await expect(
     page.getByTestId("channel-delete-confirmation-dialog"),
@@ -1671,7 +1683,7 @@ test("canceling channel deletion keeps the owned stream", async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
 
   await page.getByTestId("channel-management-trigger").click();
-  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await expect(page.getByTestId("channel-management-modal")).toBeVisible();
   await page.getByTestId("channel-management-delete").click();
   await expect(
     page.getByTestId("channel-delete-confirmation-dialog"),

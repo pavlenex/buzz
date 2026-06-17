@@ -105,14 +105,14 @@ test.describe("relay connectivity screenshots", () => {
     });
   });
 
-  test("04 — canvas unreachable in management sheet", async ({ page }) => {
+  test("04 — canvas unreachable in management modal", async ({ page }) => {
     await installMockBridge(page, { canvasReadError: RELAY_UNREACHABLE });
     await page.goto("/");
 
     await page.getByTestId("channel-general").click();
     await expect(page.getByTestId("chat-title")).toHaveText("general");
     await page.getByTestId("channel-management-trigger").click();
-    await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+    await expect(page.getByTestId("channel-management-modal")).toBeVisible();
 
     // ChannelCanvas shows the destructive error paragraph when the query fails.
     const canvasSection = page.getByTestId("channel-canvas-section");
@@ -121,9 +121,9 @@ test.describe("relay connectivity screenshots", () => {
       canvasSection.getByText("Can't reach the relay."),
     ).toBeVisible();
 
-    // Await Radix sheet animations before screenshotting.
-    const sheet = page.getByTestId("channel-management-sheet");
-    await sheet.evaluate((el) =>
+    // Await Radix dialog animations before screenshotting.
+    const modal = page.getByTestId("channel-management-modal");
+    await modal.evaluate((el) =>
       Promise.all(
         el
           .closest("[data-state]")
@@ -133,8 +133,8 @@ test.describe("relay connectivity screenshots", () => {
     );
     await settle(page);
 
-    // Capture the whole sheet so the error renders in its Canvas-section context.
-    await sheet.screenshot({
+    // Capture the whole modal so the error renders in its Canvas-section context.
+    await modal.screenshot({
       path: `${SHOTS}/04-canvas-unreachable.png`,
     });
   });

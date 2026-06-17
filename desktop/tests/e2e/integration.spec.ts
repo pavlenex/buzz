@@ -25,12 +25,27 @@ async function createStream(
 
 async function openChannelManagement(page: import("@playwright/test").Page) {
   await page.getByTestId("channel-management-trigger").click();
-  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+  await expect(page.getByTestId("channel-management-modal")).toBeVisible();
 }
 
 async function closeChannelManagement(page: import("@playwright/test").Page) {
+  if (await page.getByTestId("channel-management-edit-dialog").isVisible()) {
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByTestId("channel-management-edit-dialog"),
+    ).not.toBeVisible();
+  }
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("channel-management-sheet")).not.toBeVisible();
+  await expect(page.getByTestId("channel-management-modal")).not.toBeVisible();
+}
+
+async function openChannelManagementEdit(
+  page: import("@playwright/test").Page,
+) {
+  await page.getByTestId("channel-management-edit").click();
+  await expect(
+    page.getByTestId("channel-management-edit-dialog"),
+  ).toBeVisible();
 }
 
 async function assertDesktopNotificationsEnabled(
@@ -439,7 +454,7 @@ test("multiple channels independent", async ({ page }) => {
   );
 });
 
-test("manage sheet updates channel details and context through the relay", async ({
+test("manage modal updates channel details and context through the relay", async ({
   page,
 }) => {
   const stamp = Date.now();
@@ -455,6 +470,7 @@ test("manage sheet updates channel details and context through the relay", async
   await createStream(page, initialName, initialDescription);
 
   await openChannelManagement(page);
+  await openChannelManagementEdit(page);
   await page.getByTestId("channel-management-name").fill(renamedChannel);
   await page
     .getByTestId("channel-management-description")
@@ -493,6 +509,7 @@ test("manage sheet updates channel details and context through the relay", async
   );
 
   await openChannelManagement(page);
+  await openChannelManagementEdit(page);
   await expect(page.getByTestId("channel-management-name")).toHaveValue(
     renamedChannel,
   );
@@ -507,7 +524,7 @@ test("manage sheet updates channel details and context through the relay", async
   );
 });
 
-test("manage sheet archive and unarchive survives a reload through the relay", async ({
+test("manage modal archive and unarchive survives a reload through the relay", async ({
   page,
 }) => {
   const channelName = `archive-integration-${Date.now()}`;
