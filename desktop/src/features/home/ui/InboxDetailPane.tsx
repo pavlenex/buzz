@@ -272,10 +272,7 @@ export function InboxDetailPane({
                       type="button"
                     >
                       {hasChannelContext ? (
-                        <Hash
-                          className="h-[14px] w-[14px] shrink-0"
-                          color="gray"
-                        />
+                        <Hash className="h-4 w-4 shrink-0" color="gray" />
                       ) : null}
                       <span className="min-w-0 translate-y-px truncate">
                         {contextLabel}
@@ -287,10 +284,7 @@ export function InboxDetailPane({
                       title={item.fullTimestampLabel}
                     >
                       {hasChannelContext ? (
-                        <Hash
-                          className="h-[14px] w-[14px] shrink-0"
-                          color="gray"
-                        />
+                        <Hash className="h-4 w-4 shrink-0" color="gray" />
                       ) : null}
                       <span className="min-w-0 translate-y-px truncate">
                         {contextLabel}
@@ -332,7 +326,7 @@ export function InboxDetailPane({
         >
           <div>
             {isThreadContextLoading ? (
-              <div className="px-6 pb-3 text-[11px] text-muted-foreground">
+              <div className="px-6 pb-3 text-2xs text-muted-foreground">
                 Loading context...
               </div>
             ) : null}
