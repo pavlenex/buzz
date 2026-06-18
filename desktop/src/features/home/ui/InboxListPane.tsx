@@ -121,21 +121,18 @@ export function InboxListPane({
             </span>
           </div>
 
-          <div
+          <Markdown
             className={cn(
-              "mt-0.5 line-clamp-2 text-sm leading-5 **:inline [&_a]:font-medium [&_a]:text-current [&_br]:hidden [&_p]:inline",
+              "mt-0.5 line-clamp-2 max-w-full text-sm! leading-5! **:inline [&_*]:text-inherit [&_a]:font-medium [&_a]:text-current [&_br]:hidden [&_p]:inline",
               isDone
                 ? "font-normal text-muted-foreground"
                 : "font-semibold text-foreground",
             )}
-          >
-            <Markdown
-              className="inline max-w-full text-inherit"
-              content={item.preview}
-              interactive={false}
-              mentionNames={item.mentionNames}
-            />
-          </div>
+            content={item.preview}
+            interactive={false}
+            mentionNames={item.mentionNames}
+            plainInlineReferences
+          />
         </div>
       </button>
     );

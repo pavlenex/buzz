@@ -238,6 +238,7 @@ type MarkdownProps = {
   customEmoji?: CustomEmoji[];
   imetaByUrl?: ImetaLookup;
   interactive?: boolean;
+  plainInlineReferences?: boolean;
   agentMentionPubkeysByName?: Record<string, string>;
   mentionNames?: string[];
   mentionPubkeysByName?: Record<string, string>;
@@ -1678,6 +1679,7 @@ function SpoilerInline({
 function createMarkdownComponents(
   runtimeRef: React.RefObject<MarkdownRuntime>,
   interactive = true,
+  plainInlineReferences = false,
 ): Components {
   const paragraphClassName = "leading-[inherit]";
   const listItemClassName = "my-1 [&_p]:inline";
@@ -1795,6 +1797,14 @@ function createMarkdownComponents(
                 {line}
               </span>
             ))}
+          </code>
+        );
+      }
+
+      if (plainInlineReferences) {
+        return (
+          <code {...props} className="font-mono text-inherit">
+            {children}
           </code>
         );
       }
@@ -1937,6 +1947,10 @@ function createMarkdownComponents(
       const { agentMentionPubkeysByName, mentionPubkeysByName } =
         runtimeRef.current;
       const mentionText = String(children ?? "");
+      if (plainInlineReferences) {
+        return <span>{mentionText}</span>;
+      }
+
       const mentionName = mentionText.replace(/^@/, "").trim().toLowerCase();
       const pubkey = mentionPubkeysByName?.[mentionName];
       const isAgentMention =
@@ -1988,6 +2002,10 @@ function createMarkdownComponents(
       return <InlineEmojiPopover alt={alt} resolvedSrc={resolvedSrc} />;
     },
     "channel-link": ({ children }: { children?: React.ReactNode }) => {
+      if (plainInlineReferences) {
+        return <span>{children}</span>;
+      }
+
       const { channels, onOpenChannel } = runtimeRef.current;
       const text = String(children ?? "");
       const channelName = text.startsWith("#") ? text.slice(1) : text;
@@ -2075,6 +2093,7 @@ function MarkdownInner({
   customEmoji,
   imetaByUrl,
   interactive = true,
+  plainInlineReferences = false,
   agentMentionPubkeysByName,
   mentionNames,
   mentionPubkeysByName,
@@ -2116,8 +2135,9 @@ function MarkdownInner({
   });
 
   const components = React.useMemo(
-    () => createMarkdownComponents(runtimeRef, interactive),
-    [runtimeRef, interactive],
+    () =>
+      createMarkdownComponents(runtimeRef, interactive, plainInlineReferences),
+    [runtimeRef, interactive, plainInlineReferences],
   );
 
   // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
@@ -2200,6 +2220,7 @@ export const Markdown = React.memo(
     prev.className === next.className &&
     prev.customEmoji === next.customEmoji &&
     prev.interactive === next.interactive &&
+    prev.plainInlineReferences === next.plainInlineReferences &&
     prev.agentMentionPubkeysByName === next.agentMentionPubkeysByName &&
     prev.mentionPubkeysByName === next.mentionPubkeysByName &&
     shallowArrayEqual(prev.mentionNames, next.mentionNames) &&

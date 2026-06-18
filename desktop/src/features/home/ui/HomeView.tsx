@@ -414,6 +414,7 @@ export function HomeView({
             onFilterChange={setFilter}
             onSelect={(itemId) => {
               handleUserSelectItem(itemId);
+              markItemRead(itemId);
             }}
             reminderPubkey={currentPubkey}
             selectedId={selectedItemId}
