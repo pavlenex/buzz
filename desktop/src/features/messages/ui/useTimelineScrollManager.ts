@@ -12,6 +12,7 @@ import { useConvergentScrollToMessage } from "./useConvergentScrollToMessage";
 
 type UseTimelineScrollManagerOptions = {
   channelId?: string | null;
+  isFetchingOlder?: boolean;
   isLoading: boolean;
   messages: TimelineMessage[];
   onTargetReached?: (messageId: string) => void;
@@ -37,6 +38,7 @@ type PinToBottomOptions = {
 
 export function useTimelineScrollManager({
   channelId,
+  isFetchingOlder = false,
   isLoading,
   messages,
   onTargetReached,
@@ -63,6 +65,12 @@ export function useTimelineScrollManager({
   // a streaming-in list is what makes the timeline thrash on entry.
   const isLoadingRef = React.useRef(isLoading);
   isLoadingRef.current = isLoading;
+  // Mirror isFetchingOlder so the viewport ResizeObserver (subscribes once) can
+  // see the live value: the load-older path owns scroll position across its
+  // whole fetch+restore window, so the observer must not run a competing
+  // restore while a fetch is in flight (see the resize handler below).
+  const isFetchingOlderRef = React.useRef(isFetchingOlder);
+  isFetchingOlderRef.current = isFetchingOlder;
   const [isAtBottom, setIsAtBottom] = React.useState(true);
   const [highlightedMessageId, setHighlightedMessageId] = React.useState<
     string | null
@@ -307,7 +315,27 @@ export function useTimelineScrollManager({
         return;
       }
 
-      restoreScrollPosition(previousScrollTopRef.current);
+      // The load-older path owns scroll position across its whole window. Two
+      // guards keep this observer from running a competing restore — without
+      // them the spinner's clientHeight 720->590 shift fires here and restores
+      // to previousScrollTopRef.current (0, since the user scrolled to the top
+      // to trigger), collapsing the anchor.
+      //
+      // Guard 1 — fetch in flight, lock not yet set: the spinner mounts BEFORE
+      // the fetch resolves and calls restoreScrollPosition, so lockedScrollTop
+      // is still null on this fire. Skip entirely; the load-older path restores
+      // once the page arrives.
+      if (isFetchingOlderRef.current) {
+        return;
+      }
+
+      // Guard 2 — restore running, lock set: a later shift (e.g. spinner
+      // unmount) can fire while restoreScrollPosition's rAF loop holds its
+      // target in lockedScrollTopRef. Defer to that target so both aim at the
+      // same scrollTop instead of fighting frame-by-frame.
+      restoreScrollPosition(
+        lockedScrollTopRef.current ?? previousScrollTopRef.current,
+      );
     });
 
     observer.observe(timeline);

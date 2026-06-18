@@ -245,6 +245,7 @@ const MessageTimelineBase = React.forwardRef<
     syncScrollState,
   } = useTimelineScrollManager({
     channelId,
+    isFetchingOlder,
     isLoading: showTimelineSkeleton,
     messages: deferredMessages,
     onTargetReached,

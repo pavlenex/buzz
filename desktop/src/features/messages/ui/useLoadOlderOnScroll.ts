@@ -98,12 +98,17 @@ export function useLoadOlderOnScroll({
                     (virtualizerRef.current?.itemCount ?? previousCount) -
                     previousCount;
                   if (after && anchorIndex !== null && prepended > 0) {
-                    after.scrollToIndex(anchorIndex + prepended, {
-                      align: "start",
-                    });
-                    // scrollToIndex aligns the row's top to the viewport top;
-                    // re-apply the captured gap so the view doesn't nudge by a
-                    // partial row.
+                    // Restore by scrollTop ONLY — a single writer. Compute the
+                    // anchored row's top via getOffsetForIndex (a pure read of
+                    // the measurement cache, no scrollState) and add back the
+                    // captured intra-row gap. Calling scrollToIndex here too
+                    // would set the library's scrollState aiming at the row TOP
+                    // while this restore aims at row top + gap; the two write
+                    // scrollTop to different values on overlapping rAF frames,
+                    // so the library's reconcile never reaches approxEqual,
+                    // never re-scrolls (its target is unchanged), and spins one
+                    // rAF/frame for the full 5s MAX_RECONCILE_MS valve on every
+                    // prepend. One mechanism, no fight.
                     const target = after.getOffsetForIndex(
                       anchorIndex + prepended,
                       "start",
