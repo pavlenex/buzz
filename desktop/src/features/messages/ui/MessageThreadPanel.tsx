@@ -26,6 +26,7 @@ import {
 import { Skeleton } from "@/shared/ui/skeleton";
 import type { VideoReviewContext } from "@/shared/ui/VideoPlayer";
 import { MessageComposer } from "./MessageComposer";
+import type { ExpandedDiff } from "./DiffMessageExpanded";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
@@ -37,6 +38,8 @@ import {
   selectDeferredListRenderState,
   selectLatestMessageKey,
 } from "@/features/messages/lib/timelineSnapshot";
+
+const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
 
 type MessageThreadPanelProps = {
   agentPubkeys?: ReadonlySet<string>;
@@ -315,6 +318,13 @@ export function MessageThreadPanel({
 }: MessageThreadPanelProps) {
   const threadBodyRef = React.useRef<HTMLDivElement>(null);
   const threadComposerWrapperRef = React.useRef<HTMLDivElement>(null);
+
+  // Expanded-diff modal owned at the panel level (above the virtualized reply
+  // rows) so an open diff survives its row scrolling out of the window. One at
+  // a time — the modal backdrop blocks every other row.
+  const [expandedDiff, setExpandedDiff] = React.useState<ExpandedDiff | null>(
+    null,
+  );
   const isOverlay = useIsThreadPanelOverlay();
   const isFloatingOverlay = isOverlay && !isSinglePanelView;
   const isSplitLayout = layout === "split";
@@ -465,6 +475,7 @@ export function MessageThreadPanel({
           }
           onMarkUnread={onMarkUnread}
           onReply={onSelectReplyTarget}
+          onExpandDiff={setExpandedDiff}
           onToggleReaction={onToggleReaction}
           profiles={profiles}
         />
@@ -515,6 +526,7 @@ export function MessageThreadPanel({
             }
             onMarkUnread={onMarkUnread}
             onToggleReaction={onToggleReaction}
+            onExpandDiff={setExpandedDiff}
             onUnfollowThread={
               onUnfollowThread ? (_msg) => onUnfollowThread() : undefined
             }
@@ -641,6 +653,16 @@ export function MessageThreadPanel({
     </>
   );
 
+  const diffModal = expandedDiff ? (
+    <React.Suspense fallback={null}>
+      <DiffMessageExpanded
+        content={expandedDiff.content}
+        filePath={expandedDiff.filePath}
+        onClose={() => setExpandedDiff(null)}
+      />
+    </React.Suspense>
+  ) : null;
+
   const threadHeaderContent = (
     <>
       <AuxiliaryPanelHeaderGroup>
@@ -679,6 +701,7 @@ export function MessageThreadPanel({
         <AuxiliaryPanelHeader>{threadHeaderContent}</AuxiliaryPanelHeader>
         {threadScrollRegion}
         {threadFooter}
+        {diffModal}
       </div>
     );
   }
@@ -714,6 +737,7 @@ export function MessageThreadPanel({
         {threadScrollRegion}
         {threadFooter}
       </aside>
+      {diffModal}
     </>
   );
 }

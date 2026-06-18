@@ -8,6 +8,7 @@ import {
   buildTimelineVirtualItems,
   isNearBottomMetrics,
   resolveDeepLinkTarget,
+  selectActiveDayHeading,
   selectDeferredListRenderState,
   selectLatestMessageKey,
 } from "./timelineSnapshot.ts";
@@ -462,4 +463,58 @@ test("thread-items: reply key prefers renderKey for optimistic-send identity", (
     entry({ id: "server-id", renderKey: "local-key" }),
   ]);
   assert.equal(items[0].key, "local-key");
+});
+
+// --- pinned day-header overlay (option B sticky-overlay) --------------------
+//
+// selectActiveDayHeading derives which day group owns the topmost rendered row
+// so the timeline can paint ONE pinned header outside the virtualizer's
+// absolute flow (a per-row `position:sticky` cannot work on an absolute row).
+// It walks back from the top rendered index to the nearest preceding day item.
+
+test("active-day: null when nothing is rendered", () => {
+  const items = buildTimelineVirtualItems([
+    entry({ id: "a", createdAt: dayAt(2026, 6, 14) }),
+  ]);
+  assert.equal(selectActiveDayHeading(items, undefined), null);
+});
+
+test("active-day: the day item itself is its own active heading", () => {
+  // items: [day, message]; top rendered = index 0 (the day divider)
+  const ts = dayAt(2026, 6, 14);
+  const items = buildTimelineVirtualItems([entry({ id: "a", createdAt: ts })]);
+  const active = selectActiveDayHeading(items, 0);
+  assert.equal(active.key, `day-${ts}`);
+  assert.equal(active.headingTimestamp, ts);
+});
+
+test("active-day: a message row resolves to its enclosing day", () => {
+  // items: [day, message]; top rendered = index 1 (the message) → its day
+  const ts = dayAt(2026, 6, 14);
+  const items = buildTimelineVirtualItems([entry({ id: "a", createdAt: ts })]);
+  const active = selectActiveDayHeading(items, 1);
+  assert.equal(active.key, `day-${ts}`);
+  assert.equal(active.headingTimestamp, ts);
+});
+
+test("active-day: picks the most recent day boundary at or above the top row", () => {
+  // items: [day1, msg, msg, day2, msg]; top rendered inside day2's group
+  const day1 = dayAt(2026, 6, 14);
+  const day2 = dayAt(2026, 6, 15);
+  const items = buildTimelineVirtualItems([
+    entry({ id: "a", createdAt: day1 }),
+    entry({ id: "b", createdAt: dayAt(2026, 6, 14, 13) }),
+    entry({ id: "c", createdAt: day2 }),
+  ]);
+  // indices: 0 day1, 1 msg a, 2 msg b, 3 day2, 4 msg c
+  assert.equal(selectActiveDayHeading(items, 2).key, `day-${day1}`);
+  assert.equal(selectActiveDayHeading(items, 4).key, `day-${day2}`);
+  assert.equal(selectActiveDayHeading(items, 3).key, `day-${day2}`);
+});
+
+test("active-day: a top index past the end clamps to the last item's day", () => {
+  const ts = dayAt(2026, 6, 14);
+  const items = buildTimelineVirtualItems([entry({ id: "a", createdAt: ts })]);
+  // index 99 is out of range; the helper clamps and still finds the day
+  assert.equal(selectActiveDayHeading(items, 99).key, `day-${ts}`);
 });

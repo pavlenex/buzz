@@ -16,6 +16,19 @@ type DiffMessageExpandedProps = {
   onClose: () => void;
 };
 
+/**
+ * The data needed to render an expanded diff modal, lifted out of the row that
+ * triggered it. The modal is a Radix `Dialog` portal, so its open state must
+ * live ABOVE the virtualized rows — otherwise scrolling the triggering row out
+ * of the window unmounts the row and the open modal vanishes. Only one diff can
+ * be open at a time (the modal backdrop blocks every other row), so a single
+ * value, not a set, is the faithful model.
+ */
+export type ExpandedDiff = {
+  content: string;
+  filePath?: string;
+};
+
 export default function DiffMessageExpanded({
   content,
   filePath,

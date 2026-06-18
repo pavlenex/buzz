@@ -2,6 +2,7 @@ import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
+import type { ExpandedDiff } from "@/features/messages/ui/DiffMessageExpanded";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
@@ -26,7 +27,6 @@ import { MessageTimestamp } from "./MessageTimestamp";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
-const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
 
 const MESSAGE_TEXT_OFFSET_PX = 54;
 const NESTED_REPLY_OFFSET_PX = 28;
@@ -47,6 +47,7 @@ export const MessageRow = React.memo(
     onToggleReaction,
     onReply,
     onUnfollowThread,
+    onExpandDiff,
     profiles,
     searchQuery,
     showDepthGuides = true,
@@ -72,14 +73,17 @@ export const MessageRow = React.memo(
     ) => Promise<void>;
     onReply?: (message: TimelineMessage) => void;
     onUnfollowThread?: (message: TimelineMessage) => void;
+    /**
+     * Open the expanded diff modal for this row. Lifted to the surface so the
+     * modal (a Radix portal) survives this row unmounting when scrolled out of
+     * the virtualized window.
+     */
+    onExpandDiff?: (diff: ExpandedDiff) => void;
     profiles?: UserProfileLookup;
     searchQuery?: string;
     showDepthGuides?: boolean;
     videoReviewContext?: VideoReviewContext;
   }) {
-    const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
-      null,
-    );
     const [badgeBurstEmoji, setBadgeBurstEmoji] = React.useState<string | null>(
       null,
     );
@@ -185,7 +189,10 @@ export const MessageRow = React.memo(
                 description={getTag("description")}
                 filePath={getTag("file")}
                 onExpand={() => {
-                  setExpandedDiffId(message.id);
+                  onExpandDiff?.({
+                    content: message.body,
+                    filePath: getTag("file"),
+                  });
                 }}
                 repoUrl={getTag("repo")}
                 truncated={getTag("truncated") === "true"}
@@ -338,23 +345,6 @@ export const MessageRow = React.memo(
           <p className="mt-1.5 text-xs text-destructive">
             {reactionErrorMessage}
           </p>
-        ) : null}
-        {expandedDiffId === message.id ? (
-          <React.Suspense
-            fallback={
-              <div className="p-3 text-sm text-muted-foreground">
-                Loading diff viewer…
-              </div>
-            }
-          >
-            <DiffMessageExpanded
-              content={message.body}
-              filePath={getTag("file")}
-              onClose={() => {
-                setExpandedDiffId(null);
-              }}
-            />
-          </React.Suspense>
         ) : null}
       </>
     );

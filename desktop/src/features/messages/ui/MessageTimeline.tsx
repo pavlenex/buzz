@@ -2,9 +2,11 @@ import * as React from "react";
 import { ArrowDown, ArrowUp, Hash } from "lucide-react";
 
 import { getDmParticipantPreview } from "@/features/channels/lib/dmParticipantDisplay";
+import { formatDayHeading } from "@/features/messages/lib/dateFormatters";
 import { buildMainTimelineEntries } from "@/features/messages/lib/threadPanel";
 import {
   buildTimelineVirtualItems,
+  selectActiveDayHeading,
   selectLatestMessageKey,
 } from "@/features/messages/lib/timelineSnapshot";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -17,9 +19,13 @@ import { Spinner } from "@/shared/ui/spinner";
 import { SkeletonReveal } from "@/shared/ui/skeleton";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
+import { DayDivider } from "./DayDivider";
+import type { ExpandedDiff } from "./DiffMessageExpanded";
 import { TimelineSkeleton, useTimelineSkeletonRows } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
 import { useChatScrollVirtualizer } from "./useChatScrollVirtualizer";
+
+const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
 
 type MessageTimelineProps = {
   agentPubkeys?: ReadonlySet<string>;
@@ -158,6 +164,14 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   const scrollContainerRef = externalScrollRef ?? internalScrollRef;
   const topSentinelRef = React.useRef<HTMLDivElement>(null);
 
+  // The expanded-diff modal (a Radix portal) is owned here, ABOVE the
+  // virtualized rows, so the open modal survives the triggering row scrolling
+  // out of the window and unmounting. Only one is open at a time (the modal
+  // backdrop blocks every other row).
+  const [expandedDiff, setExpandedDiff] = React.useState<ExpandedDiff | null>(
+    null,
+  );
+
   // Gate the heavy timeline render (each row runs a synchronous
   // react-markdown parse) behind React concurrency. `useDeferredValue` lets the
   // commit that rebuilds the message list yield to higher-priority work, so the
@@ -226,6 +240,17 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     latestMessageKey,
     onTargetReached,
   });
+
+  // The pinned day header (option B sticky-overlay). A virtual row is
+  // `position:absolute`, so a per-row `position:sticky` cannot work; instead we
+  // derive the day group that owns the topmost rendered row and paint ONE
+  // header in a sibling layer pinned below the channel chrome, mirroring the
+  // legacy `sticky` DayDivider. Reading `getVirtualItems()[0]` each render keeps
+  // it live — the virtualizer re-renders this component on every scroll/measure.
+  const activeDay = selectActiveDayHeading(
+    items,
+    virtualizer.getVirtualItems()[0]?.index,
+  );
 
   // Deep-link to `targetMessageId` once it resolves against the rendered
   // snapshot. `resolveDeepLinkTarget` reads the same `deferredMessages` the
@@ -375,6 +400,22 @@ export const MessageTimeline = React.memo(function MessageTimeline({
               <ArrowUp aria-hidden />
               {`${unreadCount} new message${unreadCount === 1 ? "" : "s"}`}
             </Button>
+          </div>
+        ) : null}
+        {showMessageList && activeDay ? (
+          // Option B sticky-overlay: one pinned day header in a sibling layer
+          // outside the virtualizer's absolute flow, replacing the legacy
+          // per-row `sticky` DayDivider (impossible on an absolute virtual row).
+          // The matching inline divider is suppressed via `activeDayKey` so the
+          // label never doubles — exactly one visible heading per day, as before.
+          <div
+            className={cn(
+              "pointer-events-none absolute inset-x-0 z-10 flex justify-center px-2",
+              channelChrome.top,
+            )}
+            data-testid="message-timeline-day-divider-pinned"
+          >
+            <DayDivider label={formatDayHeading(activeDay.headingTimestamp)} />
           </div>
         ) : null}
         <div
@@ -551,6 +592,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
               >
                 <TimelineMessageList
                   agentPubkeys={agentPubkeys}
+                  activeDayKey={activeDay?.key ?? null}
                   channelId={channelId}
                   channelName={channelName}
                   channelType={channelType}
@@ -566,6 +608,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                   onEdit={onEdit}
                   onMarkUnread={onMarkUnread}
                   onReply={onReply}
+                  onExpandDiff={setExpandedDiff}
                   isSendingVideoReviewComment={isSendingVideoReviewComment}
                   onSendVideoReviewComment={onSendVideoReviewComment}
                   onToggleReaction={onToggleReaction}
@@ -607,6 +650,15 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 : "Jump to latest"}
             </Button>
           </div>
+        ) : null}
+        {expandedDiff ? (
+          <React.Suspense fallback={null}>
+            <DiffMessageExpanded
+              content={expandedDiff.content}
+              filePath={expandedDiff.filePath}
+              onClose={() => setExpandedDiff(null)}
+            />
+          </React.Suspense>
         ) : null}
       </div>
     </TooltipProvider>

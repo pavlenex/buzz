@@ -12,6 +12,7 @@ import type { ChannelType } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import type { ChatVirtualizer } from "./useChatScrollVirtualizer";
 import { DayDivider } from "./DayDivider";
+import type { ExpandedDiff } from "./DiffMessageExpanded";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { SystemMessageRow } from "./SystemMessageRow";
@@ -19,6 +20,12 @@ import { UnreadDivider } from "./UnreadDivider";
 
 type TimelineMessageListProps = {
   agentPubkeys?: ReadonlySet<string>;
+  /**
+   * Key of the day group whose heading is currently pinned in the overlay
+   * (option B sticky-overlay). The matching inline day divider is hidden so the
+   * label never doubles — the overlay is its stand-in while it would be pinned.
+   */
+  activeDayKey?: string | null;
   channelId?: string | null;
   channelName?: string;
   channelType?: ChannelType | null;
@@ -34,6 +41,11 @@ type TimelineMessageListProps = {
   onEdit?: (message: TimelineMessage) => void;
   onMarkUnread?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
+  /**
+   * Open the expanded diff modal. Forwarded to each `MessageRow`; the surface
+   * owns the modal so it survives a row scrolling out of the virtual window.
+   */
+  onExpandDiff?: (diff: ExpandedDiff) => void;
   isSendingVideoReviewComment?: boolean;
   onSendVideoReviewComment?: (
     message: TimelineMessage,
@@ -77,6 +89,7 @@ type TimelineMessageListProps = {
 
 export const TimelineMessageList = React.memo(function TimelineMessageList({
   agentPubkeys,
+  activeDayKey = null,
   channelId,
   channelName,
   channelType,
@@ -90,6 +103,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   onEdit,
   onMarkUnread,
   onReply,
+  onExpandDiff,
   isSendingVideoReviewComment = false,
   onSendVideoReviewComment,
   onToggleReaction,
@@ -154,8 +168,17 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
         // The thin connector line that the legacy day-`<section>` drew behind
         // the centered pill is re-homed onto this row so the divider keeps its
         // rule-behind-label look without the group wrapper.
+        //
+        // When this is the active (pinned) day, the overlay header above is its
+        // stand-in, so we hide the inline label with `invisible` — the row keeps
+        // its measured height (no scroll jump) but never shows a second copy.
         return (
-          <div className="relative before:absolute before:inset-x-0 before:top-[15px] before:h-px before:bg-border/35 before:content-['']">
+          <div
+            className={cn(
+              "relative before:absolute before:inset-x-0 before:top-[15px] before:h-px before:bg-border/35 before:content-['']",
+              item.key === activeDayKey && "invisible",
+            )}
+          >
             <DayDivider label={formatDayHeading(item.headingTimestamp)} />
           </div>
         );
@@ -218,6 +241,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
                 onMarkUnread={onMarkUnread}
                 onToggleReaction={onToggleReaction}
                 onReply={onReply}
+                onExpandDiff={onExpandDiff}
                 onUnfollowThread={
                   unfollowThreadById
                     ? () => unfollowThreadById(message.id)
@@ -265,6 +289,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               onMarkUnread={onMarkUnread}
               onToggleReaction={onToggleReaction}
               onReply={onReply}
+              onExpandDiff={onExpandDiff}
               profiles={profiles}
               searchQuery={isSearchMatch ? searchQuery : undefined}
               showDepthGuides={false}

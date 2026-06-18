@@ -229,6 +229,36 @@ export function buildTimelineVirtualItems(
 }
 
 /**
+ * The day heading that should be pinned to the top of the viewport: the day
+ * group that owns the topmost rendered row. `topRenderedIndex` is the index of
+ * the first item in the virtualizer's rendered window (`getVirtualItems()[0]`).
+ * We walk back from it to the nearest preceding `day` item — that group is the
+ * one currently being scrolled through, so its heading is what a sticky day
+ * header would show. Index-based (not offset-based) so it never depends on row
+ * measurement: the pinned label is correct even when the day divider has
+ * scrolled far above the rendered window.
+ *
+ * Returns `null` when there is no rendered row or no day item at/above it (an
+ * empty list, or rows before the first day boundary — which never happens since
+ * a day item always opens the list).
+ */
+export function selectActiveDayHeading(
+  items: readonly TimelineVirtualItem[],
+  topRenderedIndex: number | undefined,
+): { key: string; headingTimestamp: number } | null {
+  if (topRenderedIndex === undefined) {
+    return null;
+  }
+  for (let i = Math.min(topRenderedIndex, items.length - 1); i >= 0; i--) {
+    const item = items[i];
+    if (item.kind === "day") {
+      return { key: item.key, headingTimestamp: item.headingTimestamp };
+    }
+  }
+  return null;
+}
+
+/**
  * One row in the flattened, virtualizer-ready thread reply list. The thread
  * pane has a simpler shape than the main timeline — no day grouping, no system
  * rows, and the head message renders OUTSIDE the virtualized region — so the
