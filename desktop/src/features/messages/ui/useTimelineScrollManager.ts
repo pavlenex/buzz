@@ -7,6 +7,8 @@ import {
   selectLatestMessageKey,
 } from "@/features/messages/lib/timelineSnapshot";
 import type { TimelineMessage } from "@/features/messages/types";
+import type { ListVirtualizer } from "@/shared/ui/VirtualizedList";
+import { useConvergentScrollToMessage } from "./useConvergentScrollToMessage";
 
 type UseTimelineScrollManagerOptions = {
   channelId?: string | null;
@@ -15,6 +17,18 @@ type UseTimelineScrollManagerOptions = {
   onTargetReached?: (messageId: string) => void;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   targetMessageId?: string | null;
+  /**
+   * When the timeline is virtualized, the caller supplies a getter for the
+   * virtualizer and a live message-id -> item-index map. Scroll-to-message and
+   * scroll-to-bottom then drive the virtualizer's index model (off-screen rows
+   * have no DOM node to `querySelector`). When omitted (e.g. the thread panel,
+   * which is not virtualized), the hook falls back to its DOM-imperative paths.
+   */
+  virtualizer?: {
+    getVirtualizer: () => ListVirtualizer | null;
+    indexByMessageId: Map<string, number>;
+    itemCount: number;
+  } | null;
 };
 
 type PinToBottomOptions = {
@@ -28,6 +42,7 @@ export function useTimelineScrollManager({
   onTargetReached,
   scrollContainerRef,
   targetMessageId,
+  virtualizer = null,
 }: UseTimelineScrollManagerOptions) {
   const timelineRef = scrollContainerRef;
   const contentRef = React.useRef<HTMLDivElement>(null);
@@ -194,6 +209,27 @@ export function useTimelineScrollManager({
 
       isProgrammaticBottomScrollRef.current = true;
 
+      // Virtualized timeline: the last item lives off-screen with no DOM node,
+      // so aim the virtualizer at it by index ("end" align). The library's own
+      // reconcile loop chases the bottom as rows mount and measure, replacing
+      // the synchronous `scrollHeight` read that forced a full reflow on entry.
+      if (virtualizer) {
+        const lastIndex = virtualizer.itemCount - 1;
+        if (lastIndex >= 0) {
+          virtualizer
+            .getVirtualizer()
+            ?.scrollToIndex(lastIndex, { align: "end", behavior });
+        }
+        lockedScrollTopRef.current = null;
+        previousScrollTopRef.current = timeline.scrollTop;
+        pinToBottom({ clearNewMessageCount: true });
+        requestAnimationFrame(() => {
+          previousScrollTopRef.current = timeline.scrollTop;
+          syncScrollState();
+        });
+        return;
+      }
+
       const alignToBottom = (nextBehavior: ScrollBehavior) => {
         bottomAnchorRef.current?.scrollIntoView({
           block: "end",
@@ -234,7 +270,7 @@ export function useTimelineScrollManager({
 
       settleAlignment(2);
     },
-    [pinToBottom, syncScrollState],
+    [pinToBottom, syncScrollState, virtualizer],
   );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref — its identity never changes
@@ -373,12 +409,53 @@ export function useTimelineScrollManager({
     unpinFromBottom,
   ]);
 
+  // Shared highlight lifecycle for both scroll paths: highlight the row, clear
+  // the unread count, and auto-fade the highlight after 2s.
+  const beginHighlight = React.useCallback((messageId: string) => {
+    setHighlightedMessageId(messageId);
+    setNewMessageCount(0);
+    window.setTimeout(() => {
+      setHighlightedMessageId((current) =>
+        current === messageId ? null : current,
+      );
+    }, 2_000);
+  }, []);
+
+  const clearHighlight = React.useCallback((messageId: string) => {
+    setHighlightedMessageId((current) =>
+      current === messageId ? null : current,
+    );
+  }, []);
+
+  // Virtualized scroll path: re-aim the virtualizer by index, re-resolving the
+  // target id every frame so a mid-settle prepend/delete can't strand it.
+  const convergent = useConvergentScrollToMessage(
+    virtualizer?.getVirtualizer ?? (() => null),
+    {
+      indexByMessageId: virtualizer?.indexByMessageId ?? new Map(),
+      align: "center",
+      onConverged: (messageId) => onTargetReached?.(messageId),
+      onAbandoned: clearHighlight,
+    },
+  );
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref — its identity never changes
   const scrollToMessage = React.useCallback(
     (messageId: string) => {
       const timeline = timelineRef.current;
       if (!timeline) {
         return false;
+      }
+
+      // Virtualized timeline: off-screen rows have no DOM node, so resolve the
+      // target through the index map and drive the convergence loop instead of
+      // `querySelector` + `scrollIntoView`.
+      if (virtualizer) {
+        unpinFromBottom(timeline.scrollTop);
+        beginHighlight(messageId);
+        // Returns false only when the id is absent from the data (never merely
+        // off-screen), matching the deep-link effect's found-in-data contract.
+        return convergent.scrollToMessage(messageId);
       }
 
       const targetElement = timeline.querySelector<HTMLElement>(
@@ -389,8 +466,7 @@ export function useTimelineScrollManager({
       }
 
       unpinFromBottom(timeline.scrollTop);
-      setHighlightedMessageId(messageId);
-      setNewMessageCount(0);
+      beginHighlight(messageId);
 
       const alignToTarget = (remainingFrames: number) => {
         targetElement.scrollIntoView({
@@ -411,15 +487,9 @@ export function useTimelineScrollManager({
 
       alignToTarget(2);
 
-      window.setTimeout(() => {
-        setHighlightedMessageId((current) =>
-          current === messageId ? null : current,
-        );
-      }, 2_000);
-
       return true;
     },
-    [onTargetReached, unpinFromBottom],
+    [beginHighlight, convergent, onTargetReached, unpinFromBottom, virtualizer],
   );
 
   React.useEffect(() => {
