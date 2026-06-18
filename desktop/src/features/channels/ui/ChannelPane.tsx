@@ -597,6 +597,22 @@ export const ChannelPane = React.memo(function ChannelPane({
         : null,
     [agentSessionAgents, openAgentSessionPubkey],
   );
+
+  // True when the split layout's right pane is occupied by ANY auxiliary panel
+  // (thread, thread skeleton, agent session, or profile). They all render at the
+  // same `threadPanelWidthPx`, so the timeline column width is "slot occupied vs
+  // empty" — panel-agnostic. The timeline anchors its viewport across the width
+  // reflow this flip causes. A panel→panel swap keeps the slot occupied, so this
+  // boolean correctly does not fire a spurious re-anchor.
+  const auxiliaryPaneOpen =
+    useSplitAuxiliaryPane &&
+    Boolean(
+      threadHeadMessage ||
+        (openThreadHeadId && activeChannel) ||
+        (activeChannel && selectedAgent) ||
+        profilePanelPubkey,
+    );
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
       {!isSinglePanelView ? (
@@ -645,6 +661,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             fetchOlder={fetchOlder}
             followThreadById={followThreadById}
             hasComposerOverlay={hasMainComposerOverlay}
+            auxiliaryPaneOpen={auxiliaryPaneOpen}
             hasOlderMessages={hasOlderMessages}
             isFetchingOlder={isFetchingOlder}
             isFollowingThreadById={isFollowingThreadById}

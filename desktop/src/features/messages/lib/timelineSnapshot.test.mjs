@@ -6,8 +6,10 @@ import {
   buildDayGroupBoundaries,
   isNearBottomMetrics,
   resolveDeepLinkTarget,
+  resolveReflowAnchorScrollTop,
   selectDeferredListRenderState,
   selectLatestMessageKey,
+  selectReflowAnchorFromRects,
 } from "./timelineSnapshot.ts";
 
 // Local-midnight unix-second timestamps so isSameDay (local time) is stable
@@ -286,4 +288,83 @@ test("deferred-render: keys the empty decision off the live count, not deferred"
   // the empty state is a function of the LIVE list, never the lagging one.
   assert.equal(selectDeferredListRenderState(0, 0), "empty");
   assert.equal(selectDeferredListRenderState(0, 1), "pending");
+});
+
+// --- reflow anchor: which message owns the top of the viewport ---
+
+function row(messageId, top, bottom) {
+  return { messageId, top, bottom };
+}
+
+test("reflow-anchor: picks the topmost row still partially visible", () => {
+  // Container top at 100. The first row is scrolled fully above it (bottom 90 <
+  // 100); "b" straddles the top edge (top 80, bottom 140) so it owns the
+  // viewport top. Offset is its top relative to the container top.
+  const anchor = selectReflowAnchorFromRects(
+    [row("a", 10, 90), row("b", 80, 140), row("c", 140, 200)],
+    100,
+  );
+  assert.deepEqual(anchor, { messageId: "b", offsetFromContainerTop: -20 });
+});
+
+test("reflow-anchor: a row flush at the container top is the anchor", () => {
+  const anchor = selectReflowAnchorFromRects(
+    [row("a", 100, 160), row("b", 160, 220)],
+    100,
+  );
+  assert.deepEqual(anchor, { messageId: "a", offsetFromContainerTop: 0 });
+});
+
+test("reflow-anchor: skips rows whose bottom is exactly at the container top", () => {
+  // bottom === containerTop means the row's last pixel is the boundary — it is
+  // NOT visible, so the next row wins. Guards the strict `>` comparison.
+  const anchor = selectReflowAnchorFromRects(
+    [row("a", 40, 100), row("b", 100, 160)],
+    100,
+  );
+  assert.equal(anchor?.messageId, "b");
+});
+
+test("reflow-anchor: returns null when the list is empty", () => {
+  assert.equal(selectReflowAnchorFromRects([], 100), null);
+});
+
+test("reflow-anchor: returns null when every row is scrolled above the top", () => {
+  const anchor = selectReflowAnchorFromRects(
+    [row("a", -200, -140), row("b", -140, -80)],
+    100,
+  );
+  assert.equal(anchor, null);
+});
+
+// --- reflow anchor: the scrollTop that restores the captured offset ---
+
+test("reflow-scrollTop: no-op when the anchor is already at its captured offset", () => {
+  // Element top 120, container top 100 → currently 20 below the top, exactly the
+  // captured offset. The restore target equals the current scrollTop.
+  assert.equal(resolveReflowAnchorScrollTop(500, 120, 100, 20), 500);
+});
+
+test("reflow-scrollTop: corrects drift after content above the anchor re-wraps", () => {
+  // The reflow pushed the anchor down: it now sits 60 below the container top
+  // but was captured at 20. We must scroll DOWN by 40 to pull it back up.
+  assert.equal(resolveReflowAnchorScrollTop(500, 160, 100, 20), 540);
+});
+
+test("reflow-scrollTop: corrects drift when the anchor rose after re-wrap", () => {
+  // Content above the anchor got shorter → anchor now only 5 below the top.
+  // Scroll UP by 15 to restore the captured 20 offset.
+  assert.equal(resolveReflowAnchorScrollTop(500, 105, 100, 20), 485);
+});
+
+test("reflow-scrollTop: W2 — holds the anchor top steady even when it re-wrapped taller", () => {
+  // The anchor message itself grew (10→14 lines), but its TOP is what we hold.
+  // As long as its top sits at the captured offset, the target is unchanged;
+  // the extra height pushes content BELOW it down — accepted residual drift.
+  const captured = 0; // was flush at container top
+  const currentTop = 100; // re-resolved element top equals container top again
+  assert.equal(
+    resolveReflowAnchorScrollTop(800, currentTop, 100, captured),
+    800,
+  );
 });

@@ -148,3 +148,96 @@ export function selectDeferredListRenderState(
   }
   return "pending";
 }
+
+/**
+ * The message that owns the top of the viewport, plus how far its top sits
+ * below the container top. Opening or closing the right auxiliary pane changes
+ * the timeline column width, so every message bubble re-wraps and the content
+ * height shifts. Holding this anchor's top steady across that reflow converts a
+ * multi-message viewport jump into (at most) the anchor message's own re-wrap
+ * drift — see `resolveReflowAnchorScrollTop`.
+ *
+ * We cache the message ID (not the element) because the deferred render that
+ * drives the rows can land in a different commit than the pane-open prop, so the
+ * element must be re-resolved by ID at restore time.
+ */
+export type ReflowAnchor = {
+  messageId: string;
+  offsetFromContainerTop: number;
+};
+
+/** A message row's vertical geometry relative to its scroll container. */
+export type MessageRowRect = {
+  messageId: string;
+  /** `getBoundingClientRect().top` of the row. */
+  top: number;
+  /** `getBoundingClientRect().bottom` of the row. */
+  bottom: number;
+};
+
+/**
+ * Pick the message that owns the top of the viewport: the first row (top-down)
+ * whose bottom edge has crossed below the container top, i.e. the topmost row
+ * still at least partially visible. Pure over geometry so the selection rule is
+ * testable without a DOM. Rows must be supplied in document (top-to-bottom)
+ * order. Returns `null` when no row is visible (empty list or all scrolled off).
+ */
+export function selectReflowAnchorFromRects(
+  rows: readonly MessageRowRect[],
+  containerTop: number,
+): ReflowAnchor | null {
+  for (const row of rows) {
+    if (row.bottom > containerTop) {
+      return {
+        messageId: row.messageId,
+        offsetFromContainerTop: row.top - containerTop,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * The `scrollTop` that puts the anchor message's top back at its captured
+ * offset below the container top, given where the (re-resolved) anchor element
+ * sits now. Pure math so the restore target is testable without a DOM:
+ * the element is currently `currentElementTop - containerTop` below the
+ * container top; shifting scrollTop by the difference from the captured offset
+ * lands it back where it was before the reflow.
+ */
+export function resolveReflowAnchorScrollTop(
+  currentScrollTop: number,
+  currentElementTop: number,
+  containerTop: number,
+  capturedOffset: number,
+): number {
+  const currentOffset = currentElementTop - containerTop;
+  return currentScrollTop + (currentOffset - capturedOffset);
+}
+
+/**
+ * Read the live message-row geometry off a scroll container and pick the
+ * top-of-viewport anchor. `querySelectorAll` returns rows in document order, so
+ * we walk top-down and stop at the first row whose bottom has crossed below the
+ * container top — that row owns the viewport top, and rows below it never need a
+ * layout read. This keeps the per-commit cost to the rows above the fold plus
+ * one, not the whole list.
+ */
+export function captureReflowAnchor(
+  container: HTMLDivElement,
+): ReflowAnchor | null {
+  const containerTop = container.getBoundingClientRect().top;
+  for (const element of container.querySelectorAll<HTMLElement>(
+    "[data-message-id]",
+  )) {
+    const messageId = element.dataset.messageId;
+    if (messageId === undefined) {
+      continue;
+    }
+    const rect = element.getBoundingClientRect();
+    if (rect.bottom > containerTop) {
+      return { messageId, offsetFromContainerTop: rect.top - containerTop };
+    }
+  }
+  return null;
+}

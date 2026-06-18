@@ -1,8 +1,10 @@
 import * as React from "react";
 
 import {
+  captureReflowAnchor,
   isNearBottom,
   resolveDeepLinkTarget,
+  resolveReflowAnchorScrollTop,
   selectLatestMessageKey,
 } from "@/features/messages/lib/timelineSnapshot";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -14,6 +16,13 @@ type UseTimelineScrollManagerOptions = {
   onTargetReached?: (messageId: string) => void;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   targetMessageId?: string | null;
+  /**
+   * True when the right auxiliary pane occupies the split layout (any of the
+   * thread/agent-session/profile panels). Flipping this changes the timeline
+   * column width and re-wraps every message; we anchor the viewport across that
+   * reflow. See the reflow-anchor layout effect below.
+   */
+  auxiliaryPaneOpen?: boolean;
 };
 
 type PinToBottomOptions = {
@@ -27,6 +36,7 @@ export function useTimelineScrollManager({
   onTargetReached,
   scrollContainerRef,
   targetMessageId,
+  auxiliaryPaneOpen = false,
 }: UseTimelineScrollManagerOptions) {
   const timelineRef = scrollContainerRef;
   const contentRef = React.useRef<HTMLDivElement>(null);
@@ -41,6 +51,10 @@ export function useTimelineScrollManager({
   const previousLastMessageKeyRef = React.useRef<string | undefined>(undefined);
   const previousMessageCountRef = React.useRef(0);
   const handledTargetMessageIdRef = React.useRef<string | null>(null);
+  const reflowAnchorRef = React.useRef<ReturnType<
+    typeof captureReflowAnchor
+  > | null>(null);
+  const previousAuxiliaryPaneOpenRef = React.useRef(auxiliaryPaneOpen);
   const [isAtBottom, setIsAtBottom] = React.useState(true);
   const [highlightedMessageId, setHighlightedMessageId] = React.useState<
     string | null
@@ -58,6 +72,7 @@ export function useTimelineScrollManager({
     previousLastMessageKeyRef.current = undefined;
     previousMessageCountRef.current = 0;
     handledTargetMessageIdRef.current = null;
+    reflowAnchorRef.current = null;
     setIsAtBottom(true);
     setHighlightedMessageId(null);
     setNewMessageCount(0);
@@ -285,6 +300,66 @@ export function useTimelineScrollManager({
       observer.disconnect();
     };
   }, [scrollToBottom, syncScrollState]);
+
+  // Hold the viewport steady across the width reflow caused by opening/closing
+  // the right auxiliary pane. The pane is a fixed-width sibling of the flex-1
+  // timeline, so toggling it re-wraps every message; native scroll anchoring is
+  // off (`[overflow-anchor:none]`) and the height ResizeObserver bails on a
+  // width-only change, so this is the seam that re-anchors.
+  //
+  // Ordering is load-bearing: this layout effect runs AFTER the DOM has already
+  // reflowed, so the pre-flip geometry must come from `reflowAnchorRef`, which
+  // the PREVIOUS commit captured while the pane was still in its prior state.
+  // We therefore READ the old anchor and (on a flip) restore to it FIRST, THEN
+  // refresh the ref for the next flip — never recapture before restoring, and
+  // never capture in the render body (a discarded speculative render would
+  // poison the ref with geometry that never painted).
+  React.useLayoutEffect(() => {
+    const timeline = timelineRef.current;
+    if (!timeline) {
+      return;
+    }
+
+    const paneFlipped =
+      auxiliaryPaneOpen !== previousAuxiliaryPaneOpenRef.current;
+    previousAuxiliaryPaneOpenRef.current = auxiliaryPaneOpen;
+
+    // Bottom-stuck users need no handling here: the content ResizeObserver
+    // already re-pins them to bottom on the reflow's height change, and its
+    // `settleAlignment` re-targets a stable scrollHeight each frame, so there
+    // is no inter-frame movement to suppress. Only the mid-scroll case drifts.
+    const isBottomStuck =
+      shouldStickToBottomRef.current || isAtBottomRef.current;
+
+    if (paneFlipped && !isBottomStuck && lockedScrollTopRef.current === null) {
+      // Mid-scroll: re-resolve the cached anchor by id against the freshly
+      // reflowed DOM, then restore through the single lock owner. No-op while
+      // another restore/settle holds the lock.
+      const anchor = reflowAnchorRef.current;
+      const element = anchor
+        ? timeline.querySelector<HTMLElement>(
+            `[data-message-id="${anchor.messageId}"]`,
+          )
+        : null;
+
+      if (anchor && element) {
+        restoreScrollPosition(
+          resolveReflowAnchorScrollTop(
+            timeline.scrollTop,
+            element.getBoundingClientRect().top,
+            timeline.getBoundingClientRect().top,
+            anchor.offsetFromContainerTop,
+          ),
+        );
+      }
+    }
+
+    // Refresh the anchor for the next flip. Skip while a restore is in flight so
+    // we cache the settled position, not a mid-restore frame.
+    if (lockedScrollTopRef.current === null) {
+      reflowAnchorRef.current = captureReflowAnchor(timeline);
+    }
+  });
 
   React.useLayoutEffect(() => {
     if (!hasInitializedRef.current) {

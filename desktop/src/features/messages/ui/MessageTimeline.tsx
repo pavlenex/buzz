@@ -39,6 +39,12 @@ type MessageTimelineProps = {
   scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
   /** True when the timeline has the composer overlay below it. */
   hasComposerOverlay?: boolean;
+  /**
+   * True when the right auxiliary pane occupies the split layout. Toggling it
+   * changes the timeline column width; the scroll manager anchors the viewport
+   * across the resulting re-wrap so the message at the top stays put.
+   */
+  auxiliaryPaneOpen?: boolean;
   isFetchingOlder?: boolean;
   messageFooters?: Record<string, React.ReactNode>;
   /** Map from lowercase pubkey → persona display name for bot members. */
@@ -119,6 +125,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   currentPubkey,
   fetchOlder,
   hasComposerOverlay = true,
+  auxiliaryPaneOpen = false,
   hasOlderMessages = true,
   isFetchingOlder = false,
   followThreadById,
@@ -184,6 +191,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     onTargetReached,
     scrollContainerRef,
     targetMessageId,
+    auxiliaryPaneOpen,
   });
 
   // The unread pill is a transient, per-open affordance: dismiss it once the
