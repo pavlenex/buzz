@@ -8,6 +8,15 @@ type UseLoadOlderOnScrollOptions = {
   hasOlderMessages: boolean;
   isLoading: boolean;
   restoreScrollPosition: (scrollTop: number) => void;
+  /**
+   * Brackets the index-restore loop's scroll ownership so the anchored hook's
+   * ResizeObserver cedes for the duration of the prepend. Without it, the
+   * prepended rows measuring late fire the observer with the windowed-out
+   * anchor and its all-gone fallback pins the view to the floor, stomping this
+   * loop's correct re-aim. Only the virtualized (index) path needs it — the
+   * non-virtualized path's restore is a single synchronous `scrollTop` write.
+   */
+  setLoadOlderRestoreInFlight?: (inFlight: boolean) => void;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   sentinelRef: React.RefObject<HTMLDivElement | null>;
   /**
@@ -34,6 +43,7 @@ export function useLoadOlderOnScroll({
   hasOlderMessages,
   isLoading,
   restoreScrollPosition,
+  setLoadOlderRestoreInFlight,
   scrollContainerRef,
   sentinelRef,
   virtualizer = null,
@@ -41,6 +51,12 @@ export function useLoadOlderOnScroll({
   const restoreScrollPositionRef = React.useRef(restoreScrollPosition);
   React.useEffect(() => {
     restoreScrollPositionRef.current = restoreScrollPosition;
+  });
+  // Mirror the cede setter so the long-lived Intersection observer reads the
+  // live callback without re-subscribing (same rationale as the restore ref).
+  const setInFlightRef = React.useRef(setLoadOlderRestoreInFlight);
+  React.useEffect(() => {
+    setInFlightRef.current = setLoadOlderRestoreInFlight;
   });
   // Mirror the virtualizer option into a ref so the long-lived Intersection
   // observer reads the live getter + count without re-subscribing per render.
@@ -97,6 +113,10 @@ export function useLoadOlderOnScroll({
             const previousCount = virt.itemCount;
 
             void fetchOlder().then(() => {
+              // Claim scroll ownership for the whole re-aim window so the
+              // anchored hook's ResizeObserver cedes while the prepended rows
+              // measure (released at every exit below via `finishPrepend`).
+              setInFlightRef.current?.(true);
               // Capture the anchor at fetch-RESOLVE time, not sentinel-fire
               // time: the history request can be in flight for a while and the
               // user may keep scrolling during it (the e2e scrolls further down
@@ -138,6 +158,12 @@ export function useLoadOlderOnScroll({
               let frame = 0;
               let lastTarget: number | null = null;
               let stableFrames = 0;
+              // Release scroll ownership (re-enabling the ResizeObserver) and
+              // re-arm the sentinel observer. Called at both loop exits.
+              const finishPrepend = () => {
+                setInFlightRef.current?.(false);
+                observe();
+              };
               const waitForPrepend = () => {
                 const after = virtualizerRef.current;
                 const grew =
@@ -171,7 +197,7 @@ export function useLoadOlderOnScroll({
                       // against ending before the last row measures.
                       stableFrames += 1;
                       if (stableFrames >= 2) {
-                        observe();
+                        finishPrepend();
                         return;
                       }
                     }
@@ -179,7 +205,7 @@ export function useLoadOlderOnScroll({
                 }
                 frame += 1;
                 if (frame >= maxFrames) {
-                  observe();
+                  finishPrepend();
                   return;
                 }
                 requestAnimationFrame(waitForPrepend);

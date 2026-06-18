@@ -66,6 +66,10 @@ type UseAnchoredScrollResult = {
    *  then re-seats the anchor + at-bottom bookkeeping so the next passive
    *  restore and `isAtBottom` read agree with where we put the scroll. */
   restoreScrollPosition: (scrollTop: number) => void;
+  /** Brackets the load-older index restore's scroll ownership. While `true`,
+   *  the ResizeObserver cedes — the index path is the sole `scrollTop` writer
+   *  across the prepend, mirroring the `convergingTargetIdRef` cede. */
+  setLoadOlderRestoreInFlight: (inFlight: boolean) => void;
 };
 
 function isAtBottomNow(container: HTMLDivElement) {
@@ -248,6 +252,15 @@ export function useAnchoredScroll({
   // the same two-writer contention the prepend bail prevents. Cleared when the
   // target settles (consumer clears the route param → `targetMessageId` null).
   const convergingTargetIdRef = React.useRef<string | null>(null);
+  // Set while `useLoadOlderOnScroll`'s index-restore loop owns scroll across a
+  // load-older prepend. That loop drives the virtualizer to re-aim the anchored
+  // row as the prepended rows measure; the ResizeObserver must cede for the
+  // same reason it cedes during convergence — otherwise the prepended rows
+  // growing `scrollHeight` fire the observer with the (now windowed-out) anchor,
+  // its all-gone fallback pins to the floor, and stomps the index restore's
+  // correct offset. The layout effect already cedes the prepend (isPrepend
+  // bail); this is the matching cede for the non-React-driven observer writer.
+  const loadOlderRestoreInFlightRef = React.useRef(false);
   const highlightTimeoutRef = React.useRef<number | null>(null);
   // One-shot: the consumer calls `scrollToBottomOnNextUpdate()` right before
   // it sends a message (see ChannelPane). When the user's own message then
@@ -270,6 +283,7 @@ export function useAnchoredScroll({
     prevMessageCountRef.current = 0;
     handledTargetIdRef.current = null;
     convergingTargetIdRef.current = null;
+    loadOlderRestoreInFlightRef.current = false;
     forceBottomOnNextAppendRef.current = false;
     if (highlightTimeoutRef.current !== null) {
       window.clearTimeout(highlightTimeoutRef.current);
@@ -370,6 +384,12 @@ export function useAnchoredScroll({
     },
     [scrollContainerRef, syncAnchorAfterProgrammaticScroll],
   );
+
+  // Let the load-older index path mark its scroll-ownership window so the
+  // ResizeObserver cedes to it (see `loadOlderRestoreInFlightRef`).
+  const setLoadOlderRestoreInFlight = React.useCallback((inFlight: boolean) => {
+    loadOlderRestoreInFlightRef.current = inFlight;
+  }, []);
 
   // Scroll handler: recompute anchor + bottom state from the current
   // scroll position. Cheap enough to run on every scroll event — a single
@@ -549,6 +569,13 @@ export function useAnchoredScroll({
       // loop is the sole writer until it settles (mirrors the layout effect's
       // `convergingTargetIdRef` bail).
       if (convergingTargetIdRef.current !== null) return;
+      // Cede while the load-older index restore owns scroll. The prepended rows
+      // measuring late is exactly what grows `scrollHeight` and fires this
+      // observer; if it re-pinned here the anchor row is already windowed out,
+      // so the all-gone fallback would pin to the floor and stomp the index
+      // restore's correct offset. The index loop is the sole writer until it
+      // settles (mirrors the layout effect's isPrepend bail).
+      if (loadOlderRestoreInFlightRef.current) return;
       const anchor = anchorRef.current;
       if (anchor.kind === "at-bottom") {
         // Stuck to bottom: re-pin to the new floor. Virtualizer measurement
@@ -648,5 +675,6 @@ export function useAnchoredScroll({
     scrollToBottomOnNextUpdate,
     scrollToMessage: scrollToMessageImperative,
     restoreScrollPosition,
+    setLoadOlderRestoreInFlight,
   };
 }
