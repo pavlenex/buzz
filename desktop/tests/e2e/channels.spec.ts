@@ -1463,7 +1463,7 @@ test("members sidebar can respawn a stopped managed bot", async ({ page }) => {
 
   await expect(agentStatus).toContainText("Stopped");
   await openMemberMenu(page, agentPubkey);
-  await expect(agentAction).toContainText("Respawn");
+  await expect(agentAction).toContainText("Start agent");
   await agentAction.click();
 
   await expect(agentStatus).toContainText("Running");
