@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { countTopLevelTimelineRows } from "@/features/messages/lib/formatTimelineMessages";
+import { backfillAuxForMessages } from "@/features/messages/lib/auxBackfill";
 import {
   channelMessagesKey,
   mergeTimelineHistoryMessages,
@@ -89,6 +90,10 @@ export function useFetchOlderMessages(channel: Channel | null) {
           queryClient.setQueryData<RelayEvent[]>(queryKey, (current = []) =>
             mergeTimelineHistoryMessages(current, olderMessages),
           );
+
+          // Backfill the older messages' reactions/edits/deletions by `#e`
+          // (history is content-kinds only). Background — paint immediately.
+          void backfillAuxForMessages(queryClient, channelId, olderMessages);
 
           const updatedMessages =
             queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];

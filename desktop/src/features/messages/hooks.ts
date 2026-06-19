@@ -31,6 +31,7 @@ import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
 // Same .mjs the renderer uses, so the cache-update projection can't drift
 // from the on-render overlay.
 import { applyEditTagOverlay } from "@/features/messages/lib/applyEditTagOverlay.mjs";
+import { backfillAuxForMessages } from "@/features/messages/lib/auxBackfill";
 import {
   KIND_STREAM_MESSAGE,
   KIND_SYSTEM_MESSAGE,
@@ -186,6 +187,10 @@ export function useChannelMessagesQuery(channel: Channel | null) {
         history,
       );
 
+      // Paint messages immediately; backfill their reactions/edits/deletions
+      // by `#e` in the background (it self-merges into the same cache key).
+      void backfillAuxForMessages(queryClient, channel.id, history);
+
       return mergedHistory;
     },
     staleTime: 5 * 60 * 1_000,
@@ -211,6 +216,8 @@ export function useChannelSubscription(channel: Channel | null) {
       channelMessagesKey(channelId),
       (current = []) => mergeTimelineHistoryMessages(current, history),
     );
+
+    void backfillAuxForMessages(queryClient, channelId, history);
   });
 
   const appendMessage = useEffectEvent((event: RelayEvent) => {

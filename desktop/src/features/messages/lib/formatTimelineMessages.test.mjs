@@ -45,6 +45,64 @@ function deletionEvent(kind, targetId, overrides = {}) {
   };
 }
 
+function streamEdit(targetId, content, overrides = {}) {
+  return {
+    id: HEX64_B,
+    pubkey: PUBKEY_A,
+    kind: 40003,
+    created_at: 1_700_000_001,
+    content,
+    tags: [
+      ["h", CHANNEL_ID],
+      ["e", targetId],
+    ],
+    sig: "sig",
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Keystone regression: aux events (edits/deletions) apply by `#e` reference,
+// NOT by time-window overlap. This is the invariant the split-query +
+// `#e`-backfill fix depends on: an edit/deletion can be loaded long after the
+// message it targets — even with a far-future `created_at` — and must still
+// apply. If the reducer ever gated aux application on timestamp proximity, a
+// late edit/delete for a visible old message would silently render stale.
+// ---------------------------------------------------------------------------
+
+test("a far-future edit still rewrites the body of an old message", () => {
+  const old = streamMessage({ created_at: 1_700_000_000 });
+  const lateEdit = streamEdit(HEX64_A, "edited body", {
+    created_at: 1_900_000_000,
+  });
+  const out = formatTimelineMessages([old, lateEdit], null, undefined, null);
+  assert.equal(out.length, 1, "the message should still render");
+  assert.equal(
+    out[0].body,
+    "edited body",
+    "the far-future edit must overlay the old message's body regardless of the time gap",
+  );
+  assert.equal(out[0].edited, true, "the message must be marked edited");
+});
+
+test("a far-future deletion still hides an old message", () => {
+  const old = streamMessage({ created_at: 1_700_000_000 });
+  const lateDeletion = deletionEvent(9005, HEX64_A, {
+    created_at: 1_900_000_000,
+  });
+  const out = formatTimelineMessages(
+    [old, lateDeletion],
+    null,
+    undefined,
+    null,
+  );
+  assert.equal(
+    out.length,
+    0,
+    "the far-future deletion must filter out the old message regardless of the time gap",
+  );
+});
+
 test("kind:5 (NIP-09) deletion hides the target message", () => {
   const events = [streamMessage(), deletionEvent(5, HEX64_A)];
   const out = formatTimelineMessages(events, null, undefined, null);

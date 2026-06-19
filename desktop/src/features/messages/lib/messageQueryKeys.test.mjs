@@ -202,3 +202,19 @@ test("timeline history and live cache merges retain the same visible content reg
   assert.equal(historyThenLiveContent[0], id("old", 201));
   assert.equal(historyThenLiveContent.at(-1), liveMessage.id);
 });
+
+test("sortMessages tiebreaks same-second events on id, order-independent", () => {
+  // Three events sharing one created_at, fed in two different input orders.
+  // The (created_at, id) sort must produce the same sequence both ways, so a
+  // history-then-live merge and a live-then-history merge can't shuffle a
+  // same-second message to a different visible position.
+  const a = event({ id: id("aaa", 1), createdAt: 5_000 });
+  const b = event({ id: id("bbb", 1), createdAt: 5_000 });
+  const c = event({ id: id("ccc", 1), createdAt: 5_000 });
+
+  const forward = normalizeTimelineMessages([a, b, c]).map((m) => m.id);
+  const reverse = normalizeTimelineMessages([c, b, a]).map((m) => m.id);
+
+  assert.deepEqual(forward, reverse);
+  assert.deepEqual(forward, [a.id, b.id, c.id]);
+});
