@@ -82,7 +82,7 @@ pub fn parse_png_persona(png_bytes: &[u8]) -> Result<ParsedPersonaPreview, Strin
         display_name: fields.display_name,
         system_prompt: fields.system_prompt,
         avatar_data_url,
-        avatar_ref: fields.avatar_url,
+        avatar_ref: None,
         runtime: fields.runtime,
         model: fields.model,
         provider: fields.provider,

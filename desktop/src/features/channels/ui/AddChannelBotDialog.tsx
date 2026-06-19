@@ -165,6 +165,8 @@ export function AddChannelBotDialog({
     [personas, selectedPersonaIds],
   );
   const selectedCount = selectedPersonas.length + (includeGeneric ? 1 : 0);
+  const allowForceNewInstance =
+    includeGeneric && selectedPersonas.length === 0 && !customPrompt.trim();
 
   const reusableAgent = useReusableAgentDetection(
     channelId,
@@ -174,6 +176,12 @@ export function AddChannelBotDialog({
     includeGeneric,
     customPrompt,
   );
+
+  React.useEffect(() => {
+    if (!allowForceNewInstance) {
+      setForceNewInstance(false);
+    }
+  }, [allowForceNewInstance]);
 
   const { runtimeWarnings, effectiveRuntimes } = useEffectiveRuntimes(
     personas,
@@ -360,7 +368,6 @@ export function AddChannelBotDialog({
           model: persona.model ?? undefined,
           role: "bot" as const,
           backend,
-          forceNewInstance,
           ...respondToFields,
         };
       }),
@@ -613,7 +620,7 @@ export function AddChannelBotDialog({
           />
         ) : null}
 
-        {reusableAgent ? (
+        {reusableAgent && allowForceNewInstance ? (
           <div className="pt-2">
             <AddChannelBotReuseGuard
               disabled={createBotsMutation.isPending}

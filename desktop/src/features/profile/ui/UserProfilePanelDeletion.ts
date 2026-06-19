@@ -48,15 +48,27 @@ export function useProfileAgentDeletion({
 }: UseProfileAgentDeletionInput) {
   const removeAgentFromAllChannels = React.useCallback(
     async (agentPubkey: string) => {
-      const channelIds = getRelayAgentChannelIds(relayAgents, agentPubkey);
-      if (channelIds.length === 0) return;
+      const normalizedPubkey = agentPubkey.toLowerCase();
+      const channelIds = new Set(
+        getRelayAgentChannelIds(relayAgents, agentPubkey),
+      );
+      for (const channel of channels ?? []) {
+        if (
+          channel.memberPubkeys.some(
+            (memberPubkey) => memberPubkey.toLowerCase() === normalizedPubkey,
+          )
+        ) {
+          channelIds.add(channel.id);
+        }
+      }
+      if (channelIds.size === 0) return;
       await Promise.allSettled(
-        channelIds.map((channelId) =>
+        [...channelIds].map((channelId) =>
           removeChannelMember(channelId, agentPubkey),
         ),
       );
     },
-    [relayAgents],
+    [channels, relayAgents],
   );
 
   const deleteManagedAgentRecord = React.useCallback(

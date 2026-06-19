@@ -160,6 +160,15 @@ export function UserProfilePanel({
     return undefined;
   }, [managedAgentsQuery.data, persona, pubkey]);
   const resolvedPersonaFromSource = React.useMemo(() => {
+    const personaId = persona?.id ?? managedAgent?.personaId;
+    if (personaId) {
+      const refreshedPersona = personasQuery.data?.find(
+        (candidate) => candidate.id === personaId,
+      );
+      if (refreshedPersona) {
+        return refreshedPersona;
+      }
+    }
     if (persona) {
       return persona;
     }
