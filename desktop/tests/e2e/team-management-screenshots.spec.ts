@@ -226,7 +226,8 @@ test.describe("team management screenshots", () => {
       teamsSection.getByRole("button", { name: "Import" }),
     ).toHaveCount(0);
 
-    await teamsSection.getByRole("button", { name: "Create team" }).click();
+    await teamsSection.getByTestId("new-team-card").click();
+    await page.getByRole("menuitem", { name: "Create team" }).click();
     const createDialog = page.getByRole("dialog", { name: "Create team" });
     const installButton = createDialog.getByRole("button", {
       name: "Install from directory",

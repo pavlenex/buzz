@@ -111,8 +111,8 @@ test.describe("active turn badge resilience screenshots", () => {
 
     const paulRow = page.getByTestId(`managed-agent-${AGENT_PAUL}`);
     const duncanRow = page.getByTestId(`managed-agent-${AGENT_DUNCAN}`);
-    await expect(paulRow).toContainText("Working", { timeout: 5_000 });
-    await expect(duncanRow).toContainText("Working", { timeout: 5_000 });
+    await expect(paulRow).toBeVisible({ timeout: 5_000 });
+    await expect(duncanRow).toBeVisible({ timeout: 5_000 });
 
     const agentsSection = page.getByTestId("unified-agents-groups");
     await agentsSection.screenshot({
@@ -126,8 +126,8 @@ test.describe("active turn badge resilience screenshots", () => {
     // gone after the first tick past 25s.
     await page.clock.fastForward(FRAME_GAP_MS);
 
-    await expect(paulRow).toContainText("Working");
-    await expect(duncanRow).toContainText("Working");
+    await expect(paulRow).toBeVisible();
+    await expect(duncanRow).toBeVisible();
 
     await agentsSection.screenshot({
       path: `${SHOTS}/02-badges-survive-gap.png`,

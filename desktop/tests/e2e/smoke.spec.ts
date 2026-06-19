@@ -115,11 +115,8 @@ test("create agent supports parallelism and system prompt overrides", async ({
 
   await page.goto("/");
   await page.getByTestId("open-agents-view").click();
-  await page
-    .getByTestId("agents-library-personas")
-    .getByRole("button", { name: "New", exact: true })
-    .click();
-  await page.getByText("Custom Agent").click();
+  await page.getByTestId("new-agent-card").click();
+  await page.getByRole("menuitem", { name: "Custom Agent" }).click();
 
   await page.getByTestId("agent-name-input").fill(agentName);
   await page.getByRole("button", { name: "Advanced setup" }).click();
@@ -137,12 +134,33 @@ test("create agent supports parallelism and system prompt overrides", async ({
   await expect(page.getByTestId("agents-library-personas")).toContainText(
     agentName,
   );
-  const inlineLog = page
-    .getByTestId("agents-library-personas")
-    .getByTestId("managed-agent-log-content");
+  const createAgentPayload = await page.evaluate((name) => {
+    const log =
+      (
+        window as Window & {
+          __BUZZ_E2E_COMMAND_LOG__?: Array<{
+            command: string;
+            payload: {
+              input?: {
+                name?: string;
+                parallelism?: number;
+                systemPrompt?: string;
+              };
+            } | null;
+          }>;
+        }
+      ).__BUZZ_E2E_COMMAND_LOG__ ?? [];
+    return log.find(
+      (entry) =>
+        entry.command === "create_managed_agent" &&
+        entry.payload?.input?.name === name,
+    )?.payload?.input;
+  }, agentName);
 
-  await expect(inlineLog).toContainText("parallelism=3");
-  await expect(inlineLog).toContainText("system prompt override configured");
+  expect(createAgentPayload).toMatchObject({
+    parallelism: 3,
+    systemPrompt: "You are concise and parallelize independent work.",
+  });
 });
 
 test("opens a mocked channel from the home feed", async ({ page }) => {

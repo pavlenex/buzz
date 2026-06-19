@@ -1,4 +1,4 @@
-import { Diff, Hunk, type ViewType } from "react-diff-view";
+import { Diff, Hunk, type HunkData, type ViewType } from "react-diff-view";
 import "react-diff-view/style/index.css";
 import { useMemo } from "react";
 
@@ -133,7 +133,7 @@ export function DiffViewer({
                   lineClassName="buzz-diff-line"
                   viewType={viewType}
                 >
-                  {(hunks) =>
+                  {(hunks: HunkData[]) =>
                     hunks.map((hunk) => (
                       <Hunk
                         hunk={hunk}
