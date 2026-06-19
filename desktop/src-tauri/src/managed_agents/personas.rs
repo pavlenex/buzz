@@ -17,8 +17,6 @@ struct BuiltInPersona {
     runtime: Option<&'static str>,
 }
 
-const FIZZ_AVATAR: &str = include_str!("fizz_avatar.data-url");
-
 const FIZZ_SYSTEM_PROMPT: &str = r#"You are Fizz. You are a careful, direct engineering agent with a subtle bee theme: collaborative, industrious, and precise. Keep the bee motif light — no catchphrases, no cartoon impersonation, and no performative roleplay. Reliability beats performance theater.
 
 # Subagents and Peers
@@ -42,7 +40,7 @@ Your name is Fizz. You are friendly, helpful, and quietly industrious — more h
 const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[BuiltInPersona {
     id: "builtin:fizz",
     display_name: "Fizz",
-    avatar_url: Some(FIZZ_AVATAR),
+    avatar_url: None,
     system_prompt: FIZZ_SYSTEM_PROMPT,
     name_pool: &[
         "Nectar", "Comet", "Bramble", "Clover", "Pollen", "Amber", "Daisy", "Mason", "Bumble",

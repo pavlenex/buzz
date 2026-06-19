@@ -71,6 +71,17 @@ fn resolve_created_avatar_url(
         .or_else(|| managed_agent_avatar_url(agent_command))
 }
 
+fn is_retired_fizz_data_url(persona_id: Option<&str>, avatar_url: &str) -> bool {
+    persona_id == Some("builtin:fizz") && avatar_url.trim_start().starts_with("data:image/")
+}
+
+fn filter_retired_fizz_avatar(
+    persona_id: Option<&str>,
+    avatar_url: Option<String>,
+) -> Option<String> {
+    avatar_url.filter(|url| !is_retired_fizz_data_url(persona_id, url))
+}
+
 #[cfg(feature = "mesh-llm")]
 async fn ensure_relay_mesh_for_record(
     app: &AppHandle,
@@ -924,35 +935,60 @@ pub(crate) async fn reconcile_agent_profile(
 
     // Resolve the expected avatar — backfilling for legacy records that have no
     // stored avatar_url yet.
-    let expected_avatar = match data.avatar_url.as_deref() {
+    let stored_avatar =
+        filter_retired_fizz_avatar(data.persona_id.as_deref(), data.avatar_url.clone());
+    let stored_avatar_was_retired_fizz = data
+        .avatar_url
+        .as_deref()
+        .is_some_and(|url| is_retired_fizz_data_url(data.persona_id.as_deref(), url));
+    let expected_avatar = match stored_avatar {
         Some(url) => url.to_string(),
         None => {
             // Legacy record: the relay profile may have been corrupted by the
             // old reconciliation code (it overwrote the persona avatar with the
             // command default), so the persona record is the authoritative source.
-            let persona_avatar = data.persona_id.as_ref().and_then(|pid| {
-                load_personas(app)
-                    .ok()?
-                    .into_iter()
-                    .find(|p| p.id == *pid)?
-                    .avatar_url
-            });
-
-            let backfilled = resolve_legacy_avatar(
-                persona_avatar,
+            let persona_avatar = filter_retired_fizz_avatar(
+                data.persona_id.as_deref(),
+                data.persona_id.as_ref().and_then(|pid| {
+                    load_personas(app)
+                        .ok()?
+                        .into_iter()
+                        .find(|p| p.id == *pid)?
+                        .avatar_url
+                }),
+            );
+            let relay_picture = filter_retired_fizz_avatar(
+                data.persona_id.as_deref(),
                 existing.as_ref().and_then(|info| info.picture.clone()),
-                &data.agent_command,
             );
 
-            // Persist the backfilled avatar so this migration only runs once.
-            if !backfilled.is_empty() {
+            let skip_command_fallback = stored_avatar_was_retired_fizz
+                && persona_avatar.is_none()
+                && relay_picture.is_none();
+            let backfilled = if skip_command_fallback {
+                String::new()
+            } else {
+                resolve_legacy_avatar(persona_avatar, relay_picture, &data.agent_command)
+            };
+
+            // Persist the backfilled avatar so this migration only runs once,
+            // or clear the retired built-in Fizz data URL if there is no
+            // current profile image to backfill.
+            let should_persist_avatar = stored_avatar_was_retired_fizz
+                || (!backfilled.is_empty()
+                    && data.avatar_url.as_deref() != Some(backfilled.as_str()));
+            if should_persist_avatar {
                 let _store_guard = state
                     .managed_agents_store_lock
                     .lock()
                     .map_err(|e| e.to_string())?;
                 let mut records = load_managed_agents(app)?;
                 if let Some(record) = records.iter_mut().find(|r| r.pubkey == data.pubkey) {
-                    record.avatar_url = Some(backfilled.clone());
+                    record.avatar_url = if backfilled.is_empty() {
+                        None
+                    } else {
+                        Some(backfilled.clone())
+                    };
                     save_managed_agents(app, &records)?;
                 }
             }

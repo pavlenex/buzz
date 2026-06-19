@@ -2,6 +2,7 @@ import * as React from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
+import { useUserProfileQuery } from "@/features/profile/hooks";
 import { useFeedbackToasts } from "@/shared/hooks/useToastEffect";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
 import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
@@ -249,11 +250,15 @@ function AgentPersonaCard({
 }) {
   const title = persona.displayName;
   const modelLabel = formatAgentModelLabel(agent?.model ?? persona.model);
+  const profileQuery = useUserProfileQuery(agent?.pubkey);
+  const avatarUrl = agent
+    ? (profileQuery.data?.avatarUrl ?? null)
+    : persona.avatarUrl;
 
   return (
     <AgentIdentityCard
       ariaLabel={`${title} agent profile`}
-      avatarUrl={persona.avatarUrl}
+      avatarUrl={avatarUrl}
       dataTestId={`persona-agent-row-${persona.id}`}
       label={title}
       modelLabel={modelLabel}
@@ -276,10 +281,12 @@ function StandaloneAgentCard({
   onOpenAgentProfile: (pubkey: string) => void;
 }) {
   const title = agent.name;
+  const profileQuery = useUserProfileQuery(agent.pubkey);
 
   return (
     <AgentIdentityCard
       ariaLabel={`${title} agent profile`}
+      avatarUrl={profileQuery.data?.avatarUrl ?? null}
       dataTestId={`managed-agent-${agent.pubkey}`}
       label={title}
       modelLabel={formatAgentModelLabel(agent.model)}

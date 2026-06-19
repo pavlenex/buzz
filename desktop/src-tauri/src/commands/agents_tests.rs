@@ -70,6 +70,33 @@ fn created_avatar_uses_command_fallback_without_input_or_persona() {
     assert_eq!(resolved, managed_agent_avatar_url("goose"));
 }
 
+#[test]
+fn retired_fizz_data_url_is_treated_as_absent() {
+    assert_eq!(
+        filter_retired_fizz_avatar(
+            Some("builtin:fizz"),
+            Some("data:image/png;base64,old-demo".to_string()),
+        ),
+        None,
+    );
+    assert_eq!(
+        filter_retired_fizz_avatar(
+            Some("custom:fizz"),
+            Some("data:image/png;base64,user-avatar".to_string()),
+        )
+        .as_deref(),
+        Some("data:image/png;base64,user-avatar"),
+    );
+    assert_eq!(
+        filter_retired_fizz_avatar(
+            Some("builtin:fizz"),
+            Some("https://relay.example/avatar.png".to_string()),
+        )
+        .as_deref(),
+        Some("https://relay.example/avatar.png"),
+    );
+}
+
 fn profile(name: Option<&str>, picture: Option<&str>) -> crate::relay::AgentProfileInfo {
     crate::relay::AgentProfileInfo {
         display_name: name.map(str::to_string),
