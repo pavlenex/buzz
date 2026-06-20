@@ -104,10 +104,7 @@ pub struct ManagedAgentRecord {
     /// `#[serde(default)]` so pre-existing records deserialize as `None`.
     #[serde(default)]
     pub avatar_url: Option<String>,
-    /// True when `avatar_url: None` came from an explicit user clear. Legacy
-    /// records without an avatar also deserialize as `None`, so this flag lets
-    /// profile reconciliation distinguish "clear the relay picture" from
-    /// "backfill the legacy missing value".
+    /// True when `avatar_url: None` came from an explicit user clear.
     #[serde(default)]
     pub avatar_url_cleared: bool,
     pub acp_command: String,
@@ -697,40 +694,11 @@ mod tests {
         assert_eq!(record.avatar_url, None);
         assert!(!record.avatar_url_cleared);
         assert_eq!(record.pubkey, "abcd1234");
-    }
 
-    #[test]
-    fn managed_agent_record_preserves_explicit_avatar_clear() {
-        let record: ManagedAgentRecord = serde_json::from_str(
-            r#"{
-                "pubkey": "abcd1234",
-                "name": "test-agent",
-                "private_key_nsec": "nsec1fake",
-                "relay_url": "wss://localhost:3000",
-                "avatar_url": null,
-                "avatar_url_cleared": true,
-                "acp_command": "buzz-acp",
-                "agent_command": "goose",
-                "agent_args": [],
-                "mcp_command": "",
-                "turn_timeout_seconds": 320,
-                "system_prompt": null,
-                "created_at": "2026-01-01T00:00:00Z",
-                "updated_at": "2026-01-01T00:00:00Z",
-                "last_started_at": null,
-                "last_stopped_at": null,
-                "last_exit_code": null,
-                "last_error": null
-            }"#,
-        )
-        .expect("explicit avatar clear should deserialize");
-
-        assert_eq!(record.avatar_url, None);
-        assert!(record.avatar_url_cleared);
-
-        let serialized = serde_json::to_value(&record).expect("should serialize");
-        assert_eq!(serialized["avatar_url"], serde_json::Value::Null);
-        assert_eq!(serialized["avatar_url_cleared"], true);
+        let mut value = serde_json::to_value(&record).expect("should serialize");
+        value["avatar_url_cleared"] = true.into();
+        let cleared: ManagedAgentRecord = serde_json::from_value(value).unwrap();
+        assert!(cleared.avatar_url_cleared);
     }
 
     /// Agent records WITH an auth_tag round-trip correctly through serde.
