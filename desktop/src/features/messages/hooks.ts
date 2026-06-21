@@ -32,15 +32,18 @@ import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
 // from the on-render overlay.
 import { applyEditTagOverlay } from "@/features/messages/lib/applyEditTagOverlay.mjs";
 import { backfillAuxForMessages } from "@/features/messages/lib/auxBackfill";
+import { createOptimisticReaction } from "@/features/messages/lib/optimisticReaction";
 import { countTopLevelTimelineRows } from "@/features/messages/lib/formatTimelineMessages";
 import {
   MIN_TOP_LEVEL_ROWS_PER_FETCH,
   pageOlderMessagesUntilRowFloor,
 } from "@/features/messages/lib/pageOlderMessages";
 import {
+  KIND_REACTION,
   KIND_STREAM_MESSAGE,
   KIND_SYSTEM_MESSAGE,
 } from "@/shared/constants/kinds";
+import { useIdentityQuery } from "@/shared/api/hooks";
 
 type MessageQueryContext = {
   optimisticId: string;
@@ -491,6 +494,7 @@ export function useSendMessageMutation(
 
 export function useToggleReactionMutation() {
   const queryClient = useQueryClient();
+  const identityQuery = useIdentityQuery();
   return useMutation<
     void,
     Error,
@@ -498,22 +502,84 @@ export function useToggleReactionMutation() {
       eventId: string;
       emoji: string;
       remove: boolean;
-    }
+      // The channel whose timeline cache to optimistically update. Omit for
+      // surfaces that own their own reaction cache (e.g. Pulse notes), so they
+      // are not double-counted in two caches.
+      channelId?: string;
+    },
+    | {
+        queryKey: ReturnType<typeof channelMessagesKey>;
+        previous: RelayEvent[];
+      }
+    | undefined
   >({
+    // Reactions never round-trip back to the client (kind:7 carries only an
+    // `e` tag, so the `#h`-scoped live subscription misses them — they only
+    // arrive via the cold-load `#e` aux backfill). So apply the change to the
+    // channel cache ourselves, optimistically, or the reactor's own reaction
+    // stays invisible until the next channel switch. Mirrors the apply-on-
+    // success cache writes in the edit/delete mutations below.
+    onMutate: ({ eventId, emoji, remove, channelId }) => {
+      const pubkey = identityQuery.data?.pubkey;
+      if (!channelId || !pubkey) {
+        return undefined;
+      }
+
+      const queryKey = channelMessagesKey(channelId);
+      const previous = queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
+      const pubkeyLower = pubkey.toLowerCase();
+      const trimmedEmoji = emoji.trim();
+
+      const isOwnReactionForTarget = (event: RelayEvent) =>
+        event.kind === KIND_REACTION &&
+        event.pubkey.toLowerCase() === pubkeyLower &&
+        event.content.trim() === trimmedEmoji &&
+        event.tags.some((tag) => tag[0] === "e" && tag[1] === eventId);
+
+      if (remove) {
+        queryClient.setQueryData<RelayEvent[]>(queryKey, (current = []) =>
+          current.filter((event) => !isOwnReactionForTarget(event)),
+        );
+      } else {
+        // Custom-emoji reaction: emoji is `:shortcode:`. Resolve its image URL
+        // from the cached workspace palette so the optimistic kind:7 renders
+        // the right glyph. Unicode reactions resolve to no URL.
+        const emojiUrl = reactionEmojiUrl(
+          emoji,
+          queryClient.getQueryData<CustomEmoji[]>(customEmojiQueryKey),
+        );
+        const optimistic = createOptimisticReaction(
+          eventId,
+          emoji,
+          emojiUrl,
+          pubkey,
+        );
+        queryClient.setQueryData<RelayEvent[]>(queryKey, (current = []) =>
+          sortMessages([...current, optimistic]),
+        );
+      }
+
+      return { queryKey, previous };
+    },
     mutationFn: async ({ eventId, emoji, remove }) => {
       if (remove) {
         await removeReaction(eventId, emoji);
         return;
       }
 
-      // Custom-emoji reaction: emoji is `:shortcode:`. Resolve its image URL
-      // from the cached workspace palette so the kind:7 carries the NIP-30
-      // `["emoji", shortcode, url]` tag. Unicode reactions resolve to no URL.
       const emojiUrl = reactionEmojiUrl(
         emoji,
         queryClient.getQueryData<CustomEmoji[]>(customEmojiQueryKey),
       );
       await addReaction(eventId, emoji, emojiUrl);
+    },
+    onError: (_error, _variables, context) => {
+      if (context) {
+        queryClient.setQueryData<RelayEvent[]>(
+          context.queryKey,
+          context.previous,
+        );
+      }
     },
   });
 }

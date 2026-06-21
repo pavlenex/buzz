@@ -426,6 +426,7 @@ export function ChannelScreen({
     handleSelectThreadReplyTarget,
     handleToggleReaction,
   } = useChannelPaneHandlers({
+    channelId: activeChannelId,
     deleteMessageMutation,
     editMessageMutation,
     editTargetId,
