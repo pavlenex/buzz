@@ -4,6 +4,7 @@ import test from "node:test";
 import { createOptimisticReaction } from "./optimisticReaction.ts";
 import { formatTimelineMessages } from "./formatTimelineMessages.ts";
 import { sortMessages } from "./messageQueryKeys.ts";
+import { isDuplicateReactionError } from "@/features/pulse/lib/noteActions";
 import { KIND_REACTION } from "@/shared/constants/kinds";
 
 const CHANNEL_ID = "36411e44-0e2d-4cfe-bd6e-567eb169db9f";
@@ -100,4 +101,25 @@ test("custom-emoji optimistic reaction carries the NIP-30 emoji tag", () => {
     ["emoji", "party", "https://example.test/party.png"],
   );
   assert.equal(optimistic.content, ":party:");
+});
+
+test("duplicate-on-add is recognized so the optimistic write is kept, not rolled back", () => {
+  // Tyler's exact repro: the relay already holds the reactor's ✅ (it never
+  // came back over the `#h` live sub, so the cache didn't render it). Clicking
+  // again writes the optimistic reaction, then `addReaction` rejects with the
+  // relay's duplicate message. useToggleReactionMutation swallows precisely
+  // this error so onError never runs and the optimistic reaction survives —
+  // turning "duplicate but nothing visible" into a rendered ✅. This pins the
+  // relay error string that swallow depends on; if it drifts, the bug returns.
+  const relayDuplicate = new Error(
+    "relay rejected event: duplicate: reaction already exists",
+  );
+  assert.equal(isDuplicateReactionError(relayDuplicate), true);
+
+  // Any other failure must still propagate (onError rolls back) — we only
+  // treat duplicate-on-add as idempotent success.
+  assert.equal(
+    isDuplicateReactionError(new Error("relay rejected event: rate-limited")),
+    false,
+  );
 });

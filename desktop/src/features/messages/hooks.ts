@@ -38,6 +38,7 @@ import {
   MIN_TOP_LEVEL_ROWS_PER_FETCH,
   pageOlderMessagesUntilRowFloor,
 } from "@/features/messages/lib/pageOlderMessages";
+import { isDuplicateReactionError } from "@/features/pulse/lib/noteActions";
 import {
   KIND_REACTION,
   KIND_STREAM_MESSAGE,
@@ -575,7 +576,18 @@ export function useToggleReactionMutation() {
         emoji,
         queryClient.getQueryData<CustomEmoji[]>(customEmojiQueryKey),
       );
-      await addReaction(eventId, emoji, emojiUrl);
+      try {
+        await addReaction(eventId, emoji, emojiUrl);
+      } catch (error) {
+        // The relay already has this reaction (its `e`-only kind:7 never came
+        // back over the `#h` live sub, so the cache didn't render it and the
+        // user clicked again — Tyler's exact repro). That's idempotent
+        // success: swallow it so onError doesn't roll back the optimistic
+        // write and leave us back at "duplicate but nothing visible".
+        if (!isDuplicateReactionError(error)) {
+          throw error;
+        }
+      }
     },
     onError: (_error, _variables, context) => {
       if (context) {
