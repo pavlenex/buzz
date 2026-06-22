@@ -48,6 +48,23 @@ async function commands(page: import("@playwright/test").Page) {
   return page.evaluate(() => (window as E2eWindow).__BUZZ_E2E_COMMANDS__ ?? []);
 }
 
+async function managedAgentStatus(
+  page: import("@playwright/test").Page,
+  pubkey: string,
+) {
+  return page.evaluate(async (agentPubkey) => {
+    const invoke = (window as E2eWindow).__BUZZ_E2E_INVOKE_MOCK_COMMAND__ as
+      | ((
+          command: string,
+          payload?: Record<string, unknown>,
+        ) => Promise<Array<{ pubkey: string; status: string }>>)
+      | undefined;
+    if (!invoke) throw new Error("Mock invoke bridge is unavailable.");
+    const agents = await invoke("list_managed_agents");
+    return agents.find((agent) => agent.pubkey === agentPubkey)?.status ?? null;
+  }, pubkey);
+}
+
 /** Signed event templates the bridge recorded so far. */
 async function signedEvents(page: import("@playwright/test").Page) {
   return page.evaluate(
@@ -57,29 +74,19 @@ async function signedEvents(page: import("@playwright/test").Page) {
 
 async function setMesh(
   page: import("@playwright/test").Page,
-  mesh: { admitted?: boolean; denyReason?: string },
+  mesh: {
+    admitted?: boolean;
+    denyReason?: string;
+    models?: Array<{ id: string; name: string | null }>;
+  },
 ) {
   await page.evaluate((m) => {
     (window as E2eWindow).__BUZZ_E2E_SET_MESH__?.(m);
   }, mesh);
 }
 
-async function openManagedAgentActions(
-  page: import("@playwright/test").Page,
-  pubkey: string,
-) {
-  const trigger = page.getByTestId(`managed-agent-actions-${pubkey}`);
-  await trigger.scrollIntoViewIfNeeded();
-  await trigger.focus();
-  await trigger.press("Enter");
-  await expect(trigger).toHaveAttribute("data-state", "open");
-}
-
 async function openNewAgentMenu(page: import("@playwright/test").Page) {
-  await page
-    .getByTestId("agents-library-personas")
-    .getByRole("button", { name: "New", exact: true })
-    .click();
+  await page.getByTestId("new-agent-card").click();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -324,44 +331,56 @@ test("saved relay-mesh agents restart via the backend serve-target preflight", a
 
   const row = page.getByTestId(`managed-agent-${pubkey}`);
   await expect(row).toContainText("Saved relay mesh agent");
-  await expect(row).toContainText("running");
+  await expect
+    .poll(async () => managedAgentStatus(page, pubkey))
+    .toBe("running");
   await page.getByRole("button", { name: "Done" }).click();
   await expect(page.getByRole("dialog", { name: "Agent created" })).toHaveCount(
     0,
   );
 
-  await openManagedAgentActions(page, pubkey);
-  await page.getByRole("menuitem", { name: "Stop" }).click();
+  await row.click();
+  const primaryAction = page.getByTestId("user-profile-agent-primary-action");
+  await expect(primaryAction).toContainText("Stop");
+  await primaryAction.click();
   await expect
     .poll(async () => await commands(page))
     .toContain("stop_managed_agent");
-  await expect(row).toContainText("stopped");
+  await expect
+    .poll(async () => managedAgentStatus(page, pubkey))
+    .toBe("stopped");
+  await expect(primaryAction).toContainText("Start agent");
 
   // With a live serve target for the model, manual restart goes through:
   // the backend preflight re-resolves the target and the agent starts.
-  await openManagedAgentActions(page, pubkey);
-  await page.getByRole("menuitem", { name: "Spawn" }).click();
+  await primaryAction.click();
   await expect
     .poll(async () => await commands(page))
     .toContain("start_managed_agent");
-  await expect(row).toContainText("running");
+  await expect
+    .poll(async () => managedAgentStatus(page, pubkey))
+    .toBe("running");
+  await expect(primaryAction).toContainText("Stop");
 
-  await openManagedAgentActions(page, pubkey);
-  await page.getByRole("menuitem", { name: "Stop" }).click();
-  await expect(row).toContainText("stopped");
+  await primaryAction.click();
+  await expect
+    .poll(async () => managedAgentStatus(page, pubkey))
+    .toBe("stopped");
+  await expect(primaryAction).toContainText("Start agent");
 
   // Without a live serve target, the backend preflight rejects the start
   // with an actionable error, surfaced as a toast; the agent stays stopped.
   await setMesh(page, { models: [] });
-  await openManagedAgentActions(page, pubkey);
-  await page.getByRole("menuitem", { name: "Spawn" }).click();
+  await primaryAction.click();
 
   await expect(
     page
       .locator("[data-sonner-toast]")
       .filter({ hasText: "no live serve target is available" }),
   ).toBeVisible();
-  await expect(row).toContainText("stopped");
+  await expect
+    .poll(async () => managedAgentStatus(page, pubkey))
+    .toBe("stopped");
 
   await expect(
     page.evaluate(async (agentPubkey) => {
@@ -380,5 +399,7 @@ test("saved relay-mesh agents restart via the backend serve-target preflight", a
       }
     }, pubkey),
   ).resolves.toContain("no live serve target is available");
-  await expect(row).toContainText("stopped");
+  await expect
+    .poll(async () => managedAgentStatus(page, pubkey))
+    .toBe("stopped");
 });

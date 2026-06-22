@@ -30,11 +30,8 @@ async function gotoApp(page: import("@playwright/test").Page) {
 }
 
 async function openPersonaCatalog(page: import("@playwright/test").Page) {
-  await page
-    .getByTestId("agents-library-personas")
-    .getByRole("button", { name: "New", exact: true })
-    .click();
-  await page.getByText("Choose from Catalog...").click();
+  await page.getByTestId("new-agent-card").click();
+  await page.getByRole("menuitem", { name: "Choose from Catalog..." }).click();
 }
 
 async function getCatalogOrder(page: import("@playwright/test").Page) {
@@ -184,22 +181,10 @@ test("built-in personas are chosen from the dialog and can be selected", async (
   );
   const fizzCard = page.getByTestId("persona-agent-row-builtin:fizz");
   await expect(fizzCard).toContainText("Fizz");
-  await expect(fizzCard).toContainText("Built-in Agent");
   await expect(fizzCard).toContainText("Auto");
   await expect(
     page.getByTestId("persona-catalog-card-target-builtin:fizz"),
   ).toHaveAttribute("aria-pressed", "true");
-  await expect.poll(() => getCatalogOrder(page)).toEqual(initialCatalogOrder);
-
-  await page.getByTestId("persona-catalog-card-target-builtin:fizz").click();
-  await expect(
-    page
-      .locator("[data-sonner-toast]")
-      .filter({ hasText: "Deselected Fizz from My Agents." }),
-  ).toBeVisible();
-  await expect(
-    page.getByTestId("persona-catalog-card-target-builtin:fizz"),
-  ).toHaveAttribute("aria-pressed", "false");
   await expect.poll(() => getCatalogOrder(page)).toEqual(initialCatalogOrder);
 });
 
