@@ -2,26 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { computeThreadBadgeCounts } from "./threadBadgeCounts.ts";
-import {
-  nextThreadBadgeFrontier,
-  seedThreadBadgeFrontiers,
-} from "./threadBadgeFrontier.ts";
 import { buildRepliesByRootId } from "./subtreeCreatedAt.ts";
 
-// LP4 characterization invariants for thread-unread badges.
+// LP4 v3 characterization invariants for thread-unread badges.
 //
-// Each invariant pins a contract the badge pipeline holds TODAY and that the
-// redesign (re-key the roll-up + frontier on rootId, lift the orphan-only-root
-// seed skip) must preserve. They are green on current code and stay green after
-// the collapse: a redesign that changes any one of (a)-(g) has broken behavior
-// Will depends on, not just refactored an internal walk.
+// Each invariant pins a contract the per-message badge pipeline holds. They are
+// the observable behaviors Will depends on: a change that breaks any one of
+// (a)-(g) has regressed behavior, not just refactored an internal path.
 //
-// Fixtures carry `rootId` alongside `parentId` so they remain falsifiable once
-// the pipeline re-keys on rootId — a rootId-keyed implementation that ignored
-// parentId, or a parentId-keyed one that ignored rootId, must still satisfy the
-// same observable counts here. `rootId` defaults to the thread root for the
-// happy-path fixtures; the orphan/sibling defect tests live in the dedicated
-// _DEFECT suites and threadOpenCeiling.test.mjs.
+// The model is per-message read markers (`msg:<id>`) read through a resolver,
+// not a per-thread-root frontier snapshot. `getReadAt(id)` returns the
+// effective read time for a reply (`null` = never read); a reply counts unread
+// iff `createdAt > getReadAt(id)`. Reading one reply's marker never touches
+// another's — independence is structural, not enforced by a separate seed.
+//
+// Fixtures carry `rootId` alongside `parentId` so the root-keyed roll-up stays
+// falsifiable: a rootId-keyed implementation that ignored parentId, or the
+// reverse, must still satisfy the same observable counts here.
 
 const msg = (id, parentId, rootId, createdAt = 100, pubkey = "author") => ({
   id,
@@ -32,23 +29,28 @@ const msg = (id, parentId, rootId, createdAt = 100, pubkey = "author") => ({
 });
 
 const notifiedAll = () => true;
-const counts = (messages, frontiers, isNotified = notifiedAll, currentPubkey) =>
+const neverRead = () => null;
+
+// A uniform read-line per thread root, applied to every reply resolving to that
+// root by rootId. Translates the legacy "frontier covers part of a subtree"
+// intents into the per-message resolver without a single global line.
+function readLineByRoot(messages, frontiersByRoot) {
+  const lineByMessageId = new Map();
+  for (const message of messages) {
+    const root = message.rootId ?? message.parentId ?? message.id;
+    const line = frontiersByRoot.get(root);
+    if (line !== undefined) lineByMessageId.set(message.id, line);
+  }
+  return (id) => lineByMessageId.get(id) ?? null;
+}
+
+const counts = (messages, getReadAt, isNotified = notifiedAll, currentPubkey) =>
   computeThreadBadgeCounts(
     messages,
     buildRepliesByRootId(messages),
-    frontiers,
+    getReadAt,
     isNotified,
     currentPubkey,
-  );
-
-const seedAll = () => true;
-const seed = (frontiers, messages, getReadAt, isNotified = seedAll) =>
-  seedThreadBadgeFrontiers(
-    frontiers,
-    messages,
-    buildRepliesByRootId(messages),
-    isNotified,
-    getReadAt,
   );
 
 // (a) A root's badge counts EVERY descendant in its subtree, at any depth, not
@@ -60,7 +62,7 @@ test("invariant_a_subtreeRollsUpToOneRootBadge", () => {
     msg("b", "a", "root"),
     msg("c", "b", "root"),
   ];
-  const result = counts(messages, undefined);
+  const result = counts(messages, neverRead);
   assert.equal(result.get("root"), 3);
   assert.equal(result.size, 1);
 });
@@ -74,21 +76,21 @@ test("invariant_b_onlyNotifiedRootsBadge", () => {
     msg("root2", null, "root2"),
     msg("b", "root2", "root2"),
   ];
-  const result = counts(messages, undefined, (id) => id === "root1");
+  const result = counts(messages, neverRead, (id) => id === "root1");
   assert.equal(result.get("root1"), 1);
   assert.equal(result.has("root2"), false);
 });
 
-// (c) The frontier is the read boundary: replies at or below it are read and do
-// NOT count; only replies strictly newer than the frontier raise the badge.
-test("invariant_c_frontierExcludesReadReplies", () => {
+// (c) The marker is the read boundary: replies at or below it are read and do
+// NOT count; only replies strictly newer than the marker raise the badge.
+test("invariant_c_readMarkerExcludesReadReplies", () => {
   const messages = [
     msg("root", null, "root", 50),
     msg("read", "root", "root", 100),
     msg("unread", "root", "root", 200),
   ];
-  const frontiers = new Map([["root", 100]]);
-  assert.equal(counts(messages, frontiers).get("root"), 1);
+  const readAt = readLineByRoot(messages, new Map([["root", 100]]));
+  assert.equal(counts(messages, readAt).get("root"), 1);
 });
 
 // (d) The current user's own replies never count as unread, at any depth.
@@ -98,7 +100,7 @@ test("invariant_d_selfAuthoredRepliesNeverUnread", () => {
     msg("a", "root", "root", 100, "other"),
     msg("mine", "a", "root", 200, "me"),
   ];
-  assert.equal(counts(messages, undefined, notifiedAll, "me").get("root"), 1);
+  assert.equal(counts(messages, neverRead, notifiedAll, "me").get("root"), 1);
 });
 
 // (e) A notified root with no unread content produces NO entry — absence, not a
@@ -108,28 +110,30 @@ test("invariant_e_noUnreadMeansNoEntry", () => {
     msg("root", null, "root", 50),
     msg("a", "root", "root", 100),
   ];
-  const frontiers = new Map([["root", 100]]);
-  const result = counts(messages, frontiers);
+  const readAt = readLineByRoot(messages, new Map([["root", 100]]));
+  const result = counts(messages, readAt);
   assert.equal(result.has("root"), false);
 });
 
-// (f) Seed is monotonic and frozen-at-open: once advanced toward a live marker,
-// a later stale (lower) marker never lowers the snapshot. This is what keeps a
-// badge from flickering back after a read, and what the redesign's rootId
-// re-key must not regress.
-test("invariant_f_seedMonotonicNeverLowers", () => {
-  assert.equal(nextThreadBadgeFrontier(undefined, null), null); // unseeded
-  assert.equal(nextThreadBadgeFrontier(null, 200), 200); // first read advances
-  assert.equal(nextThreadBadgeFrontier(200, 100), 200); // stale marker held
-  assert.equal(nextThreadBadgeFrontier(200, null), 200); // null never lowers
+// (f) PER-MESSAGE INDEPENDENCE — reading one reply's marker never clears
+// another's. This is the structural fix for the original Issue 2 (an ancestor
+// read covering a descendant): each reply is judged against its OWN marker, so
+// reading the older reply leaves the newer one lit. A resolver that folded
+// reply→reply, or keyed all replies to one shared line, would fail here.
+test("invariant_f_readOneReplyLeavesOthersUnread", () => {
+  const messages = [
+    msg("root", null, "root", 50),
+    msg("older", "root", "root", 100),
+    msg("newer", "root", "root", 200),
+  ];
+  // Only `older` is read (marker at its own timestamp); `newer` untouched.
+  const readAt = (id) => (id === "older" ? 100 : null);
+  assert.equal(counts(messages, readAt).get("root"), 1);
 });
 
-// (g) FALSIFIABLE LOCK — two distinct roots keep INDEPENDENT frontiers and
-// badges; reading one never collapses the other. The redesign re-keys on
-// rootId; if that re-key ever conflated two roots' frontiers (e.g. keyed on a
-// shared channel id, or folded sibling roots into one bucket), this fails.
-// Concretely: root1 read up to its newest reply (badge clears), root2 unread.
-// A correct pipeline shows root2 only; a collapsing bug shows neither or both.
+// (g) FALSIFIABLE LOCK — two distinct roots keep INDEPENDENT badges; reading
+// one never collapses the other (the original Face-2 cross-thread bug). root1
+// read through its newest reply (badge clears), root2 unread.
 test("invariant_g_distinctRootsDoNotCollapse", () => {
   const messages = [
     msg("root1", null, "root1", 10),
@@ -137,30 +141,16 @@ test("invariant_g_distinctRootsDoNotCollapse", () => {
     msg("root2", null, "root2", 20),
     msg("r2reply", "root2", "root2", 200),
   ];
-  // root1 read through its reply (frontier 100); root2 never read (null).
-  const frontiers = new Map([
-    ["root1", 100],
-    ["root2", null],
-  ]);
-  const result = counts(messages, frontiers);
+  // root1 read through its reply (marker 100); root2 never read.
+  const readAt = readLineByRoot(
+    messages,
+    new Map([
+      ["root1", 100],
+      ["root2", null],
+    ]),
+  );
+  const result = counts(messages, readAt);
   assert.equal(result.has("root1"), false); // root1 fully read — no badge
   assert.equal(result.get("root2"), 1); // root2 independently still unread
   assert.equal(result.size, 1);
-});
-
-// (g) seed companion — seeding one root's frontier leaves the other untouched,
-// so the two-frontier independence holds through the seed path, not only the
-// count path.
-test("invariant_g_seedOneRootLeavesOtherUntouched", () => {
-  const frontiers = new Map();
-  const messages = [
-    msg("root1", null, "root1", 10),
-    msg("r1reply", "root1", "root1", 100),
-    msg("root2", null, "root2", 20),
-    msg("r2reply", "root2", "root2", 200),
-  ];
-  seed(frontiers, messages, (id) => (id === "root1" ? 100 : null));
-  assert.equal(frontiers.get("root1"), 100);
-  assert.equal(frontiers.get("root2"), null);
-  assert.equal(frontiers.size, 2);
 });

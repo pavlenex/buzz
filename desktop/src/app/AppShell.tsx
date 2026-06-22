@@ -29,6 +29,7 @@ import {
   useOpenDmMutation,
 } from "@/features/channels/hooks";
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
+import { msgContextKey } from "@/features/channels/readState/readStateFormat";
 import { useMembershipNotifications } from "@/features/channels/useMembershipNotifications";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { getThreadReference } from "@/features/messages/lib/threading";
@@ -362,6 +363,28 @@ export function AppShell() {
     (rootId: string, timestamp: number) => {
       markChannelRead(
         `thread:${rootId}`,
+        new Date(timestamp * 1_000).toISOString(),
+      );
+    },
+    [markChannelRead],
+  );
+
+  // Per-message read frontier (LP4 v3), folded through the active channel by
+  // the ChannelScreen-installed parent resolver: effective(msg:<id>) =
+  // max(own(msg:<id>), channel). Unlike getThreadReadAt's seed path, the badge
+  // predicate WANTS the channel fold so a channel-read clears messages older
+  // than the top-level frontier. Returns null when neither the message nor its
+  // channel has ever been read.
+  const getMessageReadAt = React.useCallback(
+    (messageId: string) => getChannelReadAt(msgContextKey(messageId)),
+    [getChannelReadAt],
+  );
+
+  // Advance a message's own read marker to the given unix-seconds timestamp.
+  const markMessageRead = React.useCallback(
+    (messageId: string, timestamp: number) => {
+      markChannelRead(
+        msgContextKey(messageId),
         new Date(timestamp * 1_000).toISOString(),
       );
     },
@@ -727,6 +750,8 @@ export function AppShell() {
             getChannelReadAt,
             getThreadReadAt,
             markThreadRead,
+            getMessageReadAt,
+            markMessageRead,
             readStateVersion,
             setContextParentResolver,
             followThread: handleFollowThread,

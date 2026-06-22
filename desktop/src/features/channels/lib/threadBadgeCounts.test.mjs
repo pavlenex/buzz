@@ -6,7 +6,7 @@ import { buildRepliesByRootId } from "./subtreeCreatedAt.ts";
 
 // Minimal TimelineMessage shape the badge counter reads: id, parentId, rootId,
 // createdAt, pubkey. createdAt defaults high so replies count unread against a
-// null frontier unless a test sets it lower. `rootId` defaults to the parent
+// never-read resolver unless a test sets it lower. `rootId` defaults to the parent
 // (mirroring getThreadReference's `rootTag?.[1] ?? parentId` fallback), which is
 // correct for a DIRECT reply (parent IS the root); nested replies must pass
 // their true thread root explicitly, exactly as getThreadReference resolves the
@@ -22,18 +22,36 @@ const msg = (id, parentId, createdAt = 100, pubkey = "author", rootId) => ({
 });
 
 const countAll = () => true;
-const counts = (messages, frontiers, isNotified = countAll, currentPubkey) =>
+
+// LP4 v3: badges read a per-message resolver, not a per-root frontier. These
+// helpers translate the legacy test intents into resolvers:
+//   - `neverRead` — no message has been read (the old null-frontier case).
+//   - `readLineByRoot(map)` — a uniform read-line per thread root, applied to
+//     every reply that resolves to that root by rootId. Reproduces the old
+//     "frontier covers part of the subtree" cases without a single global line.
+const neverRead = () => null;
+function readLineByRoot(messages, frontiersByRoot) {
+  const lineByMessageId = new Map();
+  for (const message of messages) {
+    const root = message.rootId ?? message.parentId ?? message.id;
+    const line = frontiersByRoot.get(root);
+    if (line !== undefined) lineByMessageId.set(message.id, line);
+  }
+  return (id) => lineByMessageId.get(id) ?? null;
+}
+
+const counts = (messages, getReadAt, isNotified = countAll, currentPubkey) =>
   computeThreadBadgeCounts(
     messages,
     buildRepliesByRootId(messages),
-    frontiers,
+    getReadAt,
     isNotified,
     currentPubkey,
   );
 
 test("computeThreadBadgeCounts_directRepliesOnly_countsEach", () => {
   const messages = [msg("root", null), msg("a", "root"), msg("b", "root")];
-  assert.equal(counts(messages, undefined).get("root"), 2);
+  assert.equal(counts(messages, neverRead).get("root"), 2);
 });
 
 test("computeThreadBadgeCounts_nestedReply_countsTowardRoot", () => {
@@ -44,7 +62,7 @@ test("computeThreadBadgeCounts_nestedReply_countsTowardRoot", () => {
     msg("a", "root"),
     msg("b", "a", 100, "author", "root"),
   ];
-  assert.equal(counts(messages, undefined).get("root"), 2);
+  assert.equal(counts(messages, neverRead).get("root"), 2);
 });
 
 test("computeThreadBadgeCounts_deepChain_countsWholeSubtree", () => {
@@ -57,7 +75,7 @@ test("computeThreadBadgeCounts_deepChain_countsWholeSubtree", () => {
     msg("c", "b", 100, "author", "root"),
     msg("d", "c", 100, "author", "root"),
   ];
-  assert.equal(counts(messages, undefined).get("root"), 4);
+  assert.equal(counts(messages, neverRead).get("root"), 4);
 });
 
 test("computeThreadBadgeCounts_branchingSubtree_countsAllBranches", () => {
@@ -70,12 +88,12 @@ test("computeThreadBadgeCounts_branchingSubtree_countsAllBranches", () => {
     msg("c", "a", 100, "author", "root"),
     msg("d", "root"),
   ];
-  assert.equal(counts(messages, undefined).get("root"), 4);
+  assert.equal(counts(messages, neverRead).get("root"), 4);
 });
 
 test("computeThreadBadgeCounts_rootWithNoReplies_omitted", () => {
   const messages = [msg("root", null)];
-  assert.equal(counts(messages, undefined).has("root"), false);
+  assert.equal(counts(messages, neverRead).has("root"), false);
 });
 
 test("computeThreadBadgeCounts_notNotified_omitted", () => {
@@ -84,28 +102,62 @@ test("computeThreadBadgeCounts_notNotified_omitted", () => {
     msg("a", "root"),
     msg("b", "a", 100, "author", "root"),
   ];
-  assert.equal(counts(messages, undefined, () => false).size, 0);
+  assert.equal(counts(messages, neverRead, () => false).size, 0);
 });
 
-test("computeThreadBadgeCounts_frontierCoversNestedReplies_excludesRead", () => {
-  // Frontier 150: a (100) is read, only nested b (200) remains unread.
+test("computeThreadBadgeCounts_readLineCoversNestedReplies_excludesRead", () => {
+  // Read-line 150 across the root's subtree: a (100) is read, only nested
+  // b (200) remains unread.
   const messages = [
     msg("root", null),
     msg("a", "root", 100),
     msg("b", "a", 200, "author", "root"),
   ];
-  const frontiers = new Map([["root", 150]]);
-  assert.equal(counts(messages, frontiers).get("root"), 1);
+  const readAt = readLineByRoot(messages, new Map([["root", 150]]));
+  assert.equal(counts(messages, readAt).get("root"), 1);
 });
 
-test("computeThreadBadgeCounts_frontierCoversWholeSubtree_omitsRoot", () => {
+test("computeThreadBadgeCounts_readLineCoversWholeSubtree_omitsRoot", () => {
   const messages = [
     msg("root", null),
     msg("a", "root", 100),
     msg("b", "a", 120, "author", "root"),
   ];
-  const frontiers = new Map([["root", 150]]);
-  assert.equal(counts(messages, frontiers).has("root"), false);
+  const readAt = readLineByRoot(messages, new Map([["root", 150]]));
+  assert.equal(counts(messages, readAt).has("root"), false);
+});
+
+test("computeThreadBadgeCounts_perMessageMarker_readDeepReplyKeepsSiblingBadge", () => {
+  // The per-message model's defining case: marking the deep reply b read
+  // leaves direct sibling a unread independently — a single subtree frontier
+  // could not express "b read but a not".
+  const messages = [
+    msg("root", null),
+    msg("a", "root", 100),
+    msg("b", "a", 200, "author", "root"),
+  ];
+  const readAt = (id) => (id === "b" ? 200 : null);
+  assert.equal(counts(messages, readAt).get("root"), 1);
+});
+
+test("computeThreadBadgeCounts_forcedUnread_relightsReadReply", () => {
+  // Session-local mark-unread forces a (read by its marker) back to unread.
+  const messages = [
+    msg("root", null),
+    msg("a", "root", 100),
+    msg("b", "a", 200, "author", "root"),
+  ];
+  const allRead = () => 1000;
+  const isForcedUnread = (id) => id === "a";
+  const result = computeThreadBadgeCounts(
+    messages,
+    buildRepliesByRootId(messages),
+    allRead,
+    countAll,
+    undefined,
+    isForcedUnread,
+  );
+  assert.equal(result.get("root"), 1);
 });
 
 test("computeThreadBadgeCounts_selfAuthoredNestedReply_notCounted", () => {
@@ -115,7 +167,7 @@ test("computeThreadBadgeCounts_selfAuthoredNestedReply_notCounted", () => {
     msg("a", "root", 100, "other"),
     msg("b", "a", 200, "ME", "root"),
   ];
-  assert.equal(counts(messages, undefined, countAll, "me").get("root"), 1);
+  assert.equal(counts(messages, neverRead, countAll, "me").get("root"), 1);
 });
 
 test("computeThreadBadgeCounts_multipleRoots_eachCountsOwnSubtree", () => {
@@ -126,7 +178,7 @@ test("computeThreadBadgeCounts_multipleRoots_eachCountsOwnSubtree", () => {
     msg("root2", null),
     msg("c", "root2"),
   ];
-  const result = counts(messages, undefined);
+  const result = counts(messages, neverRead);
   assert.equal(result.get("root1"), 2);
   assert.equal(result.get("root2"), 1);
 });
@@ -155,7 +207,7 @@ test("computeThreadBadgeCounts_brokenParentChain_orphanedReplyRollsUpToRoot", ()
     // msg("b", "a") — intentionally absent: unloaded intermediate ancestor.
     msg("c", "b", 100, "author", "root"),
   ];
-  assert.equal(counts(loaded, undefined).get("root"), 2);
+  assert.equal(counts(loaded, neverRead).get("root"), 2);
 });
 
 test("computeThreadBadgeCounts_brokenParentChain_orphanedSoleReply_showsBadge", () => {
@@ -168,7 +220,7 @@ test("computeThreadBadgeCounts_brokenParentChain_orphanedSoleReply_showsBadge", 
     // msg("b", "root") — intentionally absent: unloaded intermediate ancestor.
     msg("c", "b", 100, "author", "root"),
   ];
-  assert.equal(counts(loaded, undefined).get("root"), 1);
+  assert.equal(counts(loaded, neverRead).get("root"), 1);
 });
 
 test("computeThreadBadgeCounts_fullParentChain_orphanRollsUp_DESIRED", () => {
@@ -182,5 +234,5 @@ test("computeThreadBadgeCounts_fullParentChain_orphanRollsUp_DESIRED", () => {
     msg("b", "a", 100, "author", "root"),
     msg("c", "b", 100, "author", "root"),
   ];
-  assert.equal(counts(loaded, undefined).get("root"), 3);
+  assert.equal(counts(loaded, neverRead).get("root"), 3);
 });
