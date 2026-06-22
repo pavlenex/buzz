@@ -91,6 +91,32 @@ export type CreateChannelManagedAgentsResult = {
   failures: CreateChannelManagedAgentBatchFailure[];
 };
 
+export function respondToUpdateForReusedAgent(
+  agent: ManagedAgent,
+  input: Pick<
+    CreateChannelManagedAgentInput,
+    "respondTo" | "respondToAllowlist"
+  >,
+): Pick<
+  CreateChannelManagedAgentInput,
+  "respondTo" | "respondToAllowlist"
+> | null {
+  const nextRespondTo = input.respondTo ?? "owner-only";
+  const nextAllowlist =
+    nextRespondTo === "allowlist" ? (input.respondToAllowlist ?? []) : [];
+  const allowlistChanged =
+    agent.respondToAllowlist.join(",") !== nextAllowlist.join(",");
+
+  if (agent.respondTo === nextRespondTo && !allowlistChanged) {
+    return null;
+  }
+
+  return {
+    respondTo: nextRespondTo,
+    respondToAllowlist: nextAllowlist,
+  };
+}
+
 export async function attachManagedAgentToChannel(
   channelId: string,
   input: AttachManagedAgentToChannelInput,
@@ -273,17 +299,12 @@ export async function createChannelManagedAgent(
     if (reusable) {
       // Apply the caller's respondTo settings so the user's permission
       // choice in the dialog is always honored, even when reusing.
-      const needsRespondToUpdate =
-        input.respondTo && input.respondTo !== "owner-only";
-      const updatedAgent = needsRespondToUpdate
+      const respondToUpdate = respondToUpdateForReusedAgent(reusable, input);
+      const updatedAgent = respondToUpdate
         ? (
             await updateManagedAgent({
               pubkey: reusable.pubkey,
-              respondTo: input.respondTo,
-              respondToAllowlist:
-                input.respondTo === "allowlist"
-                  ? input.respondToAllowlist
-                  : undefined,
+              ...respondToUpdate,
             })
           ).agent
         : reusable;
@@ -316,17 +337,12 @@ export async function createChannelManagedAgent(
       context.channelMemberPubkeys,
     );
     if (reusable) {
-      const needsRespondToUpdate =
-        input.respondTo && input.respondTo !== "owner-only";
-      const updatedAgent = needsRespondToUpdate
+      const respondToUpdate = respondToUpdateForReusedAgent(reusable, input);
+      const updatedAgent = respondToUpdate
         ? (
             await updateManagedAgent({
               pubkey: reusable.pubkey,
-              respondTo: input.respondTo,
-              respondToAllowlist:
-                input.respondTo === "allowlist"
-                  ? input.respondToAllowlist
-                  : undefined,
+              ...respondToUpdate,
             })
           ).agent
         : reusable;
