@@ -638,6 +638,42 @@ struct AgentObserverRoute {
     direction: AgentObserverDirection,
 }
 
+/// Resolve the verified owner of `agent` from its live `kind:0` NIP-OA proof.
+///
+/// Reads the agent's latest global `kind:0` profile, extracts the single
+/// well-formed `auth` tag, and cryptographically verifies it. Returns the
+/// attested owner pubkey on success, or `None` when the agent has no live
+/// profile, the profile carries no/invalid `auth` tag, or the author does not
+/// match the agent. This is the kind:0 authority the desktop UI gates on; the
+/// relay consults it so delivery and visibility agree.
+async fn resolve_live_kind0_owner(state: &Arc<AppState>, agent: &PublicKey) -> Option<PublicKey> {
+    use buzz_core::kind::KIND_PROFILE;
+    use buzz_db::EventQuery;
+
+    let profile = state
+        .db
+        .query_events(&EventQuery {
+            kinds: Some(vec![KIND_PROFILE as i32]),
+            authors: Some(vec![agent.to_bytes().to_vec()]),
+            limit: Some(1),
+            global_only: true,
+            ..Default::default()
+        })
+        .await
+        .ok()?
+        .into_iter()
+        .next()?;
+
+    // Defensive: the query filters by author, but never trust ownership of a
+    // frame to a profile whose signer doesn't match the agent.
+    if profile.event.pubkey != *agent {
+        return None;
+    }
+
+    let auth_tag = buzz_sdk::nip_oa::extract_single_auth_tag_json(&profile.event).ok()?;
+    buzz_sdk::nip_oa::verify_auth_tag(&auth_tag, agent).ok()
+}
+
 /// Handle encrypted agent observer frames (kind 24200).
 ///
 /// These frames bypass storage and are routed as global ephemeral events. The
@@ -712,29 +748,39 @@ async fn handle_agent_observer_event(
     let agent_bytes = route.agent.to_bytes().to_vec();
     let owner_bytes = route.owner.to_bytes().to_vec();
     let cache_key = (agent_bytes.clone(), owner_bytes.clone());
+    // Authority order: session NIP-OA fast path → live kind:0 proof → DB cache
+    // fallback. kind:0 is the single source of truth the desktop UI also gates
+    // on; the relay defers to it so delivery and visibility agree. The DB column
+    // (written from NIP-42 AUTH at handlers/auth.rs) is only consulted when the
+    // agent has no live kind:0 auth tag (BYO/CLI agents that AUTH without
+    // publishing a profile). When kind:0 *is* present, the DB must not be able to
+    // contradict it — a kind:0 owner mismatch denies rather than falling through.
     let is_owner = if session_owner_match {
         true
     } else {
-        match state.observer_owner_cache.get(&cache_key) {
-            Some(cached) => cached,
-            None => {
-                let result = state.db.is_agent_owner(&agent_bytes, &owner_bytes).await;
-                match result {
-                    Ok(v) => {
-                        state.observer_owner_cache.insert(cache_key, v);
-                        v
-                    }
-                    Err(e) => {
-                        warn!(conn_id = %conn_id, event_id = %event_id_hex, "agent observer owner check failed: {e}");
-                        conn.send(RelayMessage::ok(
-                            event_id_hex,
-                            false,
-                            "error: internal server error",
-                        ));
-                        return;
+        match resolve_live_kind0_owner(&state, &route.agent).await {
+            Some(kind0_owner) => kind0_owner == route.owner,
+            None => match state.observer_owner_cache.get(&cache_key) {
+                Some(cached) => cached,
+                None => {
+                    let result = state.db.is_agent_owner(&agent_bytes, &owner_bytes).await;
+                    match result {
+                        Ok(v) => {
+                            state.observer_owner_cache.insert(cache_key, v);
+                            v
+                        }
+                        Err(e) => {
+                            warn!(conn_id = %conn_id, event_id = %event_id_hex, "agent observer owner check failed: {e}");
+                            conn.send(RelayMessage::ok(
+                                event_id_hex,
+                                false,
+                                "error: internal server error",
+                            ));
+                            return;
+                        }
                     }
                 }
-            }
+            },
         }
     };
     if !is_owner {
@@ -999,6 +1045,168 @@ mod tests {
 
         let err = super::agent_observer_route(&event).expect_err("route should reject plaintext");
         assert!(err.contains("NIP-44"));
+    }
+
+    /// Tests for `resolve_live_kind0_owner`, the kind:0 authority the relay's
+    /// observer-frame delivery gate consults before falling back to the DB
+    /// cache. These mirror the DB-backed harness in `handlers::identity_archive`
+    /// and no-op gracefully when no Postgres is reachable.
+    mod live_kind0_owner {
+        use std::sync::Arc;
+
+        use nostr::{Event, EventBuilder, Keys, Kind, Tag};
+
+        use crate::handlers::event::resolve_live_kind0_owner;
+        use crate::state::AppState;
+
+        async fn test_pool() -> Option<sqlx::PgPool> {
+            let url = std::env::var("DATABASE_URL")
+                .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".into());
+            sqlx::PgPool::connect(&url).await.ok()
+        }
+
+        async fn test_state(pool: sqlx::PgPool) -> Option<Arc<AppState>> {
+            let db = buzz_db::Db::from_pool(pool.clone());
+            let config = crate::config::Config::from_env().ok()?;
+            let redis_pool = deadpool_redis::Config::from_url(&config.redis_url)
+                .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+                .ok()?;
+            let pubsub = Arc::new(
+                buzz_pubsub::PubSubManager::new(&config.redis_url, redis_pool.clone())
+                    .await
+                    .ok()?,
+            );
+            let audit = buzz_audit::AuditService::new(pool);
+            let auth = buzz_auth::AuthService::new(config.auth.clone());
+            let search = buzz_search::SearchService::new(buzz_search::SearchConfig {
+                url: config.typesense_url.clone(),
+                api_key: config.typesense_key.clone(),
+                collection: "events".to_string(),
+            });
+            let workflow_engine = Arc::new(buzz_workflow::WorkflowEngine::new(
+                db.clone(),
+                buzz_workflow::WorkflowConfig::default(),
+            ));
+            let media_storage = buzz_media::MediaStorage::new(&config.media).ok()?;
+            let (state, _audit_shutdown) = crate::state::AppState::new(
+                config,
+                db,
+                redis_pool,
+                audit,
+                pubsub,
+                auth,
+                search,
+                workflow_engine,
+                Keys::generate(),
+                media_storage,
+            );
+            Some(Arc::new(state))
+        }
+
+        fn auth_tag(owner_keys: &Keys, agent_pubkey: &nostr::PublicKey) -> Tag {
+            let tag_json = buzz_sdk::nip_oa::compute_auth_tag(owner_keys, agent_pubkey, "")
+                .expect("compute auth tag");
+            buzz_sdk::nip_oa::parse_auth_tag(&tag_json).expect("parse auth tag")
+        }
+
+        fn profile_event(agent_keys: &Keys, auth_tag: Tag, created_at: u64) -> Event {
+            EventBuilder::new(Kind::Metadata, "{}")
+                .tags([auth_tag])
+                .custom_created_at(nostr::Timestamp::from(created_at))
+                .sign_with_keys(agent_keys)
+                .expect("sign profile")
+        }
+
+        /// A live kind:0 carrying a valid auth tag yields the attested owner.
+        #[tokio::test]
+        async fn resolves_owner_from_live_kind0_auth_tag() {
+            let Some(pool) = test_pool().await else {
+                return;
+            };
+            let Some(state) = test_state(pool).await else {
+                return;
+            };
+
+            let agent_keys = Keys::generate();
+            let owner_keys = Keys::generate();
+            let agent_pubkey = agent_keys.public_key();
+            let now = nostr::Timestamp::now().as_secs();
+
+            let profile = profile_event(&agent_keys, auth_tag(&owner_keys, &agent_pubkey), now);
+            state
+                .db
+                .replace_addressable_event(&profile, None)
+                .await
+                .expect("insert agent kind:0");
+
+            let resolved = resolve_live_kind0_owner(&state, &agent_pubkey).await;
+            assert_eq!(
+                resolved,
+                Some(owner_keys.public_key()),
+                "live kind:0 auth tag must resolve to the attested owner"
+            );
+        }
+
+        /// When the live kind:0 attests a *different* owner, the resolver returns
+        /// that owner — the gate then denies (kind:0 mismatch) rather than
+        /// consulting the DB, so a stale DB row cannot contradict kind:0.
+        #[tokio::test]
+        async fn resolves_updated_owner_after_kind0_flip() {
+            let Some(pool) = test_pool().await else {
+                return;
+            };
+            let Some(state) = test_state(pool).await else {
+                return;
+            };
+
+            let agent_keys = Keys::generate();
+            let owner_keys = Keys::generate();
+            let new_owner_keys = Keys::generate();
+            let agent_pubkey = agent_keys.public_key();
+            let now = nostr::Timestamp::now().as_secs();
+
+            let profile = profile_event(&agent_keys, auth_tag(&owner_keys, &agent_pubkey), now);
+            state
+                .db
+                .replace_addressable_event(&profile, None)
+                .await
+                .expect("insert agent kind:0");
+
+            let flipped =
+                profile_event(&agent_keys, auth_tag(&new_owner_keys, &agent_pubkey), now + 1);
+            state
+                .db
+                .replace_addressable_event(&flipped, None)
+                .await
+                .expect("replace agent kind:0");
+
+            let resolved = resolve_live_kind0_owner(&state, &agent_pubkey).await;
+            assert_eq!(
+                resolved,
+                Some(new_owner_keys.public_key()),
+                "resolver must reflect the latest kind:0 owner, not the original"
+            );
+        }
+
+        /// An agent with no published kind:0 (BYO/CLI agents that AUTH only)
+        /// yields None, so the gate falls back to the DB cache.
+        #[tokio::test]
+        async fn returns_none_when_agent_has_no_live_kind0() {
+            let Some(pool) = test_pool().await else {
+                return;
+            };
+            let Some(state) = test_state(pool).await else {
+                return;
+            };
+
+            // A freshly generated agent with no profile stored.
+            let agent_keys = Keys::generate();
+            let resolved = resolve_live_kind0_owner(&state, &agent_keys.public_key()).await;
+            assert_eq!(
+                resolved, None,
+                "an agent with no live kind:0 must yield None so the gate uses the DB fallback"
+            );
+        }
     }
 
     mod fanout_access {
