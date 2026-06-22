@@ -2,6 +2,8 @@ import * as React from "react";
 import { Hash } from "lucide-react";
 
 import {
+  isDeferredTimelineSnapshotStale,
+  isRenderedTimelineBehindHistoryPrepend,
   selectTimelineBodySurface,
   selectTimelineIntroSurface,
 } from "@/features/messages/lib/timelineSnapshot";
@@ -113,6 +115,16 @@ type DirectMessageIntroParticipant = {
   pubkey: string;
 };
 
+type TimelineSnapshot = {
+  channelId: string | null;
+  messages: TimelineMessage[];
+};
+
+const EMPTY_TIMELINE_SNAPSHOT: TimelineSnapshot = {
+  channelId: null,
+  messages: EMPTY_MESSAGES,
+};
+
 const MessageTimelineBase = React.forwardRef<
   MessageTimelineHandle,
   MessageTimelineProps
@@ -174,33 +186,39 @@ const MessageTimelineBase = React.forwardRef<
   // scroll/autoscroll/deep-link logic reads the DOM (`scrollIntoView`,
   // ResizeObserver on the content), so it must stay consistent with what's
   // actually painted. You can't scroll to a row that hasn't committed yet.
-  const deferredMessages = React.useDeferredValue(messages, EMPTY_MESSAGES);
-  const isRenderPending = deferredMessages !== messages;
+  // Channel id travels with the deferred message snapshot. Without that guard, a
+  // route change can paint the previous channel's deferred rows for a frame even
+  // though the sidebar/header already moved to the new channel.
+  const liveSnapshot = React.useMemo<TimelineSnapshot>(
+    () => ({ channelId: channelId ?? null, messages }),
+    [channelId, messages],
+  );
+  const deferredSnapshot = React.useDeferredValue(
+    liveSnapshot,
+    EMPTY_TIMELINE_SNAPSHOT,
+  );
+  const deferredMessages = deferredSnapshot.messages;
+  const isDeferredSnapshotStale = isDeferredTimelineSnapshotStale({
+    deferredSnapshot,
+    liveSnapshot,
+  });
+  const isRenderPending = deferredSnapshot !== liveSnapshot;
   const scrollRestorationId = targetMessageId
     ? `message-timeline:${channelId ?? "none"}:target:${targetMessageId}`
     : `message-timeline:${channelId ?? "none"}`;
+  // Keep the scroll node's DOM lifetime scoped to a channel. TanStack Router's
+  // scroll-restoration listener runs outside React and may write a saved
+  // scrollTop into the current scroll element during navigation; reusing the
+  // same node across channel routes can leave the newly-loaded message list
+  // painted at a stale offset until the user's next scroll event forces layout.
+  const scrollContainerDomKey = channelId ?? "none";
 
   const timelineBodySurface = selectTimelineBodySurface({
     deferredCount: deferredMessages.length,
-    isLoading,
+    isLoading: isLoading || isDeferredSnapshotStale,
     liveCount: messages.length,
   });
   const showTimelineSkeleton = timelineBodySurface === "skeleton";
-  const timelineIntroSurface = selectTimelineIntroSurface({
-    hasChannelIntro: channelIntro !== null && directMessageIntro === null,
-    hasDirectMessageIntro: directMessageIntro !== null,
-    isSkeletonVisible: showTimelineSkeleton,
-  });
-  const showDirectMessageIntro =
-    timelineIntroSurface === "direct-message-intro";
-  const showChannelIntro = timelineIntroSurface === "channel-intro";
-  const activeDirectMessageIntro = showDirectMessageIntro
-    ? directMessageIntro
-    : null;
-  const activeChannelIntro = showChannelIntro ? channelIntro : null;
-  const showIntro = showDirectMessageIntro || showChannelIntro;
-  const showGenericEmpty = timelineBodySurface === "empty" && !showIntro;
-  const showMessageList = timelineBodySurface === "list";
 
   const {
     highlightedMessageId,
@@ -223,6 +241,25 @@ const MessageTimelineBase = React.forwardRef<
     sentinelRef: topSentinelRef,
     targetMessageId,
   });
+
+  const timelineIntroSurface = selectTimelineIntroSurface({
+    hasChannelIntro: channelIntro !== null && directMessageIntro === null,
+    hasDirectMessageIntro: directMessageIntro !== null,
+    hasReachedChannelStart:
+      !isRenderedTimelineBehindHistoryPrepend(deferredMessages, messages) &&
+      (messages.length === 0 || (!hasOlderMessages && !isFetchingOlder)),
+    isSkeletonVisible: showTimelineSkeleton,
+  });
+  const showDirectMessageIntro =
+    timelineIntroSurface === "direct-message-intro";
+  const showChannelIntro = timelineIntroSurface === "channel-intro";
+  const activeDirectMessageIntro = showDirectMessageIntro
+    ? directMessageIntro
+    : null;
+  const activeChannelIntro = showChannelIntro ? channelIntro : null;
+  const showIntro = showDirectMessageIntro || showChannelIntro;
+  const showGenericEmpty = timelineBodySurface === "empty" && !showIntro;
+  const showMessageList = timelineBodySurface === "list";
 
   React.useImperativeHandle(
     ref,
@@ -306,13 +343,30 @@ const MessageTimelineBase = React.forwardRef<
             />
           </div>
         ) : null}
+        {/* `isFetchingOlder` clears on fetch resolve, but rows paint a frame
+            later off the deferred snapshot — keep the spinner up until then. */}
+        {isFetchingOlder ||
+        isRenderedTimelineBehindHistoryPrepend(deferredMessages, messages) ? (
+          <div
+            className={cn(
+              "pointer-events-none absolute inset-x-0 z-20 flex translate-y-3 justify-center px-4",
+              channelChrome.top,
+            )}
+            data-testid="message-timeline-fetching-older"
+          >
+            <span className="flex items-center rounded-full bg-background/80 p-1.5 shadow-sm ring-1 ring-border/40 backdrop-blur-sm">
+              <Spinner className="h-4 w-4 border-2 text-muted-foreground" />
+            </span>
+          </div>
+        ) : null}
         <div
           className={cn(
-            "absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-2 pt-1 [overflow-anchor:none]",
+            "absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-none px-2 pt-1 [overflow-anchor:none]",
             hasComposerOverlay ? "pb-24" : "pb-4",
           )}
           data-scroll-restoration-id={scrollRestorationId}
           data-testid="message-timeline"
+          key={scrollContainerDomKey}
           onScroll={onScroll}
           ref={scrollContainerRef}
         >
@@ -325,12 +379,6 @@ const MessageTimelineBase = React.forwardRef<
             ref={contentRef}
           >
             <div ref={topSentinelRef} aria-hidden className="h-px" />
-
-            {isFetchingOlder ? (
-              <div className="flex justify-center py-2">
-                <Spinner className="h-4 w-4 border-2 text-muted-foreground" />
-              </div>
-            ) : null}
 
             <div
               className={cn(

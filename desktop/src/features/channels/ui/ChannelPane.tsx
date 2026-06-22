@@ -83,9 +83,7 @@ type ChannelPaneProps = {
   isSending: boolean;
   isTimelineLoading: boolean;
   messages: TimelineMessage[];
-  /** Event id of the oldest unread top-level message at channel open, or null. */
   firstUnreadMessageId?: string | null;
-  /** Count of unread top-level messages at channel open. */
   unreadCount?: number;
   canResetThreadPanelWidth: boolean;
   onCancelEdit?: () => void;
@@ -137,10 +135,10 @@ type ChannelPaneProps = {
   onThreadPanelResizeStart: (
     event: React.PointerEvent<HTMLButtonElement>,
   ) => void;
-  /** Map from lowercase pubkey → persona display name for bot members. */
   personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
   openThreadHeadId: string | null;
+  shouldShowThreadSkeleton: boolean;
   openAgentSessionPubkey: string | null;
   onProfilePanelViewChange: (
     view: ProfilePanelView,
@@ -154,11 +152,8 @@ type ChannelPaneProps = {
   threadTypingPubkeys: string[];
   threadReplyTargetMessage: TimelineMessage | null;
   threadScrollTargetId: string | null;
-  /** Per-thread unread counts keyed by thread root id. */
   threadUnreadCounts?: ReadonlyMap<string, number>;
-  /** Subtree unread counts for in-panel summary rows, keyed by reply id. */
   threadReplyUnreadCounts?: ReadonlyMap<string, number>;
-  /** Event id of the first unread reply in the open thread panel. */
   threadFirstUnreadReplyId?: string | null;
   targetMessageId: string | null;
   typingPubkeys: string[];
@@ -229,6 +224,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   personaLookup,
   profiles,
   openThreadHeadId,
+  shouldShowThreadSkeleton,
   openAgentSessionPubkey,
   onProfilePanelViewChange,
   profilePanelPubkey,
@@ -266,7 +262,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   useComposerHeightPadding(
     timelineScrollRef,
     composerWrapperRef,
-    `${isSinglePanelView}:${hasMainComposerOverlay}`,
+    `${activeChannelId}:${isSinglePanelView}:${hasMainComposerOverlay}`,
   );
   const clearWelcomeComposerDismissTimer = React.useCallback(() => {
     if (welcomeComposerDismissTimerRef.current !== null) {
@@ -865,6 +861,9 @@ export const ChannelPane = React.memo(function ChannelPane({
                   threadHeadVideoReviewContext={threadHeadVideoReviewContext}
                   widthPx={threadPanelWidthPx}
                   threadReplies={threadMessages}
+                  threadUnreadCount={threadUnreadCounts?.get(
+                    threadHeadMessage.id,
+                  )}
                   threadReplyUnreadCounts={threadReplyUnreadCounts}
                   threadTypingPubkeys={threadTypingPubkeys}
                   toolbarExtraActions={
@@ -896,7 +895,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 panel
               );
             })()
-          : openThreadHeadId && activeChannel
+          : shouldShowThreadSkeleton
             ? (() => {
                 const panel = (
                   <MessageThreadPanelSkeleton

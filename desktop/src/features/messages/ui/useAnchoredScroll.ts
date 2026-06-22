@@ -34,12 +34,9 @@ type UseAnchoredScrollOptions = {
    *  debouncing, and post-prepend scroll restoration via the anchor. */
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
-  /** True while an older-history fetch is in flight. The fetch spinner renders
-   *  above the anchor, so toggling it shifts every row below it. The spinner
-   *  toggles on its own commit (no message change), so without this signal the
-   *  restoration effect — keyed on `messages` — wouldn't re-run to correct the
-   *  shift, leaving a visible one-frame jump. Threading it through makes the
-   *  anchor the single owner of every layout change above the reader's eye. */
+  /** True while an older-history fetch is in flight. Threaded in as a
+   *  restoration re-run trigger so the anchor reasserts itself around the
+   *  prepend on the fetch-state toggle, not only on the `messages` change. */
   isFetchingOlder?: boolean;
   /** When set, scroll to and highlight this message on mount and on change. */
   targetMessageId?: string | null;
@@ -366,7 +363,7 @@ export function useAnchoredScroll({
   // before the render. This is the single mechanism for keeping scroll
   // stable across prepends, appends, image loads, embed expansions, etc.
   // ---------------------------------------------------------------------------
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `isFetchingOlder` is an intentional re-run trigger, not a read — the fetch spinner renders above the anchor on its own commit (with `messages` unchanged), so we re-run restoration on its toggle to correct the spinner-induced shift via the existing anchor.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `isFetchingOlder` is an intentional re-run trigger, not a read. It re-runs restoration on fetch-state toggles so the anchor reasserts itself around the prepend; the correction is a no-op when nothing above the anchor moved.
   React.useLayoutEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -413,6 +410,11 @@ export function useAnchoredScroll({
     const prevCount = prevMessageCountRef.current;
     const newLatestArrived =
       lastMessage !== undefined && lastMessage.id !== prevLastId;
+    // Count growth, not tail-id change, is the reliable "messages arrived"
+    // signal. The relay can deliver a message that sorts ahead of an existing
+    // same-second row, so the list grows without the *last* id changing —
+    // `newLatestArrived` misses that case and the unread counter never bumps.
+    const messagesArrived = messages.length - prevCount;
 
     // One-shot: an outbound send armed `scrollToBottomOnNextUpdate`. When the
     // resulting append lands, snap to bottom regardless of the current anchor,
@@ -444,9 +446,8 @@ export function useAnchoredScroll({
         setIsAtBottom(true);
       }
 
-      if (newLatestArrived) {
-        const added = Math.max(1, messages.length - prevCount);
-        setNewMessageCount((current) => current + added);
+      if (messagesArrived > 0) {
+        setNewMessageCount((current) => current + messagesArrived);
       }
     }
 
@@ -484,14 +485,32 @@ export function useAnchoredScroll({
 
     let disposed = false;
     let observer: IntersectionObserver | null = null;
+    let rearmFrame = 0;
+    // Once the timeline is scrollable, a parked sentinel must not keep
+    // re-firing: require it to actually leave and re-enter the preload band
+    // (a real scroll) before the next fetch. Without this, re-observing a
+    // still-intersecting sentinel synthesizes back-to-back fetches — the
+    // "spinner flashes a few times then a burst of rows" on reply-heavy
+    // channels. Auto-fill of a not-yet-scrollable page bypasses the gate.
+    let mustExitBandBeforeFetch = false;
 
     const start = () => {
       if (disposed) return;
       observer = new IntersectionObserver(
         ([entry]) => {
-          if (!entry?.isIntersecting || disposed || fetchingOlderRef.current) {
+          if (!entry?.isIntersecting) {
+            mustExitBandBeforeFetch = false;
             return;
           }
+          if (disposed || fetchingOlderRef.current || mustExitBandBeforeFetch) {
+            return;
+          }
+
+          // One older fetch at a time. While a scroll-up is in flight, drop
+          // further triggers outright rather than queueing retries — fast
+          // scrolling otherwise stacks several sequential page loads. The
+          // post-fetch re-arm fires the next page only when the sentinel is
+          // still (or again) in the preload band.
           fetchingOlderRef.current = true;
           observer?.disconnect();
 
@@ -506,8 +525,18 @@ export function useAnchoredScroll({
             })
             .finally(() => {
               fetchingOlderRef.current = false;
-              // Re-observe in case there's more history to load.
-              start();
+              // If the prepend made the timeline scrollable, require a real
+              // scroll (sentinel leaving the band) before the next fetch.
+              // A still-too-short page keeps auto-filling.
+              mustExitBandBeforeFetch =
+                container.scrollHeight - container.clientHeight >
+                AT_BOTTOM_THRESHOLD_PX;
+              // Re-observe next frame so the fresh observer's callback sees the
+              // post-prepend intersection state.
+              rearmFrame = window.requestAnimationFrame(() => {
+                rearmFrame = 0;
+                start();
+              });
             });
         },
         { root: container, rootMargin: "200px 0px 0px 0px" },
@@ -518,6 +547,9 @@ export function useAnchoredScroll({
     start();
     return () => {
       disposed = true;
+      if (rearmFrame !== 0) {
+        window.cancelAnimationFrame(rearmFrame);
+      }
       observer?.disconnect();
     };
   }, [

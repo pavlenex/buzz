@@ -16,8 +16,10 @@ import {
 import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
+import { useLiveHomeFeedActions } from "@/app/useLiveHomeFeedActions";
 import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
 import { useSettingsShortcuts } from "@/app/useSettingsShortcuts";
+import { useThreadActivityFeedItems } from "@/app/useThreadActivityFeedItems";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 import {
   channelsQueryKey,
@@ -28,6 +30,7 @@ import {
 } from "@/features/channels/hooks";
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
 import { useMembershipNotifications } from "@/features/channels/useMembershipNotifications";
+import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { getThreadReference } from "@/features/messages/lib/threading";
 import { hasMentionForEvent } from "@/features/notifications/lib/shouldNotify";
 import { useThreadFollows } from "@/features/messages/lib/useThreadFollows";
@@ -104,8 +107,6 @@ export function AppShell() {
     null,
   );
   const [searchFocusRequest, setSearchFocusRequest] = React.useState(0);
-  const [topbarSearchHidden, setTopbarSearchHidden] = React.useState(false);
-  const [topbarSearchLoading, setTopbarSearchLoading] = React.useState(false);
   const [browseDialogType, setBrowseDialogType] =
     React.useState<BrowseDialogType>(null);
   const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
@@ -131,9 +132,7 @@ export function AppShell() {
     () => deriveShellRoute(location.pathname),
     [location.pathname],
   );
-  // Settings lives in the history stack: /settings?section=… opens it, back
-  // (or "Back to app") returns to the previous entry — panels and all — and
-  // reloads restore the open section from the URL.
+  // Settings lives in history so back returns to the previous app entry.
   const settingsOpen = location.pathname === "/settings";
   const locationSearchSection = (location.search as { section?: unknown })
     .section;
@@ -166,13 +165,18 @@ export function AppShell() {
   const setUserStatusMutation = useSetUserStatusMutation(deferredPubkey);
   const { feedProfilesQuery, homeFeedQuery, notificationSettings } =
     useHomeFeedNotifications(identityQuery.data?.pubkey);
+  const feedItemState = useFeedItemState(identityQuery.data?.pubkey);
   useReminderNotifications(
     identityQuery.data?.pubkey,
     notificationSettings.settings,
   );
-  const refetchHomeFeedOnLiveMention = React.useEffectEvent(() => {
+  const refetchHomeFeedFromLiveSignal = React.useEffectEvent(() => {
     void homeFeedQuery.refetch();
   });
+  useLiveHomeFeedActions(
+    identityQuery.data?.pubkey,
+    refetchHomeFeedFromLiveSignal,
+  );
   const handleChannelNotification = React.useEffectEvent(
     (_channelId: string, _event: RelayEvent) => {
       if (!notificationSettings.settings.desktopEnabled) return;
@@ -317,7 +321,9 @@ export function AppShell() {
     unreadChannelIds,
     unreadChannelCounts,
     highPriorityUnreadChannelIds,
+    unreadChannelNotificationCount,
     getEffectiveTimestamp: getChannelReadAt,
+    getOwnTimestamp: getOwnReadAt,
     readStateVersion,
     setContextParentResolver,
     participatedRootIds,
@@ -335,14 +341,28 @@ export function AppShell() {
     notifyForActiveChannel: notificationSettings.settings.notifyWhileViewing,
     onChannelMessage: handleChannelNotification,
     onDmMessage: handleDmNotification,
-    onLiveMention: refetchHomeFeedOnLiveMention,
+    onLiveMention: refetchHomeFeedFromLiveSignal,
     onThreadReplyDesktopNotification: handleThreadReplyDesktopNotification,
     followedRootIds,
   });
 
   const getThreadReadAt = React.useCallback(
-    (rootId: string) => getChannelReadAt(`thread:${rootId}`),
-    [getChannelReadAt],
+    (rootId: string, channelId?: string | null) => {
+      const threadReadAt = getOwnReadAt(`thread:${rootId}`);
+      if (!channelId) {
+        return threadReadAt;
+      }
+
+      const channelReadAt = getChannelReadAt(channelId);
+      if (threadReadAt === null) {
+        return channelReadAt;
+      }
+      if (channelReadAt === null) {
+        return threadReadAt;
+      }
+      return Math.max(threadReadAt, channelReadAt);
+    },
+    [getChannelReadAt, getOwnReadAt],
   );
 
   const markThreadRead = React.useCallback(
@@ -354,12 +374,13 @@ export function AppShell() {
     },
     [markChannelRead],
   );
+  const threadActivityFeedItems = useThreadActivityFeedItems(
+    threadActivityItems,
+    mutedRootIds,
+    channels,
+  );
 
-  // Badge count is computed here (rather than inside useHomeFeedNotifications)
-  // so it can consume the NIP-RS read-state lifted from the single
-  // ReadStateManager mounted via useUnreadChannels above. Channel-backed
-  // feed items contribute to the badge iff strictly newer than that
-  // channel's read marker; non-channel items keep their seen-set fallback.
+  // Badge count consumes the shared NIP-RS read-state from useUnreadChannels.
   const { homeBadgeCount, homeBadgeCountExcludingHighPriority } =
     useHomeFeedNotificationState(
       homeFeedQuery.data,
@@ -372,6 +393,9 @@ export function AppShell() {
       highPriorityUnreadChannelIds,
       feedProfilesQuery.data?.profiles,
       mutedChannelIds,
+      feedItemState.unreadSet,
+      threadActivityFeedItems,
+      getThreadReadAt,
     );
 
   const isNotifiedForThread = React.useCallback(
@@ -548,19 +572,13 @@ export function AppShell() {
 
   React.useEffect(() => {
     const numericCount =
-      highPriorityUnreadChannelIds.size + homeBadgeCountExcludingHighPriority;
+      unreadChannelNotificationCount + homeBadgeCountExcludingHighPriority;
     if (numericCount > 0) {
       void setDesktopAppBadge({ kind: "count", count: numericCount });
-    } else if (unreadChannelIds.size > 0) {
-      void setDesktopAppBadge({ kind: "dot" });
     } else {
       void setDesktopAppBadge({ kind: "none" });
     }
-  }, [
-    homeBadgeCountExcludingHighPriority,
-    highPriorityUnreadChannelIds.size,
-    unreadChannelIds.size,
-  ]);
+  }, [homeBadgeCountExcludingHighPriority, unreadChannelNotificationCount]);
 
   // Dispatch `buzz://message` deep links into the router.
   useMessageDeepLinks();
@@ -721,9 +739,10 @@ export function AppShell() {
             unfollowThread: handleUnfollowThread,
             isFollowingThread,
             isNotifiedForThread,
-            setTopbarSearchHidden,
-            setTopbarSearchLoading,
+            isThreadMuted: (rootId) => mutedRootIds.has(rootId),
             threadActivityItems,
+            threadActivityFeedItems,
+            feedItemState,
           }}
         >
           <HuddleProvider>
@@ -743,17 +762,8 @@ export function AppShell() {
                       <AppTopChrome
                         canGoBack={canGoBack}
                         canGoForward={canGoForward}
-                        channels={channels}
-                        currentPubkey={identityQuery.data?.pubkey}
                         onGoBack={goBack}
                         onGoForward={goForward}
-                        onOpenChannel={(channelId) => {
-                          void goChannel(channelId);
-                        }}
-                        onOpenResult={handleOpenSearchResult}
-                        searchHidden={topbarSearchHidden}
-                        searchLoading={topbarSearchLoading}
-                        searchFocusRequest={searchFocusRequest}
                       />
                     ) : null}
                     {settingsOpen ? (
@@ -876,6 +886,7 @@ export function AppShell() {
                           onMarkAllChannelsRead={markAllChannelsRead}
                           onMarkChannelRead={markChannelRead}
                           onMarkChannelUnread={markChannelUnread}
+                          onBrowseChannels={handleOpenBrowseChannels}
                           onOpenDm={async ({ pubkeys }) => {
                             const directMessage =
                               await openDmMutation.mutateAsync({
@@ -887,6 +898,9 @@ export function AppShell() {
                           onSelectChannel={(channelId) =>
                             void goChannel(channelId)
                           }
+                          onOpenSearchResult={handleOpenSearchResult}
+                          searchChannels={channels}
+                          searchFocusRequest={searchFocusRequest}
                           onSelectHome={() => void goHome()}
                           onSelectProjects={() => void goProjects()}
                           onSelectPulse={() => void goPulse()}
