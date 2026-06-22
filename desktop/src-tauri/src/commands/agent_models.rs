@@ -6,12 +6,12 @@ use tauri::{AppHandle, State};
 use crate::{
     app_state::AppState,
     managed_agents::{
-        build_managed_agent_summary, default_agent_workdir, find_managed_agent_mut,
-        known_acp_runtime, load_managed_agents, load_personas, managed_agent_avatar_url,
-        missing_command_message, normalize_agent_args, resolve_command,
+        AgentModelInfo, AgentModelsResponse, ManagedAgentRecord, UpdateManagedAgentRequest,
+        UpdateManagedAgentResponse, build_managed_agent_summary, default_agent_workdir,
+        find_managed_agent_mut, known_acp_runtime, load_managed_agents, load_personas,
+        managed_agent_avatar_url, missing_command_message, normalize_agent_args, resolve_command,
         resolve_effective_prompt_model_provider, save_managed_agents, sync_managed_agent_processes,
-        try_regenerate_nest, AgentModelInfo, AgentModelsResponse, UpdateManagedAgentRequest,
-        UpdateManagedAgentResponse,
+        try_regenerate_nest,
     },
     relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
@@ -21,6 +21,27 @@ fn trim_optional(value: Option<String>) -> Option<String> {
     value
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+fn is_persona_runtime_avatar(record: &ManagedAgentRecord, avatar_url: &str) -> bool {
+    record.persona_id.is_some()
+        && managed_agent_avatar_url(&record.agent_command)
+            .as_deref()
+            .is_some_and(|runtime_avatar_url| runtime_avatar_url == avatar_url.trim())
+}
+
+fn profile_sync_avatar_url(record: &ManagedAgentRecord) -> Option<String> {
+    record
+        .avatar_url
+        .clone()
+        .filter(|avatar_url| !is_persona_runtime_avatar(record, avatar_url))
+        .or_else(|| {
+            if record.persona_id.is_none() {
+                managed_agent_avatar_url(&record.agent_command)
+            } else {
+                None
+            }
+        })
 }
 
 /// Query available models from an agent via `buzz-acp models --json`.
@@ -270,10 +291,7 @@ pub async fn update_managed_agent(
             let avatar_url = if avatar_changed || record.avatar_url_cleared {
                 record.avatar_url.clone()
             } else {
-                record
-                    .avatar_url
-                    .clone()
-                    .or_else(|| managed_agent_avatar_url(&record.agent_command))
+                profile_sync_avatar_url(record)
             };
             let auth_tag = record.auth_tag.clone();
             Some((agent_keys, relay_url, display_name, avatar_url, auth_tag))

@@ -9,6 +9,7 @@ import type {
   UpdateManagedAgentInput,
 } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import { isKnownRuntimeAvatarUrl } from "@/shared/lib/runtimeAvatar";
 
 export type ProfileChannelLink = {
   id: string;
@@ -135,6 +136,24 @@ export function buildPersonaDraftProfile(persona: AgentPersona): Profile {
   };
 }
 
+export function resolvePanelProfile({
+  managedAgent,
+  persona,
+  profile,
+}: {
+  managedAgent: ManagedAgent | undefined;
+  persona: AgentPersona | undefined;
+  profile: Profile | undefined;
+}): Profile | undefined {
+  const baseProfile =
+    profile ?? (persona ? buildPersonaDraftProfile(persona) : undefined);
+  return withProfileAvatarFallback(
+    baseProfile,
+    [managedAgent?.avatarUrl, persona?.avatarUrl],
+    { ignoreRuntimeAvatars: Boolean(persona ?? managedAgent?.personaId) },
+  );
+}
+
 export function resolveProfileAvatarUrl(
   ...candidates: Array<string | null | undefined>
 ): string | null {
@@ -147,15 +166,35 @@ export function resolveProfileAvatarUrl(
 
 export function withProfileAvatarFallback(
   profile: Profile | undefined,
-  ...fallbackAvatarUrls: Array<string | null | undefined>
+  fallbackAvatarUrls: Array<string | null | undefined>,
+  options: { ignoreRuntimeAvatars?: boolean } = {},
 ): Profile | undefined {
-  const avatarUrl = resolveProfileAvatarUrl(
+  const profileAvatarUrl = normalizeProfileFallbackAvatarUrl(
     profile?.avatarUrl,
-    ...fallbackAvatarUrls,
+    options.ignoreRuntimeAvatars,
+  );
+  const avatarUrl = resolveProfileAvatarUrl(
+    profileAvatarUrl,
+    ...fallbackAvatarUrls.map((avatarUrl) =>
+      normalizeProfileFallbackAvatarUrl(
+        avatarUrl,
+        options.ignoreRuntimeAvatars,
+      ),
+    ),
   );
   return profile && avatarUrl !== profile.avatarUrl
     ? { ...profile, avatarUrl }
     : profile;
+}
+
+function normalizeProfileFallbackAvatarUrl(
+  avatarUrl: string | null | undefined,
+  ignoreRuntimeAvatars = false,
+): string | null {
+  const trimmed = avatarUrl?.trim();
+  if (!trimmed) return null;
+  if (ignoreRuntimeAvatars && isKnownRuntimeAvatarUrl(trimmed)) return null;
+  return trimmed;
 }
 
 export function resolveProfileDisplayName({

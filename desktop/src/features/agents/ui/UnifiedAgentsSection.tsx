@@ -5,6 +5,7 @@ import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlA
 import { useUserProfileQuery } from "@/features/profile/hooks";
 import { useFeedbackToasts } from "@/shared/hooks/useToastEffect";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
+import { isKnownRuntimeAvatarUrl } from "@/shared/lib/runtimeAvatar";
 import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 import {
   DropdownMenu,
@@ -253,8 +254,8 @@ function AgentPersonaCard({
   const profileQuery = useUserProfileQuery(agent?.pubkey);
   const avatarUrl = agent
     ? firstAvatarUrl(
-        profileQuery.data?.avatarUrl,
-        agent.avatarUrl,
+        withoutRuntimeAvatar(profileQuery.data?.avatarUrl),
+        withoutRuntimeAvatar(agent.avatarUrl),
         persona.avatarUrl,
       )
     : persona.avatarUrl;
@@ -312,6 +313,14 @@ function firstAvatarUrl(
     if (trimmed) return trimmed;
   }
   return null;
+}
+
+function withoutRuntimeAvatar(
+  avatarUrl: string | null | undefined,
+): string | null {
+  const trimmed = avatarUrl?.trim();
+  if (!trimmed || isKnownRuntimeAvatarUrl(trimmed)) return null;
+  return trimmed;
 }
 
 function SectionHeader({

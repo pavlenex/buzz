@@ -68,16 +68,15 @@ import { useProfileFieldBuckets } from "@/features/profile/ui/UserProfilePanelFi
 import { submitProfilePersonaDialog } from "@/features/profile/ui/UserProfilePanelPersonaSubmit";
 import { UserProfilePersonaDialogs } from "@/features/profile/ui/UserProfilePersonaDialogs";
 import {
-  buildPersonaDraftProfile,
   deriveProfileChannels,
   PROFILE_PANEL_VIEW_TITLES,
   type ProfilePanelView,
   resolveAgentInstruction,
   resolveOwnerHandle,
+  resolvePanelProfile,
   resolveProfileDisplayName,
   type UserProfilePanelProps,
   useRetainedPersona,
-  withProfileAvatarFallback,
 } from "@/features/profile/ui/UserProfilePanelUtils";
 import { useUserStatusQuery } from "@/features/user-status/hooks";
 import { useAgentSession } from "@/shared/context/AgentSessionContext";
@@ -225,16 +224,11 @@ export function UserProfilePanel({
   const unfollowMutation = useUnfollowMutation(currentPubkey);
   const { onOpenAgentSession } = useAgentSession();
   const { goChannel } = useAppNavigation();
-  const profile = React.useMemo(() => {
-    const baseProfile =
-      profileQuery.data ??
-      (resolvedPersona ? buildPersonaDraftProfile(resolvedPersona) : undefined);
-    return withProfileAvatarFallback(
-      baseProfile,
-      managedAgent?.avatarUrl,
-      resolvedPersona?.avatarUrl,
-    );
-  }, [managedAgent?.avatarUrl, profileQuery.data, resolvedPersona]);
+  const profile = resolvePanelProfile({
+    managedAgent,
+    persona: resolvedPersona,
+    profile: profileQuery.data,
+  });
   const presenceStatus = pubkeyLower
     ? presenceQuery.data?.[pubkeyLower]
     : undefined;

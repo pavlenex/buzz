@@ -48,6 +48,7 @@ fn created_avatar_prefers_explicit_input() {
         Some(" https://x/input.png "),
         Some("https://x/persona.png".to_string()),
         "goose",
+        true,
     );
 
     assert_eq!(resolved.as_deref(), Some("https://x/input.png"));
@@ -55,8 +56,12 @@ fn created_avatar_prefers_explicit_input() {
 
 #[test]
 fn created_avatar_uses_persona_before_command_fallback() {
-    let resolved =
-        resolve_created_avatar_url(None, Some(" https://x/persona.png ".to_string()), "goose");
+    let resolved = resolve_created_avatar_url(
+        None,
+        Some(" https://x/persona.png ".to_string()),
+        "goose",
+        true,
+    );
 
     assert_eq!(resolved.as_deref(), Some("https://x/persona.png"));
 }
@@ -65,9 +70,16 @@ fn created_avatar_uses_persona_before_command_fallback() {
 fn created_avatar_uses_command_fallback_without_input_or_persona() {
     use crate::managed_agents::managed_agent_avatar_url;
 
-    let resolved = resolve_created_avatar_url(None, None, "goose");
+    let resolved = resolve_created_avatar_url(None, None, "goose", true);
 
     assert_eq!(resolved, managed_agent_avatar_url("goose"));
+}
+
+#[test]
+fn created_persona_avatar_does_not_use_command_fallback() {
+    let resolved = resolve_created_avatar_url(None, None, "goose", false);
+
+    assert_eq!(resolved, None);
 }
 
 #[test]
@@ -169,6 +181,7 @@ fn legacy_avatar_prefers_persona_over_corrupted_relay_picture() {
         Some("https://x/persona.png".to_string()),
         Some("https://x/default-icon.png".to_string()),
         "goose",
+        false,
     );
 
     assert_eq!(resolved, "https://x/persona.png");
@@ -176,7 +189,12 @@ fn legacy_avatar_prefers_persona_over_corrupted_relay_picture() {
 
 #[test]
 fn legacy_avatar_falls_back_to_relay_picture_without_persona() {
-    let resolved = resolve_legacy_avatar(None, Some("https://x/relay.png".to_string()), "goose");
+    let resolved = resolve_legacy_avatar(
+        None,
+        Some("https://x/relay.png".to_string()),
+        "goose",
+        false,
+    );
 
     assert_eq!(resolved, "https://x/relay.png");
 }
@@ -185,16 +203,45 @@ fn legacy_avatar_falls_back_to_relay_picture_without_persona() {
 fn legacy_avatar_falls_back_to_command_icon_when_no_persona_or_relay() {
     use crate::managed_agents::managed_agent_avatar_url;
 
-    let resolved = resolve_legacy_avatar(None, None, "goose");
+    let resolved = resolve_legacy_avatar(None, None, "goose", true);
 
     assert_eq!(resolved, managed_agent_avatar_url("goose").unwrap());
 }
 
 #[test]
 fn legacy_avatar_empty_when_nothing_resolves() {
-    let resolved = resolve_legacy_avatar(None, None, "totally-unknown-command");
+    let resolved = resolve_legacy_avatar(None, None, "totally-unknown-command", true);
 
     assert!(resolved.is_empty());
+}
+
+#[test]
+fn legacy_persona_avatar_does_not_use_command_fallback() {
+    let resolved = resolve_legacy_avatar(None, None, "goose", false);
+
+    assert!(resolved.is_empty());
+}
+
+#[test]
+fn detects_command_avatar_for_persona_agents() {
+    let command_avatar = crate::managed_agents::managed_agent_avatar_url("goose")
+        .expect("goose avatar should resolve");
+
+    assert!(is_command_avatar_for_persona(
+        Some("builtin:fizz"),
+        "goose",
+        &command_avatar,
+    ));
+    assert!(!is_command_avatar_for_persona(
+        None,
+        "goose",
+        &command_avatar,
+    ));
+    assert!(!is_command_avatar_for_persona(
+        Some("builtin:fizz"),
+        "goose",
+        "https://x/fizz.png",
+    ));
 }
 
 #[test]
