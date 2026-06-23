@@ -15,6 +15,7 @@ import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 
 import type { Workspace } from "@/features/workspaces/types";
 import { AddWorkspaceDialog } from "@/features/workspaces/ui/AddWorkspaceDialog";
+import { WorkspaceSwitcher } from "@/features/workspaces/ui/WorkspaceSwitcher";
 import { useDeferredLoad } from "@/shared/hooks/useDeferredStartup";
 import {
   useChannelSections,
@@ -529,6 +530,17 @@ export function AppSidebar({
           className="mt-(--buzz-top-chrome-height,2.5rem) shrink-0 px-2 pt-2"
           data-testid="sidebar-pinned-header"
         >
+          <div className="mb-2.5 group-data-[collapsible=icon]:hidden">
+            <WorkspaceSwitcher
+              activeWorkspace={activeWorkspace}
+              onAddWorkspace={onOpenAddWorkspace}
+              onRemoveWorkspace={onRemoveWorkspace}
+              onSwitchWorkspace={onSwitchWorkspace}
+              onUpdateWorkspace={onUpdateWorkspace}
+              variant="sidebar-card"
+              workspaces={workspaces}
+            />
+          </div>
           <TopbarSearch
             channels={searchChannels}
             currentPubkey={currentPubkey}
@@ -860,21 +872,15 @@ export function AppSidebar({
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarProfileCard
-                  activeWorkspace={activeWorkspace}
                   isPresencePending={isPresencePending}
-                  onOpenAddWorkspace={onOpenAddWorkspace}
                   onOpenSettings={onSelectSettings}
-                  onRemoveWorkspace={onRemoveWorkspace}
                   onSetPresenceStatus={onSetPresenceStatus}
                   onSetUserStatus={onSetUserStatus}
                   onClearUserStatus={onClearUserStatus}
-                  onSwitchWorkspace={onSwitchWorkspace}
-                  onUpdateWorkspace={onUpdateWorkspace}
                   profile={profile}
                   resolvedDisplayName={resolvedDisplayName}
                   selfPresenceStatus={selfPresenceStatus}
                   selfUserStatus={selfUserStatus}
-                  workspaces={workspaces}
                 />
               </SidebarMenuItem>
             </SidebarMenu>
