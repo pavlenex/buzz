@@ -981,3 +981,19 @@ fn migrate_legacy_nest_preserves_user_edited_agents_md() {
         "a user-edited live AGENTS.md must never be clobbered"
     );
 }
+
+#[test]
+fn ensure_nest_writes_agents_md_byte_equal_to_template() {
+    // Guard for the legacy-AGENTS.md migration: copy_file_over_generated_default
+    // detects an untouched default by byte-equality against AGENTS_MD; that holds only
+    // while ensure_nest_at stays an identity on a fresh file. Drift would silently
+    // re-strand the legacy file, so pin the invariant here.
+    let dir = tempfile::tempdir().unwrap();
+    let current = dir.path().join(".buzz");
+    crate::managed_agents::ensure_nest_at(&current).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(current.join("AGENTS.md")).unwrap(),
+        crate::managed_agents::AGENTS_MD,
+        "ensure_nest_at must write AGENTS.md byte-equal to the embedded template"
+    );
+}
