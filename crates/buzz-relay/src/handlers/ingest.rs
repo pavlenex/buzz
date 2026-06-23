@@ -408,13 +408,16 @@ pub(crate) fn requires_h_channel_scope(kind: u32) -> bool {
     )
 }
 
-/// Channel-message kinds that carry a free-text display body, mirroring the
-/// thread-reply set the CLI treats as channel messages (`messages.rs`). In a
-/// latched E2E DM these bodies MUST be NIP-44 ciphertext (rule 15c) — gating
-/// kind:9 alone left the edit (40003), v2 (40002), diff (40008), and forum
-/// comment (45003) paths able to land plaintext into a latched channel, the
-/// exact leak the latch exists to prevent. None of these are global-only
-/// kinds, so each carries an `h` tag and resolves to a channel at ingest.
+/// Channel-scoped kinds that carry a free-text display body. In a latched E2E
+/// DM these bodies MUST be NIP-44 ciphertext (rule 15c) — gating kind:9 alone
+/// left the edit (40003), v2 (40002), diff (40008), forum comment (45003),
+/// forum post (45001), and canvas (40100) paths able to land plaintext into a
+/// latched channel, the exact leak the latch exists to prevent. None of these
+/// are global-only kinds, so each carries an `h` tag and resolves to a channel
+/// at ingest. The boundary is "carries a free-text body", not membership in any
+/// one enumeration of channel kinds: structured-content kinds (forum vote
+/// `+`/`-`, reactions, deletions, membership/admin/typing — empty content) and
+/// global-only kinds (kind:1) stay out because they have no user text to leak.
 pub(crate) fn is_e2e_enforced_content_kind(kind: u32) -> bool {
     matches!(
         kind,
@@ -423,6 +426,8 @@ pub(crate) fn is_e2e_enforced_content_kind(kind: u32) -> bool {
             | KIND_STREAM_MESSAGE_EDIT
             | KIND_STREAM_MESSAGE_DIFF
             | KIND_FORUM_COMMENT
+            | KIND_FORUM_POST
+            | KIND_CANVAS
     )
 }
 
@@ -2273,16 +2278,19 @@ mod tests {
 
     #[test]
     fn e2e_gate_covers_all_channel_message_kinds() {
-        // The latch-enforcement gate must span every channel-message kind that
+        // The latch-enforcement gate must span every channel-scoped kind that
         // carries a free-text display body — not kind:9 alone. A plaintext edit
-        // (40003), v2 message (40002), diff (40008), or forum comment (45003)
-        // into a latched DM is the exact leak the latch exists to prevent.
+        // (40003), v2 message (40002), diff (40008), forum comment (45003),
+        // forum post (45001), or canvas (40100) into a latched DM is the exact
+        // leak the latch exists to prevent.
         for kind in [
             KIND_STREAM_MESSAGE,
             KIND_STREAM_MESSAGE_V2,
             KIND_STREAM_MESSAGE_EDIT,
             KIND_STREAM_MESSAGE_DIFF,
             KIND_FORUM_COMMENT,
+            KIND_FORUM_POST,
+            KIND_CANVAS,
         ] {
             assert!(
                 is_e2e_enforced_content_kind(kind),
@@ -2293,21 +2301,15 @@ mod tests {
 
     #[test]
     fn e2e_gate_excludes_uncovered_kinds() {
-        // Reactions, deletions, and forum votes carry no free-text display body,
-        // and profiles are global-only — none can leak readable content into a
-        // latched channel, so gating them would only reject legitimate events.
-        // Forum posts (45001) carry a body but sit outside the channel-message
-        // set the gate mirrors; they are deliberately out of this fix's scope.
-        for kind in [
-            KIND_REACTION,
-            KIND_DELETION,
-            KIND_FORUM_VOTE,
-            KIND_PROFILE,
-            KIND_FORUM_POST,
-        ] {
+        // Reactions, deletions, and forum votes carry no free-text body (emoji,
+        // empty, or "+"/"-" respectively), and profiles are global-only — none
+        // can leak readable user content into a latched channel, so gating them
+        // would only reject legitimate events. The boundary is "free-text body",
+        // not membership in any one enumeration of channel kinds.
+        for kind in [KIND_REACTION, KIND_DELETION, KIND_FORUM_VOTE, KIND_PROFILE] {
             assert!(
                 !is_e2e_enforced_content_kind(kind),
-                "kind {kind} is outside the gated channel-message set"
+                "kind {kind} carries no free-text body and must not be E2E-gated"
             );
         }
     }
