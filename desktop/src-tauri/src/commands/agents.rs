@@ -60,6 +60,7 @@ fn resolve_created_avatar_url(
     requested_avatar_url: Option<&str>,
     persona_avatar_url: Option<String>,
     agent_command: &str,
+    use_command_fallback: bool,
 ) -> Option<String> {
     requested_avatar_url
         .and_then(trim_to_optional_string)
@@ -68,7 +69,35 @@ fn resolve_created_avatar_url(
                 .as_deref()
                 .and_then(trim_to_optional_string)
         })
-        .or_else(|| managed_agent_avatar_url(agent_command))
+        .or_else(|| {
+            if use_command_fallback {
+                managed_agent_avatar_url(agent_command)
+            } else {
+                None
+            }
+        })
+}
+
+fn is_retired_fizz_data_url(persona_id: Option<&str>, avatar_url: &str) -> bool {
+    persona_id == Some("builtin:fizz") && avatar_url.trim_start().starts_with("data:image/")
+}
+
+fn is_command_avatar_for_persona(
+    persona_id: Option<&str>,
+    agent_command: &str,
+    avatar_url: &str,
+) -> bool {
+    persona_id.is_some()
+        && managed_agent_avatar_url(agent_command)
+            .as_deref()
+            .is_some_and(|command_avatar_url| command_avatar_url == avatar_url.trim())
+}
+
+fn filter_retired_fizz_avatar(
+    persona_id: Option<&str>,
+    avatar_url: Option<String>,
+) -> Option<String> {
+    avatar_url.filter(|url| !is_retired_fizz_data_url(persona_id, url))
 }
 
 #[cfg(feature = "mesh-llm")]
@@ -145,7 +174,6 @@ async fn start_local_agent_with_preflight(
 /// empty map would surface as an opaque 401 from the provider.
 fn build_deploy_payload(
     app: &AppHandle,
-    state: &AppState,
     record: &ManagedAgentRecord,
 ) -> Result<serde_json::Value, String> {
     // Merge persona env_vars + agent env_vars for provider deploy. Same
@@ -175,15 +203,7 @@ fn build_deploy_payload(
 
     Ok(serde_json::json!({
         "name": &record.name,
-        // Resolve the per-agent pin against the active workspace relay here:
-        // this payload crosses the host boundary to a remote provider harness
-        // that has no notion of the desktop's workspace, so the blank→workspace
-        // fallback (otherwise applied at read-time in `effective_agent_relay_url`)
-        // must be materialized into a concrete URL before serializing.
-        "relay_url": crate::relay::effective_agent_relay_url(
-            &record.relay_url,
-            &relay_ws_url_with_override(state),
-        ),
+        "relay_url": &record.relay_url,
         "private_key_nsec": &record.private_key_nsec,
         "auth_tag": &record.auth_tag,
         "agent_command": &record.agent_command,
@@ -393,15 +413,13 @@ pub async fn create_managed_agent(
             .to_bech32()
             .map_err(|error| format!("failed to encode private key: {error}"))?;
 
-        // Store the relay override exactly as supplied (trimmed). An explicit
-        // value pins the agent; empty stays empty and resolves to the active
-        // workspace relay at read-time. Uniform for Local and Provider.
         let resolved_relay_url = input
             .relay_url
             .as_deref()
             .map(str::trim)
-            .unwrap_or("")
-            .to_string();
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| relay_ws_url_with_override(&state));
 
         (keys, private_key_nsec, pubkey, resolved_relay_url, input)
     };
@@ -522,6 +540,7 @@ pub async fn create_managed_agent(
             input.avatar_url.as_deref(),
             persona_avatar_url,
             &agent_command,
+            requested_persona_id.is_none(),
         );
 
         let record = crate::managed_agents::ManagedAgentRecord {
@@ -532,6 +551,7 @@ pub async fn create_managed_agent(
             auth_tag: auth_tag.clone(),
             relay_url: resolved_relay_url.clone(),
             avatar_url: resolved_avatar_url.clone(),
+            avatar_url_cleared: false,
             acp_command: input
                 .acp_command
                 .as_deref()
@@ -676,7 +696,7 @@ pub async fn create_managed_agent(
                     .iter()
                     .find(|r| r.pubkey == pubkey)
                     .ok_or_else(|| "agent disappeared".to_string())?;
-                build_deploy_payload(&app, &state, rec)
+                build_deploy_payload(&app, rec)
             };
             // The agent was already persisted in Phase 3 — converting a
             // persona-resolution failure into `spawn_error` (rather than
@@ -743,10 +763,11 @@ pub(crate) struct ProfileReconcileData {
     pub(crate) private_key_nsec: String,
     pub(crate) name: String,
     pub(crate) relay_url: String,
-    /// Expected avatar URL for the published profile. `None` for legacy records
-    /// that predate the `avatar_url` field — these will be backfilled from the
-    /// relay's existing kind:0 profile on first reconciliation.
+    /// Expected avatar URL for the published profile. `None` can mean either a
+    /// legacy missing value or an explicit clear; `avatar_url_cleared`
+    /// disambiguates those cases.
     pub(crate) avatar_url: Option<String>,
+    pub(crate) avatar_url_cleared: bool,
     pub(crate) auth_tag: Option<String>,
     /// The agent's pubkey (hex). Needed to update the persisted record during
     /// avatar backfill migration.
@@ -802,6 +823,7 @@ pub async fn start_managed_agent(
             name: record.name.clone(),
             relay_url: record.relay_url.clone(),
             avatar_url: record.avatar_url.clone(),
+            avatar_url_cleared: record.avatar_url_cleared,
             auth_tag: record.auth_tag.clone(),
             pubkey: record.pubkey.clone(),
             agent_command: record.agent_command.clone(),
@@ -814,7 +836,7 @@ pub async fn start_managed_agent(
             StartTarget::Provider {
                 backend: record.backend.clone(),
                 cached_binary_path: record.provider_binary_path.clone(),
-                agent_json: build_deploy_payload(&app, &state, record)?,
+                agent_json: build_deploy_payload(&app, record)?,
             }
         };
 
@@ -900,30 +922,44 @@ fn resolve_legacy_avatar(
     persona_avatar: Option<String>,
     relay_picture: Option<String>,
     agent_command: &str,
+    use_command_fallback: bool,
 ) -> String {
     persona_avatar
         .or(relay_picture)
-        .or_else(|| managed_agent_avatar_url(agent_command))
+        .or_else(|| {
+            if use_command_fallback {
+                managed_agent_avatar_url(agent_command)
+            } else {
+                None
+            }
+        })
         .unwrap_or_default()
+}
+
+fn should_skip_legacy_command_avatar(
+    stored_avatar_was_retired_fizz: bool,
+    relay_picture_was_retired_fizz: bool,
+    persona_avatar: Option<&str>,
+    relay_picture: Option<&str>,
+) -> bool {
+    (stored_avatar_was_retired_fizz || relay_picture_was_retired_fizz)
+        && persona_avatar.is_none()
+        && relay_picture.is_none()
 }
 
 /// Reconcile an agent's kind:0 profile on the relay.
 ///
 /// Queries the relay for the agent's existing profile and re-publishes if missing
-/// or stale (display_name or picture mismatch). This is fire-and-forget — errors
-/// are returned to the caller for logging but never block agent startup.
+/// or stale. This is fire-and-forget — errors are returned to the caller for
+/// logging but never block agent startup.
 ///
 /// For legacy records (pre-PR-921) where `avatar_url` is `None`, this function
 /// backfills via `resolve_legacy_avatar` — preferring the persona record's avatar
 /// over the relay's `picture`, since the old code may have corrupted the relay
 /// profile — and persists the updated record. After backfill, normal
-/// reconciliation proceeds.
-///
-/// Query and publish target the relay returned by `effective_agent_relay_url`
-/// for every agent regardless of backend: an explicit per-agent `relay_url`
-/// wins, and a blank one falls back to the active workspace relay. This keeps
-/// reconciliation following the session's relay for never-pinned agents while
-/// honoring a deliberate pin wherever it points.
+/// Query and publish both target the agent's stored `relay_url` so that, under
+/// an active workspace relay override, reconciliation reads and writes the same
+/// relay the agent's profile actually lives on.
 pub(crate) async fn reconcile_agent_profile(
     state: &AppState,
     app: &AppHandle,
@@ -932,60 +968,119 @@ pub(crate) async fn reconcile_agent_profile(
 ) -> Result<(), String> {
     use crate::relay::{query_agent_profile, sync_managed_agent_profile};
 
-    // An explicit per-agent relay wins; an empty one falls back to the active
-    // workspace relay. Resolved once and used for both the read and write-back.
-    let relay_url = crate::relay::effective_agent_relay_url(
-        &data.relay_url,
-        &relay_ws_url_with_override(state),
-    );
-
     // Query the relay for the agent's existing kind:0 profile.
-    let existing = query_agent_profile(state, &relay_url, agent_pubkey).await?;
+    let existing = query_agent_profile(state, &data.relay_url, agent_pubkey).await?;
 
-    // Resolve the expected avatar — backfilling for legacy records that have no
-    // stored avatar_url yet.
-    let expected_avatar = match data.avatar_url.as_deref() {
-        Some(url) => url.to_string(),
-        None => {
-            // Legacy record: the relay profile may have been corrupted by the
-            // old reconciliation code (it overwrote the persona avatar with the
-            // command default), so the persona record is the authoritative source.
-            let persona_avatar = data.persona_id.as_ref().and_then(|pid| {
-                load_personas(app)
-                    .ok()?
-                    .into_iter()
-                    .find(|p| p.id == *pid)?
-                    .avatar_url
-            });
+    // Resolve the expected avatar. A user-initiated clear is intentionally
+    // `None` and must not be backfilled from persona/relay/runtime defaults.
+    // For legacy records that have no stored avatar_url yet, `None` still means
+    // backfill from the best available historical source.
+    let stored_avatar =
+        filter_retired_fizz_avatar(data.persona_id.as_deref(), data.avatar_url.clone());
+    let stored_avatar_was_retired_fizz = data
+        .avatar_url
+        .as_deref()
+        .is_some_and(|url| is_retired_fizz_data_url(data.persona_id.as_deref(), url));
+    let stored_avatar_was_command_fallback = stored_avatar.as_deref().is_some_and(|url| {
+        is_command_avatar_for_persona(data.persona_id.as_deref(), &data.agent_command, url)
+    });
+    let stored_avatar = stored_avatar.filter(|url| {
+        !is_command_avatar_for_persona(data.persona_id.as_deref(), &data.agent_command, url)
+    });
+    let expected_avatar = if data.avatar_url_cleared && stored_avatar.is_none() {
+        None
+    } else {
+        match stored_avatar {
+            Some(url) => Some(url.to_string()),
+            None => {
+                // Legacy record: the relay profile may have been corrupted by the
+                // old reconciliation code (it overwrote the persona avatar with the
+                // command default), so the persona record is the authoritative source.
+                let persona_avatar = filter_retired_fizz_avatar(
+                    data.persona_id.as_deref(),
+                    data.persona_id.as_ref().and_then(|pid| {
+                        load_personas(app)
+                            .ok()?
+                            .into_iter()
+                            .find(|p| p.id == *pid)?
+                            .avatar_url
+                    }),
+                );
+                let relay_picture_raw = existing.as_ref().and_then(|info| info.picture.clone());
+                let relay_picture_was_retired_fizz = relay_picture_raw
+                    .as_deref()
+                    .is_some_and(|url| is_retired_fizz_data_url(data.persona_id.as_deref(), url));
+                let relay_picture =
+                    filter_retired_fizz_avatar(data.persona_id.as_deref(), relay_picture_raw);
+                let relay_picture_was_command_fallback =
+                    relay_picture.as_deref().is_some_and(|url| {
+                        is_command_avatar_for_persona(
+                            data.persona_id.as_deref(),
+                            &data.agent_command,
+                            url,
+                        )
+                    });
+                let relay_picture = relay_picture.filter(|url| {
+                    !is_command_avatar_for_persona(
+                        data.persona_id.as_deref(),
+                        &data.agent_command,
+                        url,
+                    )
+                });
 
-            let backfilled = resolve_legacy_avatar(
-                persona_avatar,
-                existing.as_ref().and_then(|info| info.picture.clone()),
-                &data.agent_command,
-            );
+                let skip_command_fallback = should_skip_legacy_command_avatar(
+                    stored_avatar_was_retired_fizz,
+                    relay_picture_was_retired_fizz,
+                    persona_avatar.as_deref(),
+                    relay_picture.as_deref(),
+                );
+                let backfilled = if skip_command_fallback {
+                    String::new()
+                } else {
+                    resolve_legacy_avatar(
+                        persona_avatar,
+                        relay_picture,
+                        &data.agent_command,
+                        data.persona_id.is_none(),
+                    )
+                };
 
-            // Persist the backfilled avatar so this migration only runs once.
-            if !backfilled.is_empty() {
-                let _store_guard = state
-                    .managed_agents_store_lock
-                    .lock()
-                    .map_err(|e| e.to_string())?;
-                let mut records = load_managed_agents(app)?;
-                if let Some(record) = records.iter_mut().find(|r| r.pubkey == data.pubkey) {
-                    record.avatar_url = Some(backfilled.clone());
-                    save_managed_agents(app, &records)?;
+                // Persist the backfilled avatar so this migration only runs once,
+                // or clear the retired built-in Fizz data URL if there is no
+                // current profile image to backfill.
+                let should_persist_avatar = stored_avatar_was_retired_fizz
+                    || relay_picture_was_retired_fizz
+                    || stored_avatar_was_command_fallback
+                    || relay_picture_was_command_fallback
+                    || (!backfilled.is_empty()
+                        && data.avatar_url.as_deref() != Some(backfilled.as_str()));
+                if should_persist_avatar {
+                    let _store_guard = state
+                        .managed_agents_store_lock
+                        .lock()
+                        .map_err(|e| e.to_string())?;
+                    let mut records = load_managed_agents(app)?;
+                    if let Some(record) = records.iter_mut().find(|r| r.pubkey == data.pubkey) {
+                        record.avatar_url = if backfilled.is_empty() {
+                            None
+                        } else {
+                            Some(backfilled.clone())
+                        };
+                        record.avatar_url_cleared = backfilled.is_empty();
+                        save_managed_agents(app, &records)?;
+                    }
+                }
+
+                if backfilled.is_empty() {
+                    None
+                } else {
+                    Some(backfilled)
                 }
             }
-
-            backfilled
         }
     };
 
-    if expected_avatar.is_empty() {
-        return Ok(());
-    }
-
-    if !profile_needs_sync(existing.as_ref(), &data.name, Some(&expected_avatar)) {
+    if !profile_needs_sync(existing.as_ref(), &data.name, expected_avatar.as_deref()) {
         return Ok(());
     }
 
@@ -994,10 +1089,10 @@ pub(crate) async fn reconcile_agent_profile(
 
     sync_managed_agent_profile(
         state,
-        &relay_url,
+        &data.relay_url,
         &agent_keys,
         &data.name,
-        Some(&expected_avatar),
+        expected_avatar.as_deref(),
         data.auth_tag.as_deref(),
     )
     .await

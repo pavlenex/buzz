@@ -10,12 +10,39 @@ use crate::{
         known_acp_runtime, load_managed_agents, load_personas, managed_agent_avatar_url,
         missing_command_message, normalize_agent_args, resolve_command,
         resolve_effective_prompt_model_provider, save_managed_agents, sync_managed_agent_processes,
-        try_regenerate_nest, AgentModelInfo, AgentModelsResponse, UpdateManagedAgentRequest,
-        UpdateManagedAgentResponse,
+        try_regenerate_nest, AgentModelInfo, AgentModelsResponse, ManagedAgentRecord,
+        UpdateManagedAgentRequest, UpdateManagedAgentResponse,
     },
     relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
 };
+
+fn trim_optional(value: Option<String>) -> Option<String> {
+    value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn is_persona_runtime_avatar(record: &ManagedAgentRecord, avatar_url: &str) -> bool {
+    record.persona_id.is_some()
+        && managed_agent_avatar_url(&record.agent_command)
+            .as_deref()
+            .is_some_and(|runtime_avatar_url| runtime_avatar_url == avatar_url.trim())
+}
+
+fn profile_sync_avatar_url(record: &ManagedAgentRecord) -> Option<String> {
+    record
+        .avatar_url
+        .clone()
+        .filter(|avatar_url| !is_persona_runtime_avatar(record, avatar_url))
+        .or_else(|| {
+            if record.persona_id.is_none() {
+                managed_agent_avatar_url(&record.agent_command)
+            } else {
+                None
+            }
+        })
+}
 
 /// Query available models from an agent via `buzz-acp models --json`.
 ///
@@ -139,7 +166,8 @@ pub async fn get_agent_models(
 ///
 /// Does NOT auto-restart the agent. Runtime config changes (system prompt,
 /// parallelism, commands, toolsets) take effect on the next agent spawn.
-/// Name changes are synced to the relay immediately via a kind:0 re-publish.
+/// Name and avatar changes are synced to the relay immediately via a kind:0
+/// re-publish.
 #[tauri::command]
 pub async fn update_managed_agent(
     input: UpdateManagedAgentRequest,
@@ -162,11 +190,21 @@ pub async fn update_managed_agent(
         let record = find_managed_agent_mut(&mut records, &input.pubkey)?;
 
         let mut name_changed = false;
+        let mut avatar_changed = false;
         if let Some(name_update) = input.name {
             let trimmed = name_update.trim().to_string();
             if !trimmed.is_empty() && trimmed != record.name {
                 record.name = trimmed;
                 name_changed = true;
+            }
+        }
+        if let Some(avatar_update) = input.avatar_url {
+            let normalized = trim_optional(avatar_update);
+            let avatar_url_cleared = normalized.is_none();
+            if normalized != record.avatar_url || avatar_url_cleared != record.avatar_url_cleared {
+                record.avatar_url = normalized;
+                record.avatar_url_cleared = avatar_url_cleared;
+                avatar_changed = true;
             }
         }
         if let Some(model_update) = input.model {
@@ -188,11 +226,13 @@ pub async fn update_managed_agent(
         if let Some(turn_timeout_seconds) = input.turn_timeout_seconds {
             record.turn_timeout_seconds = turn_timeout_seconds;
         }
-        // Store the relay override exactly as supplied (trimmed). An explicit
-        // value pins the agent; empty falls back to the workspace relay at
-        // read-time. A name-only edit (relay_url == None) leaves the pin intact.
         if let Some(relay_url) = input.relay_url {
-            record.relay_url = relay_url.trim().to_string();
+            let trimmed = relay_url.trim();
+            record.relay_url = if trimmed.is_empty() {
+                relay_ws_url_with_override(&state)
+            } else {
+                trimmed.to_string()
+            };
         }
         if let Some(acp_command) = input.acp_command {
             record.acp_command = acp_command;
@@ -243,20 +283,16 @@ pub async fn update_managed_agent(
             .find(|r| r.pubkey == input.pubkey)
             .ok_or_else(|| format!("agent {} not found", input.pubkey))?;
 
-        let sync_params = if name_changed {
+        let sync_params = if name_changed || avatar_changed {
             let agent_keys = Keys::parse(&record.private_key_nsec)
                 .map_err(|e| format!("failed to parse agent keys: {e}"))?;
-            // Re-publish the renamed profile to the agent's effective relay:
-            // an explicit per-agent relay wins; empty falls back to workspace.
-            let relay_url = crate::relay::effective_agent_relay_url(
-                &record.relay_url,
-                &relay_ws_url_with_override(&state),
-            );
+            let relay_url = record.relay_url.clone();
             let display_name = record.name.clone();
-            let avatar_url = record
-                .avatar_url
-                .clone()
-                .or_else(|| managed_agent_avatar_url(&record.agent_command));
+            let avatar_url = if avatar_changed || record.avatar_url_cleared {
+                record.avatar_url.clone()
+            } else {
+                profile_sync_avatar_url(record)
+            };
             let auth_tag = record.auth_tag.clone();
             Some((agent_keys, relay_url, display_name, avatar_url, auth_tag))
         } else {

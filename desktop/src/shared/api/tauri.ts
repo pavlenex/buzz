@@ -213,6 +213,7 @@ export type RawManagedAgent = {
   max_turn_duration_seconds: number | null;
   parallelism: number;
   system_prompt: string | null;
+  avatar_url?: string | null;
   model: string | null;
   mcp_toolsets: string | null;
   env_vars?: Record<string, string>;
@@ -228,8 +229,7 @@ export type RawManagedAgent = {
   start_on_app_launch: boolean;
   backend: ManagedAgentBackend;
   backend_agent_id: string | null;
-  // Optional: pre-feature mock fixtures may omit these. Mapped to
-  // `"owner-only"` / `[]` in `fromRawManagedAgent`.
+  // Optional in pre-feature mock fixtures; mapped in fromRawManagedAgent.
   respond_to?: ManagedAgent["respondTo"];
   respond_to_allowlist?: string[];
 };
@@ -868,6 +868,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     maxTurnDurationSeconds: agent.max_turn_duration_seconds,
     parallelism: agent.parallelism,
     systemPrompt: agent.system_prompt,
+    avatarUrl: agent.avatar_url ?? null,
     model: agent.model,
     mcpToolsets: agent.mcp_toolsets,
     envVars: agent.env_vars ?? {},
@@ -883,8 +884,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     startOnAppLaunch: agent.start_on_app_launch,
     backend: agent.backend,
     backendAgentId: agent.backend_agent_id,
-    // Fallbacks for pre-feature mocks/fixtures that don't carry these fields.
-    // Real agent records always include them (defaulted server-side).
+    // Fallbacks for pre-feature mocks; real records default server-side.
     respondTo: agent.respond_to ?? "owner-only",
     respondToAllowlist: agent.respond_to_allowlist ?? [],
   };

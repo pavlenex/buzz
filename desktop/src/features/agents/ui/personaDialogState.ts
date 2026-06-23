@@ -1,4 +1,5 @@
 import type { ParsePersonaFilesResult } from "@/shared/api/tauriPersonas";
+import { resolveImportedPersonaAvatarUrl } from "@/shared/avatars/gooseAppAvatarRefs";
 import type {
   AgentPersona,
   CreatePersonaInput,
@@ -90,7 +91,7 @@ export function importPersonaDialogState(
     submitLabel: "Create persona",
     initialValues: {
       displayName: persona.displayName,
-      avatarUrl: persona.avatarDataUrl ?? "",
+      avatarUrl: resolveImportedPersonaAvatarUrl(persona) ?? "",
       systemPrompt: persona.systemPrompt,
       runtime: persona.runtime ?? undefined,
       model: persona.model ?? undefined,
