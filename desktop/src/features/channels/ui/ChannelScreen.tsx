@@ -44,6 +44,7 @@ import {
   resolveTimelineLoadingLatch,
   selectTimelineLoadingState,
 } from "@/features/messages/lib/timelineLoadingState";
+import { useDecryptedTargetMessageEvents } from "@/features/messages/useDecryptedTargetMessageEvents";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
@@ -252,13 +253,22 @@ export function ChannelScreen({
     currentPubkey,
   );
   const joinChannelMutation = useJoinChannelMutation(activeChannelId);
+  // Decrypt deep-link / search-hit targets before the rendered merge: they
+  // arrive raw, so for a DM the ciphertext would render garbled and clobber the
+  // decrypted cache copy on an id collision. This is the single choke point for
+  // every target contributor.
+  const decryptedTargetMessageEvents = useDecryptedTargetMessageEvents(
+    activeChannel,
+    targetMessageEvents,
+    currentPubkey,
+  );
   const resolvedMessages = React.useMemo(() => {
     const currentMessages = messagesQuery.data ?? [];
-    if (!activeChannel || targetMessageEvents.length === 0) {
+    if (!activeChannel || decryptedTargetMessageEvents.length === 0) {
       return currentMessages;
     }
-    return targetMessageEvents.reduce(mergeMessages, currentMessages);
-  }, [activeChannel, messagesQuery.data, targetMessageEvents]);
+    return decryptedTargetMessageEvents.reduce(mergeMessages, currentMessages);
+  }, [activeChannel, messagesQuery.data, decryptedTargetMessageEvents]);
   const messageAuthorPubkeys = React.useMemo(
     () => collectMessageAuthorPubkeys(resolvedMessages),
     [resolvedMessages],

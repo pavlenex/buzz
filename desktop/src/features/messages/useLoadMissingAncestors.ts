@@ -11,6 +11,34 @@ import {
 import { getEventById } from "@/shared/api/tauri";
 import type { Channel, RelayEvent } from "@/shared/api/types";
 
+/** The scope that the requested-ancestor dedup set is valid for. */
+interface AncestorScope {
+  channelId: string | null;
+  selfPubkey: string | undefined;
+}
+
+/**
+ * Whether the requested-ancestor dedup tracking must reset.
+ *
+ * The dedup set keys "ancestor already fetched" by id, but a fetched ancestor
+ * lands in `channelMessagesKey(channelId, selfPubkey)` — a bucket scoped by
+ * BOTH channel AND identity. So the set is only valid within a single
+ * (channel, identity) scope. On a cold start an ancestor fetched while
+ * `selfPubkey` is undefined no-op-decrypts into the orphaned `[...,null]`
+ * bucket yet gets recorded as done; without resetting on the identity flip the
+ * effect would skip re-fetching it into the live `[...,pubkey]` bucket and the
+ * ancestor would silently go missing from the thread.
+ */
+export function shouldResetAncestorTracking(
+  previous: AncestorScope,
+  next: AncestorScope,
+): boolean {
+  return (
+    previous.channelId !== next.channelId ||
+    previous.selfPubkey !== next.selfPubkey
+  );
+}
+
 export function useLoadMissingAncestors(
   activeChannel: Channel | null,
   resolvedMessages: RelayEvent[],
@@ -18,16 +46,22 @@ export function useLoadMissingAncestors(
 ) {
   const queryClient = useQueryClient();
   const requestedAncestorIdsRef = React.useRef<Set<string>>(new Set());
-  const previousChannelIdRef = React.useRef<string | null>(null);
+  const previousScopeRef = React.useRef<AncestorScope>({
+    channelId: null,
+    selfPubkey: undefined,
+  });
 
   React.useEffect(() => {
-    const activeChannelId = activeChannel?.id ?? null;
-    if (previousChannelIdRef.current === activeChannelId) {
+    const scope: AncestorScope = {
+      channelId: activeChannel?.id ?? null,
+      selfPubkey,
+    };
+    if (!shouldResetAncestorTracking(previousScopeRef.current, scope)) {
       return;
     }
-    previousChannelIdRef.current = activeChannelId;
+    previousScopeRef.current = scope;
     requestedAncestorIdsRef.current.clear();
-  }, [activeChannel?.id]);
+  }, [activeChannel?.id, selfPubkey]);
 
   React.useEffect(() => {
     if (!activeChannel || activeChannel.channelType === "forum") {
