@@ -44,6 +44,17 @@ fn sub_id(name: &str) -> String {
 
 /// Create a real channel in the DB via REST so the relay accepts events for it.
 async fn create_test_channel(keys: &Keys) -> String {
+    create_channel_with_visibility(keys, "open").await
+}
+
+/// Like `create_test_channel` but creates a `private` (invite-only, non-searchable
+/// by non-members) channel. Used by the cross-author search-isolation test, where
+/// an *open* channel would be visible to outsiders by design.
+async fn create_private_test_channel(keys: &Keys) -> String {
+    create_channel_with_visibility(keys, "private").await
+}
+
+async fn create_channel_with_visibility(keys: &Keys, visibility: &str) -> String {
     let client = reqwest::Client::new();
     let pubkey_hex = keys.public_key().to_hex();
     let channel_uuid = uuid::Uuid::new_v4();
@@ -54,7 +65,7 @@ async fn create_test_channel(keys: &Keys) -> String {
             Tag::parse(["h", &channel_uuid.to_string()]).unwrap(),
             Tag::parse(["name", &channel_name]).unwrap(),
             Tag::parse(["channel_type", "stream"]).unwrap(),
-            Tag::parse(["visibility", "open"]).unwrap(),
+            Tag::parse(["visibility", visibility]).unwrap(),
         ])
         .sign_with_keys(keys)
         .unwrap();
@@ -1107,8 +1118,10 @@ async fn test_nip50_search_cross_author_isolation() {
     let author = Keys::generate();
     let outsider = Keys::generate();
 
-    // Author A owns a private-by-default working channel and posts a token.
-    let channel = create_test_channel(&author).await;
+    // Author A owns a PRIVATE (invite-only) working channel and posts a token.
+    // Must be private: open channels are searchable by anyone by design, so the
+    // outsider would legitimately find the message and this test would be vacuous.
+    let channel = create_private_test_channel(&author).await;
     let unique_token = format!("isolation_{}", uuid::Uuid::new_v4().simple());
     let content = format!("secret in A's channel {unique_token}");
 
