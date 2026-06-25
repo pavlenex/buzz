@@ -1536,6 +1536,10 @@ pub async fn ingest_event(
                 }
             }
         }
+        // channel_id == None: channel-less events cannot be latched (the latch is
+        // set at create_dm time and keyed to a channel row). A channel-scoped kind
+        // with no `h` tag is rejected downstream at insert regardless, so skipping
+        // the latch check here is safe. The explicit arm keeps this intentional.
     }
 
     // Track pre-created channel UUID for compensation on insert failure.
