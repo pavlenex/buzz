@@ -10,6 +10,8 @@ type AgentIdentityCardProps = {
   avatarUrl?: string | null;
   dataTestId: string;
   label: string;
+  errorLabel?: string | null;
+  modelControl?: ReactNode;
   modelLabel: string;
   onClick: () => void;
   status?: ReactNode;
@@ -20,7 +22,9 @@ export function AgentIdentityCard({
   ariaLabel,
   avatarUrl,
   dataTestId,
+  errorLabel,
   label,
+  modelControl,
   modelLabel,
   onClick,
   status,
@@ -68,9 +72,19 @@ export function AgentIdentityCard({
         <span className="min-w-0 truncate font-semibold text-foreground tracking-normal">
           {label}
         </span>
-        <span className="min-w-0 truncate font-normal text-secondary-foreground/75">
-          {modelLabel}
-        </span>
+        {modelControl ?? (
+          <span className="min-w-0 truncate font-normal text-secondary-foreground/75">
+            {modelLabel}
+          </span>
+        )}
+        {errorLabel ? (
+          <span
+            className="min-w-0 truncate text-2xs font-medium text-destructive"
+            title={errorLabel}
+          >
+            {errorLabel}
+          </span>
+        ) : null}
       </div>
     </div>
   );

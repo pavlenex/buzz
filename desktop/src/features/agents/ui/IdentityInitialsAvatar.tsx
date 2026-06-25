@@ -34,16 +34,16 @@ export function IdentityInitialsAvatar({
     IDENTITY_INITIAL_AVATAR_CLASS_NAMES[
       paletteIndex % IDENTITY_INITIAL_AVATAR_CLASS_NAMES.length
     ];
-  const fontSize = Math.round(Math.min(40, Math.max(22, size * 0.28)));
+  const textSizeClassName = size >= 80 ? "text-3xl" : "text-xl";
 
   return (
     <span
       className={cn(
         "flex h-full w-full items-center justify-center rounded-full border-[3px] border-background font-semibold shadow-sm",
         colorClassName,
+        textSizeClassName,
         className,
       )}
-      style={{ fontSize }}
     >
       {initials.length > 0 ? initials : <UserRound className="h-8 w-8" />}
     </span>

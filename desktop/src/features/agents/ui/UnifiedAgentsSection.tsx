@@ -16,8 +16,10 @@ import {
 import { toast } from "sonner";
 
 import { useActiveAgentTurns } from "@/features/agents/activeAgentTurnsStore";
+import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
 import { AgentStatusBadge } from "@/features/agents/ui/AgentStatusBadge";
+import { ModelPicker } from "@/features/agents/ui/ModelPicker";
 import { useUserProfileQuery } from "@/features/profile/hooks";
 import type {
   AgentPersona,
@@ -390,6 +392,9 @@ function AgentPersonaCard({
   const avatarUrl = agent
     ? firstAvatarUrl(profileQuery.data?.avatarUrl, persona.avatarUrl)
     : persona.avatarUrl;
+  const friendlyError = agent
+    ? friendlyAgentLastError(agent.lastError)?.copy
+    : null;
 
   return (
     <AgentIdentityCard
@@ -404,7 +409,9 @@ function AgentPersonaCard({
       ariaLabel={`${title} agent profile`}
       avatarUrl={avatarUrl}
       dataTestId={`persona-agent-row-${persona.id}`}
+      errorLabel={friendlyError}
       label={title}
+      modelControl={agent ? <ModelPicker agent={agent} /> : undefined}
       modelLabel={modelLabel}
       onClick={() => {
         if (agent && onOpenAgentProfile) {
@@ -441,6 +448,7 @@ function StandaloneAgentCard({
 }) {
   const title = agent.name;
   const profileQuery = useUserProfileQuery(agent.pubkey);
+  const friendlyError = friendlyAgentLastError(agent.lastError)?.copy;
 
   return (
     <AgentIdentityCard
@@ -448,7 +456,9 @@ function StandaloneAgentCard({
       ariaLabel={`${title} agent profile`}
       avatarUrl={profileQuery.data?.avatarUrl}
       dataTestId={`managed-agent-${agent.pubkey}`}
+      errorLabel={friendlyError}
       label={title}
+      modelControl={<ModelPicker agent={agent} />}
       modelLabel={formatAgentModelLabel(agent.model)}
       onClick={() => {
         if (onOpenAgentProfile) {
