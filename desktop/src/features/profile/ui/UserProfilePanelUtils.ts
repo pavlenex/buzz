@@ -296,7 +296,7 @@ function resolvePersonaManagedAgentRuntime(
   runtimes: readonly AcpRuntimeCatalogEntry[] | undefined,
 ) {
   if (!runtimes?.length) return undefined;
-  if (!runtimeId) return runtimes[0];
+  if (!runtimeId) return undefined;
   return runtimes.find((candidate) => candidate.id === runtimeId);
 }
 

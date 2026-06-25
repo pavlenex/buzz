@@ -179,7 +179,7 @@ test("personaManagedAgentUpdate leaves runtime fields alone when runtime is unch
   );
 });
 
-test("personaManagedAgentUpdate resets runtime fields when persona runtime is cleared", () => {
+test("personaManagedAgentUpdate leaves runtime inheritance when persona runtime is cleared", () => {
   assert.deepEqual(
     personaManagedAgentUpdate(
       agent({
@@ -206,9 +206,6 @@ test("personaManagedAgentUpdate resets runtime fields when persona runtime is cl
       name: "Fizz Prime",
       systemPrompt: "New prompt",
       model: "new-model",
-      agentCommand: "goose",
-      agentArgs: [],
-      mcpCommand: "",
     },
   );
 });

@@ -649,22 +649,25 @@ export function UserProfilePanel({
     onClose();
     onOpenAgentSession?.(effectivePubkey);
   }, [effectivePubkey, onClose, onOpenAgentSession]);
-
   const handleOpenChannel = React.useCallback(
     (channelId: string) => {
       void goChannel(channelId);
     },
     [goChannel],
   );
-
   const displayName = resolveProfileDisplayName({
     persona: resolvedPersona,
     profile,
     pubkey: effectivePubkey,
   });
+  const ownerProfile = ownerPubkey
+    ? ownerProfileQuery.data
+    : isOwner === true
+      ? currentProfileQuery.data
+      : undefined;
   const ownerHandle = resolveOwnerHandle(
-    ownerPubkey ? ownerProfileQuery.data : currentProfileQuery.data,
-    ownerPubkey ?? currentPubkey,
+    ownerProfile,
+    ownerPubkey ?? (isOwner === true ? currentPubkey : undefined),
   );
   const ownerDisplayName = ownerHandle
     ? isCurrentUserOwner || (!ownerPubkey && isOwner === true)
@@ -715,7 +718,6 @@ export function UserProfilePanel({
       onBack={() => setView("summary")}
     />
   );
-
   const headerActions = (
     <UserProfilePanelHeaderActions
       effectivePubkey={effectivePubkey}
@@ -724,7 +726,6 @@ export function UserProfilePanel({
       onClose={onClose}
     />
   );
-
   const profileBody = (
     <div
       className={cn(
