@@ -103,6 +103,7 @@ import {
   UserProfilePanelHeaderActions,
   UserProfilePanelHeaderLeft,
 } from "./UserProfilePanelHeaderControls";
+import { useCreatedAgentSecretReveal } from "./UserProfileCreatedAgentSecretDialog";
 
 export type { ProfilePanelView };
 
@@ -130,6 +131,8 @@ export function UserProfilePanel({
 
   const [internalView, setInternalView] =
     React.useState<ProfilePanelView>("summary");
+  const { createdAgentSecretDialog, setCreatedAgent } =
+    useCreatedAgentSecretReveal();
   const view = controlledView ?? internalView;
   const setView = React.useCallback(
     (nextView: ProfilePanelView, options?: { replace?: boolean }) => {
@@ -449,6 +452,7 @@ export function UserProfilePanel({
 
     try {
       const created = await createManagedAgentForPersona(resolvedPersona);
+      setCreatedAgent(created);
       if (created.spawnError) {
         toast.error(created.spawnError);
       } else {
@@ -462,7 +466,7 @@ export function UserProfilePanel({
         error instanceof Error ? error.message : "Failed to start agent.",
       );
     }
-  }, [createManagedAgentForPersona, resolvedPersona]);
+  }, [createManagedAgentForPersona, resolvedPersona, setCreatedAgent]);
 
   const handleToggleAgentAutoStart = React.useCallback(async () => {
     if (managedAgent?.backend.type !== "local") return;
@@ -918,6 +922,7 @@ export function UserProfilePanel({
         </div>
         {editAgentDialog}
         {addAgentToChannelDialog}
+        {createdAgentSecretDialog}
         {personaDialogs}
       </>
     );
@@ -985,6 +990,7 @@ export function UserProfilePanel({
       </aside>
       {editAgentDialog}
       {addAgentToChannelDialog}
+      {createdAgentSecretDialog}
       {personaDialogs}
     </>
   );

@@ -268,7 +268,7 @@ export function personaManagedAgentUpdate(
     options.previousPersona !== undefined &&
     options.previousPersona.runtime !== persona.runtime;
   const runtime = runtimeChanged
-    ? options.runtimes?.find((candidate) => candidate.id === persona.runtime)
+    ? resolvePersonaManagedAgentRuntime(persona.runtime, options.runtimes)
     : undefined;
   if (runtime?.command) {
     if (runtime.command !== agent.agentCommand) {
@@ -289,6 +289,15 @@ export function personaManagedAgentUpdate(
   }
 
   return hasChanges ? input : null;
+}
+
+function resolvePersonaManagedAgentRuntime(
+  runtimeId: string | null | undefined,
+  runtimes: readonly AcpRuntimeCatalogEntry[] | undefined,
+) {
+  if (!runtimes?.length) return undefined;
+  if (!runtimeId) return runtimes[0];
+  return runtimes.find((candidate) => candidate.id === runtimeId);
 }
 
 function mergedPersonaEnvVarsForAgent(

@@ -179,6 +179,40 @@ test("personaManagedAgentUpdate leaves runtime fields alone when runtime is unch
   );
 });
 
+test("personaManagedAgentUpdate resets runtime fields when persona runtime is cleared", () => {
+  assert.deepEqual(
+    personaManagedAgentUpdate(
+      agent({
+        agentCommand: "claude",
+        agentArgs: ["mcp", "serve"],
+        mcpCommand: "claude-mcp",
+      }),
+      persona({ runtime: null }),
+      {
+        previousPersona: persona({ runtime: "claude" }),
+        runtimes: [
+          runtime({
+            id: "goose",
+            command: "goose",
+            defaultArgs: [],
+            mcpCommand: "",
+          }),
+          runtime({ id: "claude" }),
+        ],
+      },
+    ),
+    {
+      pubkey: "deadbeef".repeat(8),
+      name: "Fizz Prime",
+      systemPrompt: "New prompt",
+      model: "new-model",
+      agentCommand: "goose",
+      agentArgs: [],
+      mcpCommand: "",
+    },
+  );
+});
+
 test("parseProfilePanelView accepts all profile panel subviews", () => {
   for (const view of [
     "summary",
