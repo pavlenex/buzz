@@ -735,7 +735,11 @@ export function UserProfilePanel({
   const headerActions = (
     <div className="ml-auto flex shrink-0 items-center gap-2">
       {view === "memories" && viewerIsOwner && effectivePubkey ? (
-        <MemoryRefreshButton agentPubkey={effectivePubkey} variant="outline" />
+        <MemoryRefreshButton
+          agentPubkey={effectivePubkey}
+          variant="outline"
+          viewerIsOwner={viewerIsOwner}
+        />
       ) : null}
       <Button
         aria-label="Close profile"

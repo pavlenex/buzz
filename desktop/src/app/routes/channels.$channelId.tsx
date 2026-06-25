@@ -1,13 +1,17 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 
+import {
+  parseProfilePanelView,
+  type ProfilePanelView,
+} from "@/features/profile/ui/UserProfilePanelUtils";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 
 type ChannelRouteSearch = {
   agentSession?: string;
   messageId?: string;
   profile?: string;
-  profileView?: "memories" | "channels";
+  profileView?: ProfilePanelView;
   thread?: string;
   threadRootId?: string;
 };
@@ -16,8 +20,8 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function profileViewValue(value: unknown): "memories" | "channels" | undefined {
-  return value === "memories" || value === "channels" ? value : undefined;
+function profileViewValue(value: unknown): ProfilePanelView | undefined {
+  return parseProfilePanelView(value) ?? undefined;
 }
 
 function validateChannelSearch(

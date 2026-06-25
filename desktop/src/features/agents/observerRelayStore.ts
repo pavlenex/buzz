@@ -47,7 +47,7 @@ const snapshotByAgent = new Map<string, ObserverSnapshot>();
 // We key each subscriber's contribution in `knownAgentsBySubscription` and
 // recompute the union, so co-mounted callers no longer clobber each other.
 const knownAgentPubkeys = new Set<string>();
-const knownAgentsBySubscription = new Map<string, Set<string>>();
+const knownAgentsBySubscription = new Map<string | symbol, Set<string>>();
 
 function recomputeKnownAgentPubkeys() {
   knownAgentPubkeys.clear();
@@ -58,8 +58,8 @@ function recomputeKnownAgentPubkeys() {
   }
 }
 
-function registerKnownAgents(
-  subscriptionId: string,
+export function registerKnownAgentPubkeys(
+  subscriptionId: string | symbol,
   pubkeys: readonly string[],
 ) {
   knownAgentsBySubscription.set(
@@ -69,10 +69,14 @@ function registerKnownAgents(
   recomputeKnownAgentPubkeys();
 }
 
-function unregisterKnownAgents(subscriptionId: string) {
+export function unregisterKnownAgentPubkeys(subscriptionId: string | symbol) {
   if (knownAgentsBySubscription.delete(subscriptionId)) {
     recomputeKnownAgentPubkeys();
   }
+}
+
+export function isKnownAgentPubkey(pubkey: string) {
+  return knownAgentPubkeys.has(normalizePubkey(pubkey));
 }
 
 let connectionState: ConnectionState = "idle";
@@ -176,7 +180,7 @@ async function handleRelayObserverEvent(
 
   // Verify agent is known/trusted before decrypting.
   // Silently drop events from agents we are not managing.
-  if (!knownAgentPubkeys.has(normalizePubkey(agentPubkey))) {
+  if (!isKnownAgentPubkey(agentPubkey)) {
     return;
   }
 
@@ -326,9 +330,9 @@ export function useManagedAgentObserverBridge(
   // own agent list. The store recomputes the union across all subscribers, so
   // a co-mounted caller no longer wipes out this caller's agents.
   React.useEffect(() => {
-    registerKnownAgents(subscriptionId, agentPubkeys);
+    registerKnownAgentPubkeys(subscriptionId, agentPubkeys);
     return () => {
-      unregisterKnownAgents(subscriptionId);
+      unregisterKnownAgentPubkeys(subscriptionId);
     };
   }, [subscriptionId, agentPubkeys]);
 
