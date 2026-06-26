@@ -1,0 +1,63 @@
+name: Formal proofs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/formal-proofs.yml"
+      - "docs/spec/check-multitenant-proofs.sh"
+      - "docs/spec/MultiTenantRelay.tla"
+      - "docs/spec/MultiTenantRelay.cfg"
+      - "docs/spec/MultiTenantAuth.spthy"
+  pull_request:
+    paths:
+      - ".github/workflows/formal-proofs.yml"
+      - "docs/spec/check-multitenant-proofs.sh"
+      - "docs/spec/MultiTenantRelay.tla"
+      - "docs/spec/MultiTenantRelay.cfg"
+      - "docs/spec/MultiTenantAuth.spthy"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: TLC + Tamarin
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TLA2TOOLS_VERSION: "1.8.0"
+      TAMARIN_VERSION: "1.12.0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install proof tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          sudo apt-get install -y --no-install-recommends \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o DPkg::Lock::Timeout=120 \
+            maude
+
+          mkdir -p "$RUNNER_TEMP/proof-tools"
+          curl -fsSL \
+            -o "$RUNNER_TEMP/proof-tools/tla2tools.jar" \
+            "https://github.com/tlaplus/tlaplus/releases/download/v${TLA2TOOLS_VERSION}/tla2tools.jar"
+          curl -fsSL \
+            -o "$RUNNER_TEMP/proof-tools/tamarin-prover.tar.gz" \
+            "https://github.com/tamarin-prover/tamarin-prover/releases/download/${TAMARIN_VERSION}/tamarin-prover-${TAMARIN_VERSION}-linux64-ubuntu.tar.gz"
+          tar -xzf "$RUNNER_TEMP/proof-tools/tamarin-prover.tar.gz" -C "$RUNNER_TEMP/proof-tools"
+          chmod +x "$RUNNER_TEMP/proof-tools/tamarin-prover"
+
+      - name: Check multi-tenant relay proofs
+        env:
+          TLA2TOOLS_JAR: ${{ runner.temp }}/proof-tools/tla2tools.jar
+          TAMARIN_PROVER: ${{ runner.temp }}/proof-tools/tamarin-prover
+        run: docs/spec/check-multitenant-proofs.sh
