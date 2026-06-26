@@ -410,11 +410,13 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // NIP-ER reminder scheduler — polls for due reminders and publishes them
-    // to Redis pub/sub for cross-pod fan-out. Each pod's existing
-    // subscribe_local consumer picks them up and applies the author-only gate.
-    // Mirrors the channel reaper pattern. Cross-pod dedup via `delivered_at`
-    // column: only the pod that wins the atomic claim publishes.
+    // NIP-ER reminder scheduler — polls for due reminders, claims them
+    // atomically, then publishes the winner to Redis pub/sub for cross-pod
+    // fan-out. Each pod's existing subscribe_local consumer picks them up
+    // and applies the author-only gate. Mirrors the channel reaper pattern.
+    // Cross-pod dedup via `delivered_at` column: claim FIRST → publish
+    // SECOND → rollback on publish failure, so at most one pod publishes
+    // per due reminder.
     {
         let scheduler_state = Arc::clone(&state);
         let scheduler_interval_secs: u64 = std::env::var("SPROUT_REMINDER_SCHEDULER_INTERVAL_SECS")
@@ -454,35 +456,65 @@ async fn main() -> anyhow::Result<()> {
                 info!(count = due.len(), "Reminder scheduler: due reminders found");
 
                 for reminder in due {
-                    // Publish first, then claim. If publish fails the reminder
-                    // stays unclaimed and will be retried next tick. If claim
-                    // fails after a successful publish, duplicate fan-out on the
-                    // next tick is harmless (subscribers dedup by event ID).
+                    // Claim FIRST, publish SECOND, roll the claim back if
+                    // publish fails. The claim row is the cross-pod side-effect
+                    // boundary: at most one pod publishes per due reminder, and
+                    // if that pod's publish fails we revert its `delivered_at`
+                    // so a future tick can retry. Subscribers do NOT dedup by
+                    // event id — publishing under a lost claim would leak a
+                    // duplicate fan-out to every client. Mirrors the
+                    // `claim → side-effect` ordering Max + Sami landed for the
+                    // cron producer (`df997d7cc` + `910d82228`).
+                    let stamp = match scheduler_state
+                        .db
+                        .claim_due_reminder(&reminder.id, reminder.created_at)
+                        .await
+                    {
+                        Ok(Some(stamp)) => stamp,
+                        Ok(None) => continue, // Another pod claimed it.
+                        Err(e) => {
+                            warn!(
+                                event_id = hex::encode(&reminder.id),
+                                "Reminder scheduler: claim failed, skipping: {e}"
+                            );
+                            continue;
+                        }
+                    };
+
                     if let Err(e) = scheduler_state
                         .pubsub
                         .publish_event(uuid::Uuid::nil(), &reminder_to_event(&reminder))
                         .await
                     {
+                        // Publish failed after we won the claim. Roll back so
+                        // a subsequent tick can retry. The rollback is
+                        // stamp-guarded, so if another pod has somehow
+                        // already rewon the claim (e.g. by an operator
+                        // manually clearing `delivered_at`), we leave their
+                        // claim alone — bounded duplicate fan-out is the
+                        // worst case, but never silent data loss.
                         error!(
                             event_id = hex::encode(&reminder.id),
-                            "Reminder scheduler: Redis publish failed, skipping claim: {e}"
+                            "Reminder scheduler: Redis publish failed, rolling back claim: {e}"
                         );
-                        continue;
-                    }
-
-                    // Atomic cross-pod claim — only the winner marks it delivered.
-                    match scheduler_state
-                        .db
-                        .claim_due_reminder(&reminder.id, reminder.created_at)
-                        .await
-                    {
-                        Ok(true) => {}
-                        Ok(false) => {} // Another pod claimed it; duplicate publish is harmless.
-                        Err(e) => {
-                            warn!(
-                                event_id = hex::encode(&reminder.id),
-                                "Reminder scheduler: claim failed after publish (duplicate delivery possible): {e}"
-                            );
+                        match scheduler_state
+                            .db
+                            .rollback_reminder_claim(&reminder.id, reminder.created_at, stamp)
+                            .await
+                        {
+                            Ok(true) => {} // reverted; retry on next tick.
+                            Ok(false) => {
+                                warn!(
+                                    event_id = hex::encode(&reminder.id),
+                                    "Reminder scheduler: rollback no-op (claim already changed); leaving as-is"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    event_id = hex::encode(&reminder.id),
+                                    "Reminder scheduler: rollback failed (claim stuck until manual recovery): {e}"
+                                );
+                            }
                         }
                     }
                 }

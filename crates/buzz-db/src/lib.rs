@@ -545,12 +545,26 @@ impl Db {
     }
 
     /// Atomically claim a due reminder for delivery (cross-pod dedup).
+    /// Returns `Some(stamp)` if this caller won the claim — the stamp must
+    /// be passed to [`Self::rollback_reminder_claim`] if the follow-on side
+    /// effect fails.
     pub async fn claim_due_reminder(
         &self,
         event_id: &[u8],
         event_created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<bool> {
+    ) -> Result<Option<i64>> {
         event::claim_due_reminder(&self.pool, event_id, event_created_at).await
+    }
+
+    /// Best-effort rollback of a prior winning [`Self::claim_due_reminder`]
+    /// — the `stamp` MUST be the value returned by that call.
+    pub async fn rollback_reminder_claim(
+        &self,
+        event_id: &[u8],
+        event_created_at: chrono::DateTime<chrono::Utc>,
+        stamp: i64,
+    ) -> Result<bool> {
+        event::rollback_reminder_claim(&self.pool, event_id, event_created_at, stamp).await
     }
 
     /// Ensure a user record exists (upsert).

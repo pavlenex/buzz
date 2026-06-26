@@ -1074,15 +1074,20 @@ pub async fn query_due_reminders(
     Ok(results)
 }
 
-/// Atomically claim a due reminder for delivery. Returns `Some(id)` if this
-/// caller won the claim (set `delivered_at`), or `None` if another pod already
-/// claimed it. Mirrors the reaper's `archived_at IS NULL` guard for cross-pod
-/// idempotency.
+/// Atomically claim a due reminder for delivery. Returns `Some(stamp)` if
+/// this caller won the claim (the `delivered_at` value it wrote), or `None`
+/// if another pod already claimed it. Mirrors the reaper's `archived_at IS
+/// NULL` guard for cross-pod idempotency.
+///
+/// The returned stamp is the value the caller must pass to
+/// [`rollback_reminder_claim`] if a subsequent side effect (e.g. Redis
+/// publish) fails — the rollback guards on `delivered_at = stamp` so a
+/// stale rollback can never clobber a fresh winner's claim.
 pub async fn claim_due_reminder(
     pool: &PgPool,
     event_id: &[u8],
     event_created_at: DateTime<Utc>,
-) -> Result<bool> {
+) -> Result<Option<i64>> {
     let now_epoch = Utc::now().timestamp();
     let result = sqlx::query(
         r#"
@@ -1094,6 +1099,42 @@ pub async fn claim_due_reminder(
     .bind(now_epoch)
     .bind(event_created_at)
     .bind(event_id)
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() > 0 {
+        Ok(Some(now_epoch))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Best-effort rollback of a prior winning [`claim_due_reminder`] call.
+///
+/// Used when the caller won the claim but its follow-on side effect (e.g.
+/// Redis publish) failed and it wants the reminder to be re-tried on a
+/// subsequent scheduler tick. The `stamp` argument MUST be the value
+/// returned by the original `claim_due_reminder` call — the SQL guard
+/// `delivered_at = $stamp` is what prevents an ABA hazard where another pod
+/// has since rewon the claim. Returns `Ok(true)` if the row was reverted,
+/// `Ok(false)` if not (someone else holds a live claim now; leave it alone
+/// — bounded duplicate fan-out is the worst case).
+pub async fn rollback_reminder_claim(
+    pool: &PgPool,
+    event_id: &[u8],
+    event_created_at: DateTime<Utc>,
+    stamp: i64,
+) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        UPDATE events
+        SET delivered_at = NULL
+        WHERE created_at = $1 AND id = $2 AND delivered_at = $3
+        "#,
+    )
+    .bind(event_created_at)
+    .bind(event_id)
+    .bind(stamp)
     .execute(pool)
     .await?;
 
@@ -1239,5 +1280,209 @@ mod tests {
             vec![Tag::parse(["not_before", "not-a-number"]).unwrap()],
         );
         assert_eq!(extract_not_before(&event), None);
+    }
+}
+
+/// Live-PG dedup tests for the NIP-ER reminder claim/rollback API.
+///
+/// Reuses the `#[ignore = "requires Postgres"]` + serial-on-fresh-schema
+/// convention Sami's F1/F4 and Quinn's engine-layer audit landed (see
+/// `crates/buzz-workflow/src/lib.rs` and `crates/buzz-db/src/workflow.rs`).
+/// These pin the §5c reminder-scheduler invariants that the `claim FIRST →
+/// publish SECOND → rollback on publish failure` shape in
+/// `buzz-relay/src/main.rs` depends on.
+#[cfg(test)]
+mod claim_dedup_tests {
+    use super::*;
+    use buzz_core::kind::KIND_EVENT_REMINDER;
+    use sqlx::PgPool;
+
+    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
+
+    async fn setup_pool() -> PgPool {
+        let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| TEST_DB_URL.to_owned());
+
+        PgPool::connect(&database_url)
+            .await
+            .expect("connect to test DB")
+    }
+
+    /// Insert a due reminder row directly: minimal columns to satisfy NOT
+    /// NULL + the predicates `query_due_reminders` filters on
+    /// (`kind = KIND_EVENT_REMINDER`, `not_before <= now`,
+    /// `deleted_at IS NULL`, `delivered_at IS NULL`). Returns (id_bytes,
+    /// created_at) — the composite PK the claim API targets.
+    async fn insert_due_reminder(pool: &PgPool) -> (Vec<u8>, DateTime<Utc>) {
+        // 32-byte id: two uuids concatenated for uniqueness.
+        let id_bytes: Vec<u8> = Uuid::new_v4()
+            .as_bytes()
+            .iter()
+            .chain(Uuid::new_v4().as_bytes().iter())
+            .copied()
+            .collect();
+        let pubkey: Vec<u8> = vec![0xb1; 32];
+        let created_at = Utc::now();
+        let not_before = created_at.timestamp() - 1; // already due.
+
+        sqlx::query(
+            r#"
+            INSERT INTO events
+                (id, pubkey, created_at, kind, tags, content, sig, not_before)
+            VALUES ($1, $2, $3, $4, '[]'::jsonb, '', $5, $6)
+            "#,
+        )
+        .bind(&id_bytes)
+        .bind(&pubkey)
+        .bind(created_at)
+        .bind(KIND_EVENT_REMINDER as i32)
+        .bind(vec![0u8; 64])
+        .bind(not_before)
+        .execute(pool)
+        .await
+        .expect("insert due reminder");
+
+        (id_bytes, created_at)
+    }
+
+    /// (§5c acceptance) Two concurrent `claim_due_reminder` calls for the
+    /// same reminder must serialize: exactly one returns `Some(stamp)`, the
+    /// other `None`. This is the cross-pod invariant the reorder relies on
+    /// — without it the "claim first" ordering would still allow duplicate
+    /// publishes.
+    ///
+    /// The DB-layer mechanism is `UPDATE ... WHERE delivered_at IS NULL`:
+    /// Postgres serializes the row-level write under the partition,
+    /// guaranteeing at most one UPDATE flips `delivered_at` from NULL to a
+    /// stamp.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn two_concurrent_claims_yield_exactly_one_winner() {
+        let pool = setup_pool().await;
+        let (id, created_at) = insert_due_reminder(&pool).await;
+
+        let pool_a = pool.clone();
+        let id_a = id.clone();
+        let pool_b = pool.clone();
+        let id_b = id.clone();
+
+        let (a, b) = tokio::join!(
+            tokio::spawn(async move { claim_due_reminder(&pool_a, &id_a, created_at).await }),
+            tokio::spawn(async move { claim_due_reminder(&pool_b, &id_b, created_at).await }),
+        );
+        let a = a.unwrap().expect("claim A succeeded");
+        let b = b.unwrap().expect("claim B succeeded");
+
+        // Exactly one Some(stamp), exactly one None.
+        let winners = [a.is_some(), b.is_some()];
+        assert_eq!(
+            winners.iter().filter(|w| **w).count(),
+            1,
+            "exactly one of the two concurrent claims must win: a={a:?}, b={b:?}"
+        );
+
+        // A third claim must also lose — the claim row is the dedupe boundary.
+        let third = claim_due_reminder(&pool, &id, created_at)
+            .await
+            .expect("third claim runs");
+        assert_eq!(
+            third, None,
+            "third claim must lose; reminder already claimed"
+        );
+    }
+
+    /// (§5c acceptance) The publish-failure rollback round-trip: a winner
+    /// can revert its own claim with the stamp it was returned, and a
+    /// subsequent `claim_due_reminder` then succeeds. This is the path the
+    /// scheduler takes when Redis publish fails after a successful claim.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn rollback_with_matching_stamp_reverts_then_reclaim_wins() {
+        let pool = setup_pool().await;
+        let (id, created_at) = insert_due_reminder(&pool).await;
+
+        let stamp = claim_due_reminder(&pool, &id, created_at)
+            .await
+            .expect("first claim runs")
+            .expect("first claim wins");
+
+        let reverted = rollback_reminder_claim(&pool, &id, created_at, stamp)
+            .await
+            .expect("rollback runs");
+        assert!(reverted, "rollback with matching stamp must revert the row");
+
+        // After rollback `delivered_at` is NULL again — a second claim wins.
+        // (We don't compare the two stamps: `Utc::now().timestamp()` has
+        // 1-second resolution, so back-to-back claims often share a value.
+        // What matters is that the second claim returns Some, not None.)
+        let _stamp_2 = claim_due_reminder(&pool, &id, created_at)
+            .await
+            .expect("second claim runs")
+            .expect("second claim wins after rollback");
+    }
+
+    /// (§5c acceptance — the ABA guard, NOT a happy path) The rollback's
+    /// `delivered_at = $stamp` guard must reject a stale stamp. Without
+    /// this guard, a slow pod could win-rollback-rewon-rollback racing
+    /// another pod's later claim and clobber it, producing a silent
+    /// duplicate publish window. This test simulates the racy shape by
+    /// hand: the first claim sets `delivered_at = stamp1`, the operator
+    /// (or a second pod via DB write) replaces it with `stamp2`, and the
+    /// first pod's late rollback with `stamp1` must return false WITHOUT
+    /// reverting the row.
+    ///
+    /// Adversarial: drop the `AND delivered_at = $3` guard from
+    /// `rollback_reminder_claim` and this test fails — the stale rollback
+    /// silently clobbers the live claim.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn rollback_with_stale_stamp_does_not_clobber_live_claim() {
+        let pool = setup_pool().await;
+        let (id, created_at) = insert_due_reminder(&pool).await;
+
+        let stamp_old = claim_due_reminder(&pool, &id, created_at)
+            .await
+            .expect("first claim runs")
+            .expect("first claim wins");
+
+        // Simulate the row's `delivered_at` advancing (operator manual
+        // clear-then-reclaim, or any post-claim mutation). A stamp 1
+        // second later is sufficient — the guard compares exact equality.
+        let stamp_new = stamp_old + 1;
+        sqlx::query(
+            r#"
+            UPDATE events SET delivered_at = $1
+            WHERE created_at = $2 AND id = $3
+            "#,
+        )
+        .bind(stamp_new)
+        .bind(created_at)
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .expect("advance delivered_at");
+
+        let reverted = rollback_reminder_claim(&pool, &id, created_at, stamp_old)
+            .await
+            .expect("rollback runs");
+        assert!(
+            !reverted,
+            "rollback with stale stamp must NOT revert — would clobber the live claim"
+        );
+
+        // Confirm the row's `delivered_at` is still `stamp_new`, not NULL.
+        let current: Option<i64> =
+            sqlx::query_scalar("SELECT delivered_at FROM events WHERE created_at = $1 AND id = $2")
+                .bind(created_at)
+                .bind(&id)
+                .fetch_one(&pool)
+                .await
+                .expect("re-read delivered_at");
+        assert_eq!(
+            current,
+            Some(stamp_new),
+            "delivered_at must remain stamp_new — the stale rollback was correctly a no-op"
+        );
     }
 }
