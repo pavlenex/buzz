@@ -94,12 +94,15 @@ function runtimeIdForAgentCommand(
  * Extract the LLM provider id from a managed agent's backend so it can carry
  * into the persona template (a databricks/anthropic agent should promote with
  * its provider, not lose it). The canonical provider source is the backend
- * union, not the top-level `provider` field on `ManagedAgent`: that top-level
- * field is a derived snapshot (output), while a `"provider"` backend carries
- * the provider id that was the actual create input. A `"local"` backend has
- * none. Returns `undefined` for local backends — the persona's `provider` is
- * optional, so an absent provider just carries as unset (auto-detect /
- * provider-locked runtime).
+ * union, NOT the top-level `provider` field on `ManagedAgent`. That top-level
+ * field is a persona-pinned snapshot: `create_managed_agent` only fills it
+ * from a linked persona's snapshot (commands/agents.rs), so it is `null` for
+ * the persona-less agents this feature acts on (`personaId === null`) — while
+ * `backend` always preserves the real `{ type: "provider"; id }` from the
+ * create input. Reading top-level `provider` here would lose the provider on
+ * exactly those agents. A `"local"` backend has none. Returns `undefined` for
+ * local backends — the persona's `provider` is optional, so an absent provider
+ * just carries as unset (auto-detect / provider-locked runtime).
  */
 function providerForAgentBackend(
   backend: ManagedAgent["backend"],

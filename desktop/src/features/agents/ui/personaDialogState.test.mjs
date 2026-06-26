@@ -349,8 +349,8 @@ test("saveAsPersonaTemplateDialogState carries name, prompt, model, and envVars"
 
 test("saveAsPersonaTemplateDialogState carries the provider id from a provider backend", () => {
   // A databricks/anthropic agent must promote with its provider, not lose it.
-  // The canonical provider source is backend.id (the create input), not the
-  // derived top-level ManagedAgent.provider snapshot.
+  // backend.id is the canonical source: top-level ManagedAgent.provider is a
+  // persona-pinned snapshot and is null for the persona-less agents this acts on.
   const state = saveAsPersonaTemplateDialogState(
     makeAgent({ backend: { type: "provider", id: "databricks", config: {} } }),
     [],
