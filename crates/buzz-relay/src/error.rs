@@ -37,6 +37,15 @@ pub enum RelayError {
     #[error("Not authenticated")]
     NotAuthenticated,
 
+    /// The connection host does not map to any community.
+    ///
+    /// Fail-closed tenant resolution (conformance row-zero): an unmapped host is
+    /// rejected outright — there is no default-community fallthrough. The message
+    /// is deliberately generic so it cannot be used as a cross-tenant existence
+    /// oracle (which hosts are configured).
+    #[error("Host not mapped to a community")]
+    HostNotMapped,
+
     /// The client sent a message that could not be parsed.
     #[error("Invalid message format: {0}")]
     InvalidMessage(String),

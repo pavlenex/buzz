@@ -161,9 +161,25 @@ async fn nip11_or_ws_handler(
     }
 
     match WebSocketUpgrade::from_request(req, &state).await {
-        Ok(ws) => ws
-            .on_upgrade(move |socket| handle_connection(socket, state, addr))
-            .into_response(),
+        Ok(ws) => {
+            // Conformance row-zero: resolve the tenant from the connection host
+            // BEFORE upgrading, so a connection that upgrades already carries a
+            // resolved `TenantContext`. An unmapped host is rejected fail-closed —
+            // there is no default-community fallthrough.
+            let host = normalize_host(
+                &headers,
+                &crate::api::nip05::extract_domain(&state.config.relay_url),
+            );
+            let tenant = match state.resolve_tenant(&host).await {
+                Ok(tenant) => tenant,
+                Err(_) => {
+                    // Generic rejection: do not leak which hosts are configured.
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+            };
+            ws.on_upgrade(move |socket| handle_connection(socket, state, addr, tenant))
+                .into_response()
+        }
         Err(_) => {
             // Browser requesting HTML and web UI is configured → serve SPA.
             if let Some(ref dir) = state.config.web_dir {
@@ -183,6 +199,27 @@ async fn nip11_or_ws_handler(
             Json(info).into_response()
         }
     }
+}
+
+/// Normalize the connection host into the canonical form used to look up a
+/// community (lowercase, no port). This is the *connection* host — the request's
+/// `Host` header — because the tenant must be resolved from where the client
+/// actually connected, not from static relay config (conformance row-zero).
+///
+/// `fallback_host` is used only when the header is absent or empty (e.g. a direct
+/// internal hit); the caller passes the configured `relay_url` host. In a
+/// single-community (N=1) deployment the configured host and the request host
+/// coincide, so behaviour matches today's relay; the DB lookup still has the
+/// final say and an unmapped host is rejected.
+fn normalize_host(headers: &HeaderMap, fallback_host: &str) -> String {
+    headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        // Strip an optional port and lowercase. Mirrors `nip05::extract_domain`
+        // but operates on the live request authority rather than a URL.
+        .map(|h| h.split(':').next().unwrap_or(h).to_lowercase())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| fallback_host.to_lowercase())
 }
 
 async fn health_handler() -> impl IntoResponse {
@@ -261,4 +298,53 @@ fn build_cors_layer(cors_origins: &[String]) -> CorsLayer {
         .allow_origin(AllowOrigin::list(origins))
         .allow_methods(tower_http::cors::Any)
         .allow_headers(tower_http::cors::Any)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::header::HOST;
+    use axum::http::HeaderValue;
+
+    fn headers_with_host(host: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(HOST, HeaderValue::from_str(host).unwrap());
+        h
+    }
+
+    #[test]
+    fn host_header_wins_over_fallback() {
+        let headers = headers_with_host("tenant.example");
+        assert_eq!(
+            normalize_host(&headers, "configured.example"),
+            "tenant.example"
+        );
+    }
+
+    #[test]
+    fn host_header_is_lowercased_and_port_stripped() {
+        let headers = headers_with_host("Tenant.Example:8080");
+        assert_eq!(
+            normalize_host(&headers, "configured.example"),
+            "tenant.example"
+        );
+    }
+
+    #[test]
+    fn falls_back_when_header_absent() {
+        let headers = HeaderMap::new();
+        assert_eq!(
+            normalize_host(&headers, "Configured.Example"),
+            "configured.example"
+        );
+    }
+
+    #[test]
+    fn empty_host_header_falls_back() {
+        let headers = headers_with_host("");
+        assert_eq!(
+            normalize_host(&headers, "configured.example"),
+            "configured.example"
+        );
+    }
 }

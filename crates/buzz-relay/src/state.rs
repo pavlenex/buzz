@@ -580,6 +580,28 @@ impl AppState {
         }
         Ok(visibility)
     }
+
+    /// Resolve a normalized connection host to its [`TenantContext`].
+    ///
+    /// This is the ONLY place a `TenantContext` is minted from a live request
+    /// (conformance row-zero): the host comes from the connection, the community
+    /// from the durable `communities` map, and the client never influences it.
+    /// An unmapped host fails closed via [`RelayError::HostNotMapped`] — there is
+    /// no default-community fallthrough.
+    pub async fn resolve_tenant(
+        &self,
+        normalized_host: &str,
+    ) -> Result<buzz_core::TenantContext, crate::error::RelayError> {
+        let record = self
+            .db
+            .lookup_community_by_host(normalized_host)
+            .await?
+            .ok_or(crate::error::RelayError::HostNotMapped)?;
+        Ok(buzz_core::TenantContext::resolved(
+            record.id,
+            normalized_host,
+        ))
+    }
 }
 
 /// Handle for graceful audit worker shutdown.
@@ -722,6 +744,10 @@ mod tests {
 
         let conn = ConnectionState {
             conn_id,
+            tenant: buzz_core::TenantContext::resolved(
+                buzz_core::CommunityId::from_uuid(Uuid::nil()),
+                "test.localhost",
+            ),
             remote_addr: "127.0.0.1:1234".parse().unwrap(),
             auth_state: RwLock::new(AuthState::Failed),
             subscriptions: Arc::new(Mutex::new(HashMap::new())),
