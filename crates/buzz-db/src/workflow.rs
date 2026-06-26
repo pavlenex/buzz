@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use buzz_core::CommunityId;
+
 use crate::error::{DbError, Result};
 
 // -- Token hashing ------------------------------------------------------------
@@ -374,6 +376,33 @@ pub async fn list_all_enabled_workflows(pool: &PgPool) -> Result<Vec<WorkflowRec
     .await?;
 
     rows.into_iter().map(row_to_workflow_record).collect()
+}
+
+/// Claim a scheduled workflow fire for a quantized schedule window.
+///
+/// Returns `true` only for the first pod that claims `(workflow_id,
+/// scheduled_for)`. All other pods receive `false` and must skip creating a
+/// workflow run. This is the restart-safe cross-pod dedupe boundary for cron.
+pub async fn claim_scheduled_workflow_fire(
+    pool: &PgPool,
+    community_id: CommunityId,
+    workflow_id: Uuid,
+    scheduled_for: DateTime<Utc>,
+) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO scheduled_workflow_fires (community_id, workflow_id, scheduled_for)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (community_id, workflow_id, scheduled_for) DO NOTHING
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .bind(workflow_id)
+    .bind(scheduled_for)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
 }
 
 /// Update a workflow's name, definition, and definition_hash.

@@ -139,6 +139,13 @@ mod tests {
             "initial schema migration should include tenant host map"
         );
         assert!(
+            migrations[0]
+                .sql
+                .as_str()
+                .contains("CREATE TABLE scheduled_workflow_fires"),
+            "initial schema migration should include workflow cron claim table"
+        );
+        assert!(
             migrations[0].sql.as_str().contains("CREATE TABLE channels"),
             "initial schema migration should include Buzz core tables"
         );

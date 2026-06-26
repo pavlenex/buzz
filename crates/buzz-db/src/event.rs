@@ -1083,7 +1083,19 @@ pub async fn claim_due_reminder(
     event_id: &[u8],
     event_created_at: DateTime<Utc>,
 ) -> Result<bool> {
-    let now_epoch = Utc::now().timestamp();
+    claim_due_reminder_with_stamp(pool, event_id, event_created_at, Utc::now().timestamp()).await
+}
+
+/// Atomically claim a due reminder using a caller-supplied delivery stamp.
+///
+/// The same stamp should be passed to [`release_due_reminder`] if the publish
+/// side effect fails, so rollback can compare-and-clear only this pod's claim.
+pub async fn claim_due_reminder_with_stamp(
+    pool: &PgPool,
+    event_id: &[u8],
+    event_created_at: DateTime<Utc>,
+    delivery_stamp: i64,
+) -> Result<bool> {
     let result = sqlx::query(
         r#"
         UPDATE events
@@ -1091,13 +1103,42 @@ pub async fn claim_due_reminder(
         WHERE created_at = $2 AND id = $3 AND delivered_at IS NULL
         "#,
     )
-    .bind(now_epoch)
+    .bind(delivery_stamp)
     .bind(event_created_at)
     .bind(event_id)
     .execute(pool)
     .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// Release a previously claimed reminder when publish fails.
+///
+/// The `delivery_stamp` must be the exact value written by the claiming pod;
+/// that compare-and-clear prevents one pod from rolling back another pod's
+/// later claim after a retry/race.
+pub async fn release_due_reminder(
+    pool: &PgPool,
+    event_id: &[u8],
+    event_created_at: DateTime<Utc>,
+    delivery_stamp: i64,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE events
+        SET delivered_at = NULL
+        WHERE created_at = $1
+          AND id = $2
+          AND delivered_at = $3
+        "#,
+    )
+    .bind(event_created_at)
+    .bind(event_id)
+    .bind(delivery_stamp)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -647,6 +647,27 @@ impl Db {
         event::claim_due_reminder(&self.pool, event_id, event_created_at).await
     }
 
+    /// Atomically claim a due reminder using a caller-supplied delivery stamp.
+    pub async fn claim_due_reminder_with_stamp(
+        &self,
+        event_id: &[u8],
+        event_created_at: chrono::DateTime<chrono::Utc>,
+        delivery_stamp: i64,
+    ) -> Result<bool> {
+        event::claim_due_reminder_with_stamp(&self.pool, event_id, event_created_at, delivery_stamp)
+            .await
+    }
+
+    /// Release a claimed due reminder after a publish failure.
+    pub async fn release_due_reminder(
+        &self,
+        event_id: &[u8],
+        event_created_at: chrono::DateTime<chrono::Utc>,
+        delivery_stamp: i64,
+    ) -> Result<()> {
+        event::release_due_reminder(&self.pool, event_id, event_created_at, delivery_stamp).await
+    }
+
     /// Ensure a user record exists (upsert).
     pub async fn ensure_user(&self, pubkey: &[u8]) -> Result<()> {
         user::ensure_user(&self.pool, pubkey).await
@@ -1225,6 +1246,25 @@ impl Db {
     /// List all active, enabled schedule-triggered workflows.
     pub async fn list_all_enabled_workflows(&self) -> Result<Vec<workflow::WorkflowRecord>> {
         workflow::list_all_enabled_workflows(&self.pool).await
+    }
+
+    /// Claim a scheduled workflow fire for a quantized schedule window.
+    ///
+    /// Returns `true` only for the first pod to claim `(workflow_id,
+    /// scheduled_for)`; all other pods must skip creating a run.
+    pub async fn claim_scheduled_workflow_fire(
+        &self,
+        community_id: CommunityId,
+        workflow_id: Uuid,
+        scheduled_for: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool> {
+        workflow::claim_scheduled_workflow_fire(
+            &self.pool,
+            community_id,
+            workflow_id,
+            scheduled_for,
+        )
+        .await
     }
 
     /// Update a workflow's name, definition, and hash.
