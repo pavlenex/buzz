@@ -39,6 +39,12 @@ pub struct Config {
     pub relay_url: String,
     /// Maximum number of concurrent WebSocket connections.
     pub max_connections: usize,
+    /// Maximum WebSocket connection attempts permitted per source IP within
+    /// `ip_connection_window_secs`. Operator-global fence (pre-tenant) — runs
+    /// before host resolution so an unmappable Host can't bypass the cap.
+    pub max_connections_per_ip: u64,
+    /// Sliding-window length (seconds) for the per-IP connection fence.
+    pub ip_connection_window_secs: u64,
     /// Maximum number of concurrently executing message handlers.
     pub max_concurrent_handlers: usize,
     /// Per-connection outbound message buffer size (number of messages).
@@ -156,6 +162,18 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(10_000);
+
+        let max_connections_per_ip = std::env::var("BUZZ_MAX_CONNECTIONS_PER_IP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(60);
+
+        let ip_connection_window_secs = std::env::var("BUZZ_IP_CONNECTION_WINDOW_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(60);
 
         let max_concurrent_handlers = std::env::var("BUZZ_MAX_CONCURRENT_HANDLERS")
             .ok()
@@ -377,6 +395,8 @@ impl Config {
             typesense_key,
             relay_url,
             max_connections,
+            max_connections_per_ip,
+            ip_connection_window_secs,
             max_concurrent_handlers,
             send_buffer_size,
             max_frame_bytes,

@@ -23,6 +23,7 @@ use crate::connection::handle_connection;
 use crate::metrics::track_metrics;
 use crate::nip11::{nip11_facts, relay_info_handler, RelayInfo};
 use crate::state::AppState;
+use buzz_auth::RateLimiter;
 
 /// Build the axum [`Router`] with all relay routes, middleware, and CORS configuration.
 ///
@@ -162,6 +163,25 @@ async fn nip11_or_ws_handler(
 
     match WebSocketUpgrade::from_request(req, &state).await {
         Ok(ws) => {
+            // Operator-global IP connection fence — runs BEFORE host resolution
+            // so an attacker can't bypass the per-IP cap by sending an
+            // unmappable Host (every upgrade attempt counts, mapped or not).
+            // Tenant-free by construction (`check_ip_connection`). Fail-closed:
+            // a Redis error rejects rather than admits.
+            match state
+                .rate_limiter
+                .check_ip_connection(
+                    &addr.ip(),
+                    state.config.ip_connection_window_secs,
+                    state.config.max_connections_per_ip,
+                )
+                .await
+            {
+                Ok(result) if result.allowed => {}
+                Ok(_) => return StatusCode::TOO_MANY_REQUESTS.into_response(),
+                Err(_) => return StatusCode::TOO_MANY_REQUESTS.into_response(),
+            }
+
             // Conformance row-zero: resolve the tenant from the connection host
             // BEFORE upgrading, so a connection that upgrades already carries a
             // resolved `TenantContext`. An unmapped host is rejected fail-closed —

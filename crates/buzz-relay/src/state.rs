@@ -18,6 +18,8 @@ use buzz_core::event::StoredEvent;
 use buzz_db::Db;
 use buzz_media::MediaStorage;
 use buzz_pubsub::cache_invalidation::CacheInvalidation;
+use buzz_pubsub::nip98_replay::RedisNip98ReplayGuard;
+use buzz_pubsub::rate_limiter::RedisRateLimiter;
 use buzz_pubsub::PubSubManager;
 use buzz_search::SearchService;
 use buzz_workflow::WorkflowEngine;
@@ -247,9 +249,18 @@ pub struct AppState {
     pub shutting_down: Arc<AtomicBool>,
     /// Process start time — used by `/_status` endpoint.
     pub started_at: Instant,
-    /// NIP-98 replay prevention: recently-seen event IDs.
-    /// 2× the ±60s tolerance window so entries outlive the acceptance window.
-    pub nip98_seen: Arc<moka::sync::Cache<[u8; 32], ()>>,
+    /// NIP-98 replay prevention: shared, community-scoped seen-set backed by
+    /// Redis (`SET NX EX`). Replaces the old per-pod moka cache — under
+    /// any-pod-any-connection (bus-scoping B), a NIP-98 mint can land on any
+    /// pod, so the freshness fence must be cluster-wide. Fail-closed on Redis
+    /// error (see `Nip98ReplayGuard::try_mark`).
+    pub nip98_replay: Arc<RedisNip98ReplayGuard>,
+
+    /// Operator-global per-IP connection fence + per-(community, pubkey)
+    /// rate limiter, backed by Redis. `check_ip_connection` is tenant-free and
+    /// runs before host resolution; `check_and_increment` scopes by resolved
+    /// community.
+    pub rate_limiter: Arc<RedisRateLimiter>,
 
     /// Per-agent sliding-window rate limiter for observer frames (kind 24200).
     /// Key: agent pubkey bytes (32). Value: (count, window_start).
@@ -357,6 +368,8 @@ impl AppState {
             &config.media.s3_bucket,
         )
         .expect("media storage was already constructed with this S3 config");
+        let nip98_replay = Arc::new(RedisNip98ReplayGuard::new(redis_pool.clone()));
+        let rate_limiter = Arc::new(RedisRateLimiter::new(redis_pool.clone()));
         let state = Self {
             config: Arc::new(config),
             db,
@@ -404,12 +417,8 @@ impl AppState {
             audio_rooms: Arc::new(AudioRoomManager::new()),
             shutting_down: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
-            nip98_seen: Arc::new(
-                moka::sync::Cache::builder()
-                    .max_capacity(10_000)
-                    .time_to_live(std::time::Duration::from_secs(120))
-                    .build(),
-            ),
+            nip98_replay,
+            rate_limiter,
             observer_rate_limiter: Arc::new(DashMap::new()),
             mesh_connect_rate_limiter: Arc::new(DashMap::new()),
             observer_owner_cache: Arc::new(

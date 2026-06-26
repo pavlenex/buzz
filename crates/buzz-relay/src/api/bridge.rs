@@ -11,6 +11,7 @@ use axum::{
     response::Json,
 };
 use base64::Engine;
+use buzz_auth::Nip98ReplayGuard;
 use serde_json::Value;
 
 use crate::handlers::ingest::{IngestAuth, IngestError};
@@ -67,29 +68,65 @@ fn verify_bridge_auth(
     Err(api_error(StatusCode::UNAUTHORIZED, "missing Nostr auth"))
 }
 
-/// Check NIP-98 replay and record the event ID atomically.
+/// Resolve the request tenant from the connection host.
 ///
-/// Uses moka's `entry` API for atomic insert-if-absent — no race window
-/// between "check if seen" and "mark as seen".
-fn check_nip98_replay(
+/// The HTTP twin of the WS upgrade bind: community comes from the connection
+/// host, never the authenticated key. An unmapped host fails closed with
+/// `404` so the bridge never reveals whether a host maps to a community.
+async fn resolve_request_tenant(
     state: &AppState,
+    headers: &HeaderMap,
+) -> Result<buzz_core::TenantContext, (StatusCode, Json<Value>)> {
+    let host = crate::router::normalize_host(
+        headers,
+        &crate::api::nip05::extract_domain(&state.config.relay_url),
+    );
+    state
+        .resolve_tenant(&host)
+        .await
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "not found"))
+}
+
+/// Check NIP-98 replay and record the event ID atomically, scoped to `ctx`'s
+/// community.
+///
+/// Backed by the shared Redis seen-set (`SET NX EX`): under
+/// any-pod-any-connection the freshness fence must be cluster-wide, not
+/// per-pod. The seen-set is community-scoped (S1) — the same event id is a
+/// distinct claim in each community — so this MUST run under the resolved
+/// tenant. Fails closed: a Redis error rejects the request rather than
+/// admitting a possible replay. Dev-mode X-Pubkey auth (zero hash) skips the
+/// check.
+async fn check_nip98_replay(
+    state: &AppState,
+    ctx: &buzz_core::TenantContext,
     event_id_bytes: [u8; 32],
 ) -> Result<(), (StatusCode, Json<Value>)> {
     // Skip replay detection for dev-mode X-Pubkey auth (zero hash).
     if event_id_bytes == [0u8; 32] {
         return Ok(());
     }
-    // Atomic: get_with inserts the value if absent and returns it.
-    // If the entry already existed, this is a replay.
-    let entry = state.nip98_seen.entry(event_id_bytes);
-    let result = entry.or_insert(());
-    if !result.is_fresh() {
-        return Err(api_error(
+    let event_id = nostr::EventId::from_slice(&event_id_bytes)
+        .map_err(|_| api_error(StatusCode::UNAUTHORIZED, "NIP-98: invalid event id"))?;
+    match state
+        .nip98_replay
+        .try_mark(ctx, &event_id, buzz_auth::DEFAULT_REPLAY_TTL_SECS)
+        .await
+    {
+        Ok(true) => Ok(()),
+        // Wire-indistinguishable from an invalid NIP-98 event (Quinn P2): a
+        // distinct "replay detected" reply would turn the community-scoped
+        // seen-set into a presence oracle on event ids.
+        Ok(false) => Err(api_error(
             StatusCode::UNAUTHORIZED,
-            "NIP-98: replay detected",
-        ));
+            "NIP-98 verification failed",
+        )),
+        // Fail closed — never admit on a Redis error.
+        Err(_) => Err(api_error(
+            StatusCode::UNAUTHORIZED,
+            "NIP-98 verification failed",
+        )),
     }
-    Ok(())
 }
 
 /// Reconstruct the canonical URL for NIP-98 verification from the relay config.
@@ -171,7 +208,12 @@ pub async fn submit_event(
         Some(&body),
         state.config.require_auth_token,
     )?;
-    check_nip98_replay(&state, event_id_bytes)?;
+    // Resolve the tenant from the request host (the HTTP twin of the WS upgrade
+    // bind) BEFORE the replay check: the seen-set is community-scoped, so the
+    // replay mark must run under the resolved tenant. An unmapped host fails
+    // closed here.
+    let ctx = resolve_request_tenant(&state, &headers).await?;
+    check_nip98_replay(&state, &ctx, event_id_bytes).await?;
     let pubkey_bytes = pubkey.to_bytes().to_vec();
 
     // Enforce relay membership (with NIP-OA fallback via x-auth-tag header).
@@ -180,19 +222,6 @@ pub async fn submit_event(
 
     let event: nostr::Event = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid event JSON: {e}")))?;
-
-    // Resolve the tenant from the request host (the HTTP twin of the WS
-    // upgrade bind): community comes from the connection host, never the
-    // authenticated key. An unmapped host fails closed. Resolved before any
-    // event routing so both the mesh and ingest paths bind the same tenant.
-    let host = crate::router::normalize_host(
-        &headers,
-        &crate::api::nip05::extract_domain(&state.config.relay_url),
-    );
-    let ctx = state
-        .resolve_tenant(&host)
-        .await
-        .map_err(|_| api_error(StatusCode::NOT_FOUND, "not found"))?;
 
     // Mesh signaling kinds (24620 status report, 24621 connect request) are
     // ephemeral and deliberately absent from ingest_event's per-kind allowlist.
@@ -255,22 +284,13 @@ pub async fn query_events(
         Some(&body),
         state.config.require_auth_token,
     )?;
-    check_nip98_replay(&state, event_id_bytes)?;
+    // Resolve the tenant before the replay check (community-scoped seen-set).
+    let ctx = resolve_request_tenant(&state, &headers).await?;
+    check_nip98_replay(&state, &ctx, event_id_bytes).await?;
     let pubkey_bytes = pubkey.to_bytes().to_vec();
 
     let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
     super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag).await?;
-
-    // Resolve the tenant from the request host (community from the connection,
-    // never the authenticated key); unmapped host fails closed.
-    let host = crate::router::normalize_host(
-        &headers,
-        &crate::api::nip05::extract_domain(&state.config.relay_url),
-    );
-    let ctx = state
-        .resolve_tenant(&host)
-        .await
-        .map_err(|_| api_error(StatusCode::NOT_FOUND, "not found"))?;
 
     // Two-pass parse: preserve raw JSON for custom extension fields (before_id,
     // depth_limit, feed_types) that nostr::Filter silently drops.
@@ -519,7 +539,11 @@ pub async fn count_events(
         Some(&body),
         state.config.require_auth_token,
     )?;
-    check_nip98_replay(&state, event_id_bytes)?;
+    // Resolve the tenant before the replay check (community-scoped seen-set);
+    // unmapped host fails closed. /count previously skipped tenant resolution —
+    // it's required now because the NIP-98 seen-set is per-community.
+    let ctx = resolve_request_tenant(&state, &headers).await?;
+    check_nip98_replay(&state, &ctx, event_id_bytes).await?;
     let pubkey_bytes = pubkey.to_bytes().to_vec();
 
     let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
