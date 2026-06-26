@@ -1,3 +1,7 @@
+// Naming boundary: user-facing copy says "persona template" (the reusable
+// setup users save and reuse), while the backend type/storage stays `persona`
+// (kind:30175, builtin:* ids, .persona.md). Do NOT rename backend symbols to
+// match the UI — the two names map across this boundary intentionally.
 export const personaLibraryCopy = {
   title: "My agents",
   description:

@@ -7,13 +7,8 @@ import {
   FileText,
   OctagonX,
   Pencil,
-  Play,
-  Power,
-  Square,
   Trash2,
-  UserPlus,
 } from "lucide-react";
-import { toast } from "sonner";
 
 import { useActiveAgentTurns } from "@/features/agents/activeAgentTurnsStore";
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
@@ -38,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import { IdentityCardSkeleton } from "@/shared/ui/identity-card-skeleton";
+import { AgentActionItems, type AgentMenuProps } from "./AgentActionItems";
 import { AgentIdentityCard } from "./AgentIdentityCard";
 import { CreateIdentityCard } from "./CreateIdentityCard";
 import { EditAgentDialog } from "./EditAgentDialog";
@@ -65,6 +61,7 @@ type UnifiedAgentsSectionProps = {
   onCreateAgent: () => void;
   onDeleteAgent: (pubkey: string) => void;
   onOpenAgentProfile?: (pubkey: string) => void;
+  onSaveAsTemplate: (agent: ManagedAgent) => void;
   onSelectLogAgent: (pubkey: string | null) => void;
   onStartAgent: (pubkey: string) => void;
   onStopAgent: (pubkey: string) => void;
@@ -110,6 +107,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     onCreateAgent,
     onDeleteAgent,
     onOpenAgentProfile,
+    onSaveAsTemplate,
     onSelectLogAgent,
     onStartAgent,
     onStopAgent,
@@ -187,6 +185,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     onAddToChannel,
     onDelete: onDeleteAgent,
     onOpenLogs: onSelectLogAgent,
+    onSaveAsTemplate,
     onStart: onStartAgent,
     onStop: onStopAgent,
     onToggleStartOnAppLaunch,
@@ -348,16 +347,6 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     </section>
   );
 }
-
-type AgentMenuProps = {
-  isActionPending: boolean;
-  onAddToChannel: (agent: ManagedAgent) => void;
-  onDelete: (pubkey: string) => void;
-  onOpenLogs: (pubkey: string) => void;
-  onStart: (pubkey: string) => void;
-  onStop: (pubkey: string) => void;
-  onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
-};
 
 type PersonaMenuProps = {
   isActionPending: boolean;
@@ -614,6 +603,7 @@ function AgentActionsMenu({
   onAddToChannel,
   onDelete,
   onOpenLogs,
+  onSaveAsTemplate,
   onStart,
   onStop,
   onToggleStartOnAppLaunch,
@@ -643,6 +633,7 @@ function AgentActionsMenu({
             onAddToChannel={onAddToChannel}
             onDelete={onDelete}
             onOpenLogs={onOpenLogs}
+            onSaveAsTemplate={onSaveAsTemplate}
             onStart={onStart}
             onStop={onStop}
             onToggleStartOnAppLaunch={onToggleStartOnAppLaunch}
@@ -656,114 +647,6 @@ function AgentActionsMenu({
         onOpenChange={setEditOpen}
         open={editOpen}
       />
-    </>
-  );
-}
-
-function AgentActionItems({
-  agent,
-  isActionPending,
-  onAddToChannel,
-  onDelete,
-  onEdit,
-  onOpenLogs,
-  onStart,
-  onStop,
-  onToggleStartOnAppLaunch,
-}: { agent: ManagedAgent; onEdit?: () => void } & AgentMenuProps) {
-  const isActive = isManagedAgentActive(agent);
-
-  return (
-    <>
-      {agent.backend.type === "provider" ? (
-        <>
-          <DropdownMenuItem
-            disabled={isActionPending}
-            onClick={() => onStart(agent.pubkey)}
-          >
-            <Play className="h-4 w-4" />
-            {isActive ? "Redeploy" : "Deploy"}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            disabled={isActionPending}
-            onClick={() => onStop(agent.pubkey)}
-          >
-            <Square className="h-4 w-4" />
-            Shutdown
-          </DropdownMenuItem>
-        </>
-      ) : isActive ? (
-        <DropdownMenuItem
-          disabled={isActionPending}
-          onClick={() => onStop(agent.pubkey)}
-        >
-          <Square className="h-4 w-4" />
-          Stop
-        </DropdownMenuItem>
-      ) : (
-        <DropdownMenuItem
-          disabled={isActionPending}
-          onClick={() => onStart(agent.pubkey)}
-        >
-          <Play className="h-4 w-4" />
-          Spawn
-        </DropdownMenuItem>
-      )}
-
-      {agent.backend.type !== "provider" && onEdit ? (
-        <DropdownMenuItem onClick={onEdit}>
-          <Pencil className="h-4 w-4" />
-          Edit agent
-        </DropdownMenuItem>
-      ) : null}
-
-      <DropdownMenuItem
-        disabled={isActionPending}
-        onClick={() => onAddToChannel(agent)}
-      >
-        <UserPlus className="h-4 w-4" />
-        Add to channel
-      </DropdownMenuItem>
-
-      <DropdownMenuItem
-        onClick={async () => {
-          await navigator.clipboard.writeText(agent.pubkey);
-          toast.success("Copied pubkey to clipboard");
-        }}
-      >
-        <Clipboard className="h-4 w-4" />
-        Copy pubkey
-      </DropdownMenuItem>
-
-      {agent.backend.type === "local" ? (
-        <DropdownMenuItem onClick={() => onOpenLogs(agent.pubkey)}>
-          <FileText className="h-4 w-4" />
-          View logs
-        </DropdownMenuItem>
-      ) : null}
-
-      {agent.backend.type === "local" ? (
-        <DropdownMenuItem
-          disabled={isActionPending}
-          onClick={() =>
-            onToggleStartOnAppLaunch(agent.pubkey, !agent.startOnAppLaunch)
-          }
-        >
-          <Power className="h-4 w-4" />
-          {agent.startOnAppLaunch ? "Disable auto-start" : "Enable auto-start"}
-        </DropdownMenuItem>
-      ) : null}
-
-      <DropdownMenuSeparator />
-
-      <DropdownMenuItem
-        className="text-destructive focus:text-destructive"
-        disabled={isActionPending}
-        onClick={() => onDelete(agent.pubkey)}
-      >
-        <Trash2 className="h-4 w-4" />
-        Delete
-      </DropdownMenuItem>
     </>
   );
 }

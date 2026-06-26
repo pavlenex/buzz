@@ -100,6 +100,7 @@ export function AgentsView() {
               onDeleteAgent={(pubkey) => {
                 void agents.handleDelete(pubkey);
               }}
+              onSaveAsTemplate={personas.openSaveAsTemplate}
               onSelectLogAgent={agents.setLogAgentPubkey}
               onStartAgent={(pubkey) => {
                 void agents.handleStart(pubkey);

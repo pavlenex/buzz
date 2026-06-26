@@ -20,6 +20,7 @@ import { isSingleItemFile } from "@/shared/lib/fileMagic";
 import type {
   AgentPersona,
   CreatePersonaInput,
+  ManagedAgent,
   UpdatePersonaInput,
 } from "@/shared/api/types";
 import {
@@ -27,6 +28,7 @@ import {
   duplicatePersonaDialogState,
   editPersonaDialogState,
   importPersonaDialogState,
+  saveAsPersonaTemplateDialogState,
   type PersonaDialogState,
 } from "./personaDialogState";
 import { usePersonaImportActions } from "./usePersonaImportActions";
@@ -203,6 +205,17 @@ export function usePersonaActions() {
     setPersonaDialogState(duplicatePersonaDialogState(persona));
   }
 
+  function openSaveAsTemplate(agent: ManagedAgent) {
+    clearFeedback("library");
+    setShouldLoadAcpRuntimes(true);
+    // Reverse-map against whatever runtimes are already cached; the dialog
+    // refines once the lazy query resolves. Best-effort — falls back to the
+    // default runtime when no match is available yet.
+    setPersonaDialogState(
+      saveAsPersonaTemplateDialogState(agent, acpRuntimesQuery.data ?? []),
+    );
+  }
+
   function openCatalog() {
     clearFeedback("catalog");
     setIsCatalogDialogOpen(true);
@@ -252,6 +265,7 @@ export function usePersonaActions() {
     openCreate,
     openEdit,
     openDuplicate,
+    openSaveAsTemplate,
     openCatalog,
     openDelete,
     clearFeedback,

@@ -3,12 +3,14 @@ import type { LucideIcon } from "lucide-react";
 import {
   Activity,
   ArrowUpRight,
+  BookmarkPlus,
   Brain,
   ChevronDown,
   ChevronRight,
   ChevronUp,
   Copy,
   Cpu,
+  Ellipsis,
   Fingerprint,
   Hash,
   MessageSquare,
@@ -42,7 +44,17 @@ import { useFeatureEnabled } from "@/shared/features";
 import { cn } from "@/shared/lib/cn";
 import { useNow } from "@/shared/lib/useNow";
 import { Badge } from "@/shared/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
+import {
+  ProfileQuickAction,
+  ProfileQuickActionTrigger,
+} from "./ProfileQuickActions";
 
 const RUNTIME_LABELS: Record<string, string> = {
   goose: "Goose",
@@ -73,6 +85,7 @@ export type ProfileSummaryViewProps = {
   handleEditAgent: () => void;
   handleMessage: () => void;
   handleOpenActivity: () => void;
+  handleSaveAsTemplate?: () => void;
   isBot: boolean;
   isFollowing: boolean;
   isOwner: boolean | undefined;
@@ -108,6 +121,7 @@ export function ProfileSummaryView({
   handleEditAgent,
   handleMessage,
   handleOpenActivity,
+  handleSaveAsTemplate,
   isBot,
   isFollowing,
   isOwner,
@@ -176,6 +190,7 @@ export function ProfileSummaryView({
           canEditAgent={canEditAgent}
           followMutation={followMutation}
           onEditAgent={handleEditAgent}
+          onSaveAsTemplate={handleSaveAsTemplate}
           isFollowing={isFollowing}
           onMessage={onOpenDm ? handleMessage : undefined}
           pubkey={pubkey}
@@ -430,6 +445,7 @@ function ProfilePrimaryActions({
   followMutation,
   isFollowing,
   onEditAgent,
+  onSaveAsTemplate,
   onMessage,
   pubkey,
   unfollowMutation,
@@ -438,6 +454,7 @@ function ProfilePrimaryActions({
   followMutation: ReturnType<typeof useFollowMutation>;
   isFollowing: boolean;
   onEditAgent: () => void;
+  onSaveAsTemplate?: () => void;
   onMessage?: () => void;
   pubkey: string;
   unfollowMutation: ReturnType<typeof useUnfollowMutation>;
@@ -453,6 +470,11 @@ function ProfilePrimaryActions({
         ),
     });
   };
+
+  // Keep the quick-action row lean: overflow actions (e.g. "Save as persona
+  // template") live behind a small ⋮ rather than crowding the row with a
+  // dedicated button.
+  const showOverflow = canEditAgent && Boolean(onSaveAsTemplate);
 
   return (
     <div className="flex items-start justify-center gap-8">
@@ -481,56 +503,33 @@ function ProfilePrimaryActions({
           testId="user-profile-edit-agent"
         />
       ) : null}
+      {showOverflow ? (
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <ProfileQuickActionTrigger
+              ariaLabel="More agent actions"
+              icon={Ellipsis}
+              label="More"
+              testId="user-profile-more-actions"
+            />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            onCloseAutoFocus={(event) => event.preventDefault()}
+          >
+            <DropdownMenuItem
+              onClick={onSaveAsTemplate}
+              data-testid="user-profile-save-as-persona-template"
+            >
+              <BookmarkPlus className="h-4 w-4" />
+              Save as persona template
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
     </div>
   );
 }
-
-function ProfileQuickAction({
-  active,
-  disabled,
-  icon: Icon,
-  label,
-  onClick,
-  testId,
-}: {
-  active?: boolean;
-  disabled?: boolean;
-  icon: LucideIcon;
-  label: string;
-  onClick: () => void;
-  testId?: string;
-}) {
-  return (
-    <button
-      className="flex flex-col items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
-      data-testid={testId}
-      disabled={disabled}
-      onClick={onClick}
-      type="button"
-    >
-      <span
-        className={cn(
-          "flex h-14 w-14 items-center justify-center rounded-full transition-colors",
-          active
-            ? "bg-foreground text-background hover:bg-foreground/90"
-            : "bg-muted/60 text-foreground hover:bg-muted/80",
-        )}
-      >
-        <Icon className="h-4 w-4" />
-      </span>
-      <span
-        className={cn(
-          "text-xs",
-          active ? "text-foreground" : "text-muted-foreground",
-        )}
-      >
-        {label}
-      </span>
-    </button>
-  );
-}
-
-// ── Field rows ───────────────────────────────────────────────────────────────
 
 type ProfileField = {
   copyValue?: string;

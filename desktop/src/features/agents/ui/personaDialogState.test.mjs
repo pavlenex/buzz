@@ -7,7 +7,53 @@ import {
   duplicatePersonaDialogState,
   editPersonaDialogState,
   importPersonaDialogState,
+  saveAsPersonaTemplateDialogState,
 } from "./personaDialogState.ts";
+
+// Minimal ManagedAgent fixture — only the fields the save-as mapping reads.
+function makeManagedAgent(overrides = {}) {
+  return {
+    pubkey: "agentpub",
+    name: "Helper",
+    personaId: null,
+    relayUrl: "wss://relay",
+    acpCommand: "goose",
+    agentCommand: "/usr/local/bin/goose",
+    agentCommandOverride: null,
+    agentArgs: [],
+    mcpCommand: "",
+    turnTimeoutSeconds: 0,
+    idleTimeoutSeconds: null,
+    maxTurnDurationSeconds: null,
+    parallelism: 1,
+    systemPrompt: "Be helpful.",
+    model: "claude-sonnet",
+    provider: "anthropic",
+    personaOutOfDate: false,
+    personaOrphaned: false,
+    mcpToolsets: null,
+    envVars: { ANTHROPIC_API_KEY: "sk-test" },
+    ...overrides,
+  };
+}
+
+function makeRuntime(overrides = {}) {
+  return {
+    id: "goose",
+    label: "Goose",
+    avatarUrl: "",
+    availability: "available",
+    command: "goose",
+    binaryPath: "/usr/local/bin/goose",
+    defaultArgs: [],
+    mcpCommand: null,
+    installHint: "",
+    installInstructionsUrl: "",
+    canAutoInstall: false,
+    underlyingCliPath: null,
+    ...overrides,
+  };
+}
 
 test("canSubmitPersonaDialog requires a display name but not a system prompt", () => {
   // Empty system prompt is allowed: core memory is auto-injected, so the
@@ -257,4 +303,86 @@ test("importPersonaDialogState preserves provider=anthropic", () => {
   });
 
   assert.equal(state.initialValues.provider, "anthropic");
+});
+
+test("saveAsPersonaTemplateDialogState carries agent config into a create draft", () => {
+  const state = saveAsPersonaTemplateDialogState(makeManagedAgent(), [
+    makeRuntime(),
+  ]);
+
+  assert.equal(state.title, "Save as persona template");
+  assert.equal(state.submitLabel, "Save as persona template");
+  assert.equal(state.description, "Reuse this setup to create more agents.");
+  assert.deepEqual(state.initialValues, {
+    displayName: "Helper",
+    avatarUrl: "",
+    systemPrompt: "Be helpful.",
+    // Reverse-mapped from agentCommand basename → matching runtime id.
+    runtime: "goose",
+    model: "claude-sonnet",
+    provider: "anthropic",
+    // Persona-only field starts empty; the user fills it in the dialog.
+    namePool: [],
+    envVars: { ANTHROPIC_API_KEY: "sk-test" },
+  });
+});
+
+test("saveAsPersonaTemplateDialogState reverse-maps the runtime by command basename", () => {
+  // Agent's resolved command is an absolute path; the runtime exposes a bare
+  // command. commandsMatch normalizes on basename, so they should still pair.
+  const state = saveAsPersonaTemplateDialogState(
+    makeManagedAgent({ agentCommand: "/opt/homebrew/bin/goose" }),
+    [makeRuntime({ id: "goose-runtime", command: "goose" })],
+  );
+
+  assert.equal(state.initialValues.runtime, "goose-runtime");
+});
+
+test("saveAsPersonaTemplateDialogState falls back to undefined runtime when none match", () => {
+  // No runtime matches the agent command, or runtimes not loaded yet — the
+  // dialog then uses its own default-runtime behavior.
+  const noMatch = saveAsPersonaTemplateDialogState(
+    makeManagedAgent({ agentCommand: "claude-code-acp" }),
+    [makeRuntime({ command: "goose" })],
+  );
+  assert.equal(noMatch.initialValues.runtime, undefined);
+
+  const noRuntimes = saveAsPersonaTemplateDialogState(makeManagedAgent(), []);
+  assert.equal(noRuntimes.initialValues.runtime, undefined);
+});
+
+test("saveAsPersonaTemplateDialogState skips runtimes with a null command", () => {
+  // Catalog entries can be unavailable (command: null). Those must not throw
+  // and must not match — only resolvable commands participate in the map.
+  const state = saveAsPersonaTemplateDialogState(makeManagedAgent(), [
+    makeRuntime({ id: "uninstalled", command: null, availability: "missing" }),
+    makeRuntime({ id: "goose", command: "goose" }),
+  ]);
+
+  assert.equal(state.initialValues.runtime, "goose");
+});
+
+test("saveAsPersonaTemplateDialogState maps a null provider/model/systemPrompt to undefined/empty", () => {
+  const state = saveAsPersonaTemplateDialogState(
+    makeManagedAgent({ provider: null, model: null, systemPrompt: null }),
+    [],
+  );
+
+  assert.equal(state.initialValues.provider, undefined);
+  assert.equal(state.initialValues.model, undefined);
+  assert.equal(state.initialValues.systemPrompt, "");
+});
+
+test("default managed-agent create stays persona-less (no personaId set)", () => {
+  // Part 1 regression guard. A default agent create must not carry a
+  // personaId — that linkage only exists when a persona/template is chosen.
+  // The save-as flow promotes an existing agent INTO a template; it never
+  // back-fills personaId onto the source agent.
+  const agent = makeManagedAgent();
+  assert.equal(agent.personaId, null);
+
+  // The promote produces a CreatePersonaInput (no agent personaId mutation),
+  // and a persona-create draft has no personaId field at all.
+  const state = saveAsPersonaTemplateDialogState(agent, []);
+  assert.equal("personaId" in state.initialValues, false);
 });

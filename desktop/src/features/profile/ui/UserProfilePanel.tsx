@@ -14,6 +14,8 @@ import {
 import { useActiveAgentTurnsBridge } from "@/features/agents/activeAgentTurnsStore";
 import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import { EditAgentDialog } from "@/features/agents/ui/EditAgentDialog";
+import { PersonaDialog } from "@/features/agents/ui/PersonaDialog";
+import { useSaveAsPersonaTemplate } from "@/features/agents/ui/useSaveAsPersonaTemplate";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import {
@@ -278,6 +280,17 @@ export function UserProfilePanel({
     setEditAgentOpen(true);
   }, []);
 
+  // "Save as persona template" flow for the sidebar profile. Self-contained
+  // (own dialog + create mutation) so it works outside the Agents page, which
+  // is where `usePersonaActions` lives. Gated on `canEditAgent` below — only a
+  // managed agent the viewer owns can be promoted.
+  const saveAsTemplate = useSaveAsPersonaTemplate();
+  const handleSaveAsTemplate = React.useCallback(() => {
+    if (managedAgent) {
+      saveAsTemplate.open(managedAgent);
+    }
+  }, [managedAgent, saveAsTemplate]);
+
   const handleOpenActivity = React.useCallback(() => {
     onClose();
     onOpenAgentSession?.(pubkey);
@@ -389,6 +402,7 @@ export function UserProfilePanel({
           handleEditAgent={handleEditAgent}
           handleMessage={handleMessage}
           handleOpenActivity={handleOpenActivity}
+          handleSaveAsTemplate={canEditAgent ? handleSaveAsTemplate : undefined}
           isBot={isBot}
           isFollowing={isFollowing}
           isOwner={viewerIsOwner}
@@ -441,6 +455,11 @@ export function UserProfilePanel({
       />
     ) : null;
 
+  // Render unconditionally — the dialog stays closed until `open()` seeds it.
+  const saveAsTemplateDialog = canEditAgent ? (
+    <PersonaDialog {...saveAsTemplate.dialogProps} />
+  ) : null;
+
   if (isSplitLayout) {
     return (
       <>
@@ -452,6 +471,7 @@ export function UserProfilePanel({
           {profileBody}
         </div>
         {editAgentDialog}
+        {saveAsTemplateDialog}
       </>
     );
   }
@@ -517,6 +537,7 @@ export function UserProfilePanel({
         {profileBody}
       </aside>
       {editAgentDialog}
+      {saveAsTemplateDialog}
     </>
   );
 }
