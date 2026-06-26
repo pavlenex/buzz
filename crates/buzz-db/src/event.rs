@@ -580,9 +580,15 @@ pub async fn count_events(pool: &PgPool, q: &EventQuery) -> Result<i64> {
 /// Returns `Ok(true)` if the event was deleted, `Ok(false)` if already deleted
 /// or not found. Callers are responsible for decrementing thread reply counts
 /// when the deleted event is a thread reply.
-pub async fn soft_delete_event(pool: &PgPool, event_id: &[u8]) -> Result<bool> {
-    let result =
-        sqlx::query("UPDATE events SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL")
+pub async fn soft_delete_event(
+    pool: &PgPool,
+    community_id: CommunityId,
+    event_id: &[u8],
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE events SET deleted_at = NOW() WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL",
+    )
+            .bind(community_id.as_uuid())
             .bind(event_id)
             .execute(pool)
             .await?;
@@ -603,14 +609,16 @@ pub async fn soft_delete_event(pool: &PgPool, event_id: &[u8]) -> Result<bool> {
 /// (already deleted, or never existed).
 pub async fn soft_delete_by_coordinate(
     pool: &PgPool,
+    community_id: CommunityId,
     kind: i32,
     pubkey: &[u8],
     d_tag: &str,
 ) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE events SET deleted_at = NOW() \
-         WHERE kind = $1 AND pubkey = $2 AND d_tag = $3 AND deleted_at IS NULL",
+         WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND d_tag = $4 AND deleted_at IS NULL",
     )
+    .bind(community_id.as_uuid())
     .bind(kind)
     .bind(pubkey)
     .bind(d_tag)
@@ -627,17 +635,20 @@ pub async fn soft_delete_by_coordinate(
 /// event was deleted this call.
 pub async fn soft_delete_event_and_update_thread(
     pool: &PgPool,
+    community_id: CommunityId,
     event_id: &[u8],
     parent_event_id: Option<&[u8]>,
     root_event_id: Option<&[u8]>,
 ) -> Result<bool> {
     let mut tx = pool.begin().await?;
 
-    let result =
-        sqlx::query("UPDATE events SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL")
-            .bind(event_id)
-            .execute(&mut *tx)
-            .await?;
+    let result = sqlx::query(
+        "UPDATE events SET deleted_at = NOW() WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL",
+    )
+    .bind(community_id.as_uuid())
+    .bind(event_id)
+    .execute(&mut *tx)
+    .await?;
 
     let deleted = result.rows_affected() > 0;
 
@@ -646,8 +657,9 @@ pub async fn soft_delete_event_and_update_thread(
             sqlx::query(
                 "UPDATE thread_metadata \
                  SET reply_count = GREATEST(reply_count - 1, 0) \
-                 WHERE event_id = $1",
+                 WHERE community_id = $1 AND event_id = $2",
             )
+            .bind(community_id.as_uuid())
             .bind(pid)
             .execute(&mut *tx)
             .await?;
@@ -656,8 +668,9 @@ pub async fn soft_delete_event_and_update_thread(
                 sqlx::query(
                     "UPDATE thread_metadata \
                      SET descendant_count = GREATEST(descendant_count - 1, 0) \
-                     WHERE event_id = $1",
+                     WHERE community_id = $1 AND event_id = $2",
                 )
+                .bind(community_id.as_uuid())
                 .bind(root_id)
                 .execute(&mut *tx)
                 .await?;
@@ -672,13 +685,15 @@ pub async fn soft_delete_event_and_update_thread(
 /// Returns the `created_at` timestamp of the most recent non-deleted event in a channel.
 pub async fn get_last_message_at(
     pool: &PgPool,
+    community_id: CommunityId,
     channel_id: uuid::Uuid,
 ) -> Result<Option<DateTime<Utc>>> {
     let row = sqlx::query(
         "SELECT created_at FROM events \
-         WHERE channel_id = $1 AND deleted_at IS NULL \
+         WHERE community_id = $1 AND channel_id = $2 AND deleted_at IS NULL \
          ORDER BY created_at DESC LIMIT 1",
     )
+    .bind(community_id.as_uuid())
     .bind(channel_id)
     .fetch_optional(pool)
     .await?;
@@ -695,6 +710,7 @@ pub async fn get_last_message_at(
 /// Single query regardless of input size.
 pub async fn get_last_message_at_bulk(
     pool: &PgPool,
+    community_id: CommunityId,
     channel_ids: &[uuid::Uuid],
 ) -> Result<std::collections::HashMap<uuid::Uuid, DateTime<Utc>>> {
     if channel_ids.is_empty() {
@@ -703,8 +719,10 @@ pub async fn get_last_message_at_bulk(
 
     let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "SELECT channel_id, MAX(created_at) as last_at FROM events \
-         WHERE deleted_at IS NULL AND channel_id IN (",
+         WHERE community_id = ",
     );
+    qb.push_bind(community_id.as_uuid());
+    qb.push(" AND deleted_at IS NULL AND channel_id IN (");
     let mut sep = qb.separated(", ");
     for id in channel_ids {
         sep.push_bind(*id);
@@ -727,11 +745,16 @@ pub async fn get_last_message_at_bulk(
 /// Returns `None` if the event does not exist or has been soft-deleted.
 /// Use [`get_event_by_id_including_deleted`] when you need to inspect
 /// tombstoned rows (e.g. audit, undelete).
-pub async fn get_event_by_id(pool: &PgPool, id_bytes: &[u8]) -> Result<Option<StoredEvent>> {
+pub async fn get_event_by_id(
+    pool: &PgPool,
+    community_id: CommunityId,
+    id_bytes: &[u8],
+) -> Result<Option<StoredEvent>> {
     let row = sqlx::query(
         "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
-         FROM events WHERE id = $1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
+         FROM events WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
     )
+    .bind(community_id.as_uuid())
     .bind(id_bytes)
     .fetch_optional(pool)
     .await?;
@@ -750,16 +773,18 @@ pub async fn get_event_by_id(pool: &PgPool, id_bytes: &[u8]) -> Result<Option<St
 /// duplicate survivors where multiple live rows share the same timestamp.
 pub async fn get_latest_global_replaceable(
     pool: &PgPool,
+    community_id: CommunityId,
     kind: i32,
     pubkey_bytes: &[u8],
 ) -> Result<Option<StoredEvent>> {
     let row = sqlx::query(
         "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
          FROM events \
-         WHERE kind = $1 AND pubkey = $2 AND channel_id IS NULL AND deleted_at IS NULL \
+         WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND channel_id IS NULL AND deleted_at IS NULL \
          ORDER BY created_at DESC, id ASC \
          LIMIT 1",
     )
+    .bind(community_id.as_uuid())
     .bind(kind)
     .bind(pubkey_bytes)
     .fetch_optional(pool)
@@ -778,12 +803,14 @@ pub async fn get_latest_global_replaceable(
 /// audit trails, compliance queries).
 pub async fn get_event_by_id_including_deleted(
     pool: &PgPool,
+    community_id: CommunityId,
     id_bytes: &[u8],
 ) -> Result<Option<StoredEvent>> {
     let row = sqlx::query(
         "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
-         FROM events WHERE id = $1 ORDER BY created_at DESC LIMIT 1",
+         FROM events WHERE community_id = $1 AND id = $2 ORDER BY created_at DESC LIMIT 1",
     )
+    .bind(community_id.as_uuid())
     .bind(id_bytes)
     .fetch_optional(pool)
     .await?;
@@ -798,7 +825,11 @@ pub async fn get_event_by_id_including_deleted(
 ///
 /// Returns events in arbitrary order — callers reorder as needed.
 /// Uses a single `WHERE id IN (...)` query regardless of input size.
-pub async fn get_events_by_ids(pool: &PgPool, ids: &[&[u8]]) -> Result<Vec<StoredEvent>> {
+pub async fn get_events_by_ids(
+    pool: &PgPool,
+    community_id: CommunityId,
+    ids: &[&[u8]],
+) -> Result<Vec<StoredEvent>> {
     if ids.is_empty() {
         return Ok(vec![]);
     }
@@ -806,8 +837,10 @@ pub async fn get_events_by_ids(pool: &PgPool, ids: &[&[u8]]) -> Result<Vec<Store
 
     let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
-         FROM events WHERE deleted_at IS NULL AND id IN (",
+         FROM events WHERE community_id = ",
     );
+    qb.push_bind(community_id.as_uuid());
+    qb.push(" AND deleted_at IS NULL AND id IN (");
     let mut sep = qb.separated(", ");
     for id in ids {
         sep.push_bind(id.to_vec());
@@ -1168,6 +1201,76 @@ pub async fn release_due_reminder(
 mod tests {
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
+
+    async fn setup_pool() -> PgPool {
+        let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| TEST_DB_URL.to_owned());
+
+        PgPool::connect(&database_url)
+            .await
+            .expect("connect to test DB")
+    }
+
+    async fn make_test_community(pool: &PgPool) -> Uuid {
+        let id = Uuid::new_v4();
+        let host = format!("event-test-{}.example", id.simple());
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(id)
+            .bind(host)
+            .execute(pool)
+            .await
+            .expect("insert test community");
+        id
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn get_event_by_id_is_scoped_when_event_id_collides_across_communities() {
+        let pool = setup_pool().await;
+        let community_a = CommunityId::from_uuid(make_test_community(&pool).await);
+        let community_b = CommunityId::from_uuid(make_test_community(&pool).await);
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(9), "same signed event")
+            .sign_with_keys(&keys)
+            .expect("sign event");
+
+        insert_event(&pool, community_a, &event, None)
+            .await
+            .expect("insert in community A");
+        insert_event(&pool, community_b, &event, None)
+            .await
+            .expect("insert same event in community B");
+
+        sqlx::query("UPDATE events SET content = $1 WHERE community_id = $2 AND id = $3")
+            .bind("community-a-copy")
+            .bind(community_a.as_uuid())
+            .bind(event.id.as_bytes())
+            .execute(&pool)
+            .await
+            .expect("mark community A row");
+        sqlx::query("UPDATE events SET content = $1 WHERE community_id = $2 AND id = $3")
+            .bind("community-b-copy")
+            .bind(community_b.as_uuid())
+            .bind(event.id.as_bytes())
+            .execute(&pool)
+            .await
+            .expect("mark community B row");
+
+        let a = get_event_by_id(&pool, community_a, event.id.as_bytes())
+            .await
+            .expect("lookup community A")
+            .expect("community A row exists");
+        let b = get_event_by_id(&pool, community_b, event.id.as_bytes())
+            .await
+            .expect("lookup community B")
+            .expect("community B row exists");
+
+        assert_eq!(a.event.content, "community-a-copy");
+        assert_eq!(b.event.content, "community-b-copy");
+    }
 
     fn make_event_with_kind_and_tags(kind: u16, tags: Vec<Tag>) -> nostr::Event {
         let keys = Keys::generate();
