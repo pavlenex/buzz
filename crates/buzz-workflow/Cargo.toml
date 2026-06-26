@@ -26,6 +26,7 @@ reqwest     = { workspace = true, optional = true }
 
 [dev-dependencies]
 nostr = { workspace = true }
+sqlx = { workspace = true }
 
 [features]
 reqwest = ["dep:reqwest"]

@@ -42,7 +42,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use buzz_core::kind::{event_kind_u32, is_workflow_execution_kind, KIND_REACTION};
-use buzz_db::workflow::RunStatus;
+use buzz_db::workflow::{RunStatus, WorkflowRecord};
 use buzz_db::Db;
 use chrono::{DateTime, Utc};
 use tokio::sync::Semaphore;
@@ -343,178 +343,174 @@ impl WorkflowEngine {
             };
 
             for workflow in &workflows {
-                let def: schema::WorkflowDef =
-                    match serde_json::from_value(workflow.definition.clone()) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            tracing::warn!(
-                                workflow_id = %workflow.id,
-                                "Cron tick: failed to parse workflow definition: {e}"
-                            );
-                            continue;
-                        }
-                    };
-
-                if !def.enabled {
-                    continue;
-                }
-
-                // Fix 2: skip workflows with no channel_id — an empty channel_id
-                // causes silent downstream failures when the run tries to act on a channel.
-                let Some(channel_id) = workflow.channel_id else {
-                    tracing::warn!(
-                        workflow_id = %workflow.id,
-                        "Cron tick: skipping schedule workflow with no channel_id"
-                    );
-                    continue;
-                };
-
-                let (scheduled_for, trigger_type) = match &def.trigger {
-                    schema::TriggerDef::Schedule {
-                        cron: Some(expr),
-                        interval: None,
-                    } => (cron_should_fire(expr, now, 60, workflow.id), "cron"),
-                    schema::TriggerDef::Schedule {
-                        cron: None,
-                        interval: Some(dur),
-                    } => {
-                        let latest = match self.db.latest_scheduled_workflow_fire(workflow.id).await
-                        {
-                            Ok(latest) => latest,
-                            Err(e) => {
-                                tracing::error!(
-                                    workflow_id = %workflow.id,
-                                    "Cron tick: failed to load latest scheduled workflow fire: {e}"
-                                );
-                                continue;
-                            }
-                        };
-                        (
-                            interval_should_fire(
-                                dur,
-                                latest,
-                                workflow.created_at,
-                                now,
-                                workflow.id,
-                            ),
-                            "interval",
-                        )
-                    }
-                    _ => (None, ""), // Non-schedule triggers handled by on_event()
-                };
-
-                let Some(scheduled_for) = scheduled_for else {
-                    continue;
-                };
-
-                // Fix 5: handle serialization errors explicitly rather than silently
-                // dropping the trigger context with .ok().
-                let trigger_ctx = executor::TriggerContext {
-                    channel_id: channel_id.to_string(),
-                    timestamp: scheduled_for.timestamp().to_string(),
-                    ..Default::default()
-                };
-                let trigger_ctx_json = match serde_json::to_value(&trigger_ctx) {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        tracing::error!(
-                            workflow_id = %workflow.id,
-                            "Cron tick: failed to serialize trigger context: {e}"
-                        );
-                        continue;
-                    }
-                };
-
-                let claim = match self
-                    .db
-                    .claim_scheduled_workflow_fire(workflow.id, scheduled_for)
-                    .await
-                {
-                    Ok(Some(claim)) => claim,
-                    Ok(None) => {
-                        tracing::debug!(
-                            workflow_id = %workflow.id,
-                            scheduled_for = %scheduled_for,
-                            trigger = trigger_type,
-                            "Cron tick: scheduled workflow fire already claimed"
-                        );
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            workflow_id = %workflow.id,
-                            scheduled_for = %scheduled_for,
-                            trigger = trigger_type,
-                            "Cron tick: failed to claim scheduled workflow fire: {e}"
-                        );
-                        continue;
-                    }
-                };
-
-                let run_id = match self
-                    .db
-                    .create_workflow_run(
-                        workflow.id,
-                        None, // no trigger event for cron
-                        trigger_ctx_json.as_ref(),
-                    )
-                    .await
-                {
-                    Ok(id) => id,
-                    Err(e) => {
-                        tracing::error!(
-                            workflow_id = %workflow.id,
-                            "Cron tick: failed to create workflow run: {e}"
-                        );
-                        continue;
-                    }
-                };
-
-                match self
-                    .db
-                    .attach_scheduled_workflow_run(workflow.id, scheduled_for, run_id)
-                    .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        tracing::warn!(
-                            workflow_id = %workflow.id,
-                            run_id = %run_id,
-                            scheduled_for = %scheduled_for,
-                            "Cron tick: scheduled workflow claim was not attached to run"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            workflow_id = %workflow.id,
-                            run_id = %run_id,
-                            scheduled_for = %scheduled_for,
-                            "Cron tick: failed to attach workflow run to scheduled claim: {e}"
-                        );
-                    }
-                }
-
-                // Fix 6: log the specific trigger type (cron vs interval).
-                tracing::info!(
-                    workflow_id = %workflow.id,
-                    community_id = %claim.community_id.as_uuid(),
-                    run_id = %run_id,
-                    trigger = trigger_type,
-                    scheduled_for = %scheduled_for,
-                    claimed_at = %claim.claimed_at,
-                    "Cron trigger fired"
-                );
-
-                let engine = Arc::clone(self);
-                let def_clone = def.clone();
-                let ctx_clone = trigger_ctx.clone();
-                tokio::spawn(async move {
-                    let result =
-                        executor::execute_run(&engine, run_id, &def_clone, &ctx_clone).await;
-                    engine.finalize_run(run_id, result, None).await;
-                });
+                self.process_scheduled_workflow_at(workflow, now).await;
             }
         }
+    }
+
+    async fn process_scheduled_workflow_at(
+        self: &Arc<Self>,
+        workflow: &WorkflowRecord,
+        now: DateTime<Utc>,
+    ) -> Option<Uuid> {
+        let def: schema::WorkflowDef = match serde_json::from_value(workflow.definition.clone()) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(
+                    workflow_id = %workflow.id,
+                    "Cron tick: failed to parse workflow definition: {e}"
+                );
+                return None;
+            }
+        };
+
+        if !def.enabled {
+            return None;
+        }
+
+        // Skip workflows with no channel_id — an empty channel_id causes silent
+        // downstream failures when the run tries to act on a channel.
+        let Some(channel_id) = workflow.channel_id else {
+            tracing::warn!(
+                workflow_id = %workflow.id,
+                "Cron tick: skipping schedule workflow with no channel_id"
+            );
+            return None;
+        };
+
+        let (scheduled_for, trigger_type) = match &def.trigger {
+            schema::TriggerDef::Schedule {
+                cron: Some(expr),
+                interval: None,
+            } => (cron_should_fire(expr, now, 60, workflow.id), "cron"),
+            schema::TriggerDef::Schedule {
+                cron: None,
+                interval: Some(dur),
+            } => {
+                let latest = match self.db.latest_scheduled_workflow_fire(workflow.id).await {
+                    Ok(latest) => latest,
+                    Err(e) => {
+                        tracing::error!(
+                            workflow_id = %workflow.id,
+                            "Cron tick: failed to load latest scheduled workflow fire: {e}"
+                        );
+                        return None;
+                    }
+                };
+                (
+                    interval_should_fire(dur, latest, workflow.created_at, now, workflow.id),
+                    "interval",
+                )
+            }
+            _ => (None, ""), // Non-schedule triggers handled by on_event()
+        };
+
+        let scheduled_for = scheduled_for?;
+
+        let trigger_ctx = executor::TriggerContext {
+            channel_id: channel_id.to_string(),
+            timestamp: scheduled_for.timestamp().to_string(),
+            ..Default::default()
+        };
+        let trigger_ctx_json = match serde_json::to_value(&trigger_ctx) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::error!(
+                    workflow_id = %workflow.id,
+                    "Cron tick: failed to serialize trigger context: {e}"
+                );
+                return None;
+            }
+        };
+
+        let claim = match self
+            .db
+            .claim_scheduled_workflow_fire(workflow.id, scheduled_for)
+            .await
+        {
+            Ok(Some(claim)) => claim,
+            Ok(None) => {
+                tracing::debug!(
+                    workflow_id = %workflow.id,
+                    scheduled_for = %scheduled_for,
+                    trigger = trigger_type,
+                    "Cron tick: scheduled workflow fire already claimed"
+                );
+                return None;
+            }
+            Err(e) => {
+                tracing::error!(
+                    workflow_id = %workflow.id,
+                    scheduled_for = %scheduled_for,
+                    trigger = trigger_type,
+                    "Cron tick: failed to claim scheduled workflow fire: {e}"
+                );
+                return None;
+            }
+        };
+
+        let run_id = match self
+            .db
+            .create_workflow_run(
+                workflow.id,
+                None, // no trigger event for cron
+                trigger_ctx_json.as_ref(),
+            )
+            .await
+        {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!(
+                    workflow_id = %workflow.id,
+                    "Cron tick: failed to create workflow run: {e}"
+                );
+                return None;
+            }
+        };
+
+        match self
+            .db
+            .attach_scheduled_workflow_run(workflow.id, scheduled_for, run_id)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::warn!(
+                    workflow_id = %workflow.id,
+                    run_id = %run_id,
+                    scheduled_for = %scheduled_for,
+                    "Cron tick: scheduled workflow claim was not attached to run"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    workflow_id = %workflow.id,
+                    run_id = %run_id,
+                    scheduled_for = %scheduled_for,
+                    "Cron tick: failed to attach workflow run to scheduled claim: {e}"
+                );
+            }
+        }
+
+        tracing::info!(
+            workflow_id = %workflow.id,
+            community_id = %claim.community_id.as_uuid(),
+            run_id = %run_id,
+            trigger = trigger_type,
+            scheduled_for = %scheduled_for,
+            claimed_at = %claim.claimed_at,
+            "Cron trigger fired"
+        );
+
+        let engine = Arc::clone(self);
+        let def_clone = def.clone();
+        let ctx_clone = trigger_ctx.clone();
+        tokio::spawn(async move {
+            let result = executor::execute_run(&engine, run_id, &def_clone, &ctx_clone).await;
+            engine.finalize_run(run_id, result, None).await;
+        });
+
+        Some(run_id)
     }
 }
 
@@ -950,6 +946,116 @@ mod tests {
             Some(now),
             "should fire at exact interval boundary"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn scheduled_cron_claim_is_exactly_once_across_two_engines() {
+        let (db, pool) = connect_test_db().await;
+        let community = db
+            .ensure_configured_community(&format!("workflow-cron-claim-{}.test", Uuid::new_v4()))
+            .await
+            .expect("create community");
+        let owner_pubkey = [42_u8; 32];
+        db.ensure_user(&owner_pubkey).await.expect("create owner");
+
+        let channel_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO channels
+                (id, community_id, name, channel_type, visibility, created_by)
+            VALUES ($1, $2, $3, 'stream', 'open', $4)
+            "#,
+        )
+        .bind(channel_id)
+        .bind(community.id.as_uuid())
+        .bind("workflow cron claim test")
+        .bind(owner_pubkey.as_slice())
+        .execute(&pool)
+        .await
+        .expect("create channel");
+
+        let (_def, definition_json) = WorkflowEngine::parse_yaml(
+            r#"
+name: Cron claim test
+trigger:
+  on: schedule
+  cron: '* * * * *'
+steps:
+  - id: wait
+    action: delay
+    duration: 0s
+"#,
+        )
+        .expect("valid workflow yaml");
+
+        let workflow_id = db
+            .create_workflow(
+                community.id,
+                Some(channel_id),
+                &owner_pubkey,
+                "Cron claim test",
+                &definition_json,
+                b"test-definition-hash",
+            )
+            .await
+            .expect("create workflow");
+        let workflow = db.get_workflow(workflow_id).await.expect("load workflow");
+
+        let engine_a = Arc::new(WorkflowEngine::new(db.clone(), WorkflowConfig::default()));
+        let engine_b = Arc::new(WorkflowEngine::new(db.clone(), WorkflowConfig::default()));
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let (run_a, run_b) = tokio::join!(
+            engine_a.process_scheduled_workflow_at(&workflow, now),
+            engine_b.process_scheduled_workflow_at(&workflow, now)
+        );
+
+        assert_eq!(
+            [run_a, run_b].into_iter().flatten().count(),
+            1,
+            "only one engine should create a run for the same cron instant"
+        );
+
+        assert_eq!(
+            engine_a.process_scheduled_workflow_at(&workflow, now).await,
+            None,
+            "re-processing the same cron instant should not create another run"
+        );
+
+        let fire_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM scheduled_workflow_fires WHERE workflow_id = $1",
+        )
+        .bind(workflow_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count scheduled fires");
+        assert_eq!(fire_count, 1);
+
+        let run_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM workflow_runs WHERE workflow_id = $1",
+        )
+        .bind(workflow_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count workflow runs");
+        assert_eq!(run_count, 1);
+    }
+
+    async fn connect_test_db() -> (Db, sqlx::PgPool) {
+        let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".to_owned());
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&database_url)
+            .await
+            .expect("connect to test DB");
+        let db = Db::from_pool(pool.clone());
+        db.migrate().await.expect("run migrations");
+        (db, pool)
     }
 
     #[test]
