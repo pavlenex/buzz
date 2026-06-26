@@ -42,6 +42,18 @@ use crate::error::AuthError;
 /// for safety margin; they MUST NOT use a smaller one.
 pub const DEFAULT_REPLAY_TTL_SECS: u64 = 120;
 
+/// Ceiling for the replay-prevention window, in seconds.
+///
+/// Any TTL beyond an hour is implausible for NIP-98 replay protection: the
+/// verifier only accepts events within ±60s, so a same-id replay is only
+/// physically possible inside that window plus clock skew. A 1-hour cap is
+/// 30× the natural maximum and still keeps Redis values well inside
+/// `i64::MAX` seconds (which Redis `EX` requires). Anything larger reaching
+/// this code is a config/caller bug; implementations MUST clamp down to it
+/// rather than admit values that risk Redis `EX` parse failures or
+/// pathologically long-lived seen-set entries.
+pub const MAX_REPLAY_TTL_SECS: u64 = 3600;
+
 /// Shared seen-set for NIP-98 event ids, scoped per community.
 ///
 /// The production implementation lives in `buzz-pubsub` (Redis `SET NX EX`).
@@ -65,6 +77,11 @@ pub trait Nip98ReplayGuard: Send + Sync {
     /// `ttl_secs` MUST be at least [`DEFAULT_REPLAY_TTL_SECS`]. Implementations
     /// MAY clamp a smaller value up to the floor rather than reject; they MUST
     /// NOT honor it as-given.
+    ///
+    /// `ttl_secs` MUST be clamped down to [`MAX_REPLAY_TTL_SECS`] if larger.
+    /// The replay window's natural maximum is the verifier's ±60s tolerance;
+    /// values past an hour are implausible and risk Redis `EX` parse failures
+    /// (Redis interprets `EX` as a signed 64-bit integer).
     fn try_mark(
         &self,
         ctx: &TenantContext,
@@ -157,9 +174,40 @@ mod tests {
     }
 
     #[test]
+    fn key_components_are_lowercase() {
+        // Stability/idempotence: if event id hex or community Display ever
+        // started emitting uppercase, a same logical claim would produce two
+        // distinct Redis rows → the seen-set would no longer be a seen-set.
+        let ctx = fixture_ctx("relay-a.example");
+        let eid = fixture_event_id();
+        let key = nip98_replay_key(&ctx, &eid);
+        for c in key.chars() {
+            assert!(
+                !c.is_ascii_uppercase(),
+                "nip98 replay key {key} must be all-lowercase ASCII"
+            );
+        }
+    }
+
+    #[test]
     fn default_ttl_meets_gate_floor() {
         // §5 gate: TTL ≥ 120s. Drift this constant down and the gate breaks.
         assert!(DEFAULT_REPLAY_TTL_SECS >= 120);
+    }
+
+    #[test]
+    fn ttl_floor_below_ceiling() {
+        // Sanity: any caller's clamped TTL must end up in [DEFAULT, MAX].
+        // If these ever cross, the impl can't satisfy both bounds and the
+        // contract is broken.
+        assert!(DEFAULT_REPLAY_TTL_SECS < MAX_REPLAY_TTL_SECS);
+    }
+
+    #[test]
+    fn max_ttl_fits_in_redis_signed_ex() {
+        // Redis `EX` is parsed as i64. `MAX_REPLAY_TTL_SECS` must fit so the
+        // clamp itself can't push us into a Redis-side parse failure.
+        assert!(MAX_REPLAY_TTL_SECS <= i64::MAX as u64);
     }
 
     #[tokio::test]

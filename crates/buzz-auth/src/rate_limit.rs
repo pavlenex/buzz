@@ -288,6 +288,24 @@ mod tests {
     }
 
     #[test]
+    fn rate_limit_key_components_are_lowercase() {
+        // Stability/idempotence invariant: if pubkey hex or community Display
+        // ever started emitting uppercase, the same (community, pubkey) would
+        // produce two distinct Redis keys → effective 2× quota. Pin the
+        // lowercase property here so the regression surfaces in unit tests,
+        // not in production traffic.
+        let ctx = fixture_ctx("relay-a.example");
+        let keys = Keys::generate();
+        let key = rate_limit_key(&ctx, &keys.public_key(), &LimitType::Messages);
+        for c in key.chars() {
+            assert!(
+                !c.is_ascii_uppercase(),
+                "rate-limit key {key} must be all-lowercase ASCII"
+            );
+        }
+    }
+
+    #[test]
     fn ip_rate_limit_key_format() {
         // IP fence stays operator-global — no community in the key.
         let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));

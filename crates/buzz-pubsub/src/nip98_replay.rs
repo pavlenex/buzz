@@ -6,7 +6,9 @@
 
 use buzz_auth::{
     error::AuthError,
-    nip98_replay::{nip98_replay_key, Nip98ReplayGuard, DEFAULT_REPLAY_TTL_SECS},
+    nip98_replay::{
+        nip98_replay_key, Nip98ReplayGuard, DEFAULT_REPLAY_TTL_SECS, MAX_REPLAY_TTL_SECS,
+    },
 };
 use buzz_core::TenantContext;
 use nostr::EventId;
@@ -37,14 +39,25 @@ impl Nip98ReplayGuard for RedisNip98ReplayGuard {
         event_id: &EventId,
         ttl_secs: u64,
     ) -> Result<bool, AuthError> {
-        // §5 gate floor — never accept a sub-floor TTL silently.
-        let ttl = ttl_secs.max(DEFAULT_REPLAY_TTL_SECS);
+        // §5 gate floor + safety ceiling. Sub-floor values are lifted to the
+        // floor (contract permits clamping); above-ceiling values are pushed
+        // down to MAX_REPLAY_TTL_SECS (contract REQUIRES clamping) so a buggy
+        // caller cannot send a Redis-incompatible `EX` arg or pin a slot for
+        // implausibly long.
+        let ttl = ttl_secs
+            .max(DEFAULT_REPLAY_TTL_SECS)
+            .min(MAX_REPLAY_TTL_SECS);
 
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| AuthError::Internal(format!("Redis pool: {e}")))?;
+        let mut conn = self.pool.get().await.map_err(|e| {
+            // Structured field for ops; the user-facing AuthError stays a
+            // bounded category string.
+            tracing::warn!(
+                community = %ctx.community(),
+                error = %e,
+                "nip98 replay: redis pool acquire failed — caller MUST fail closed"
+            );
+            AuthError::Internal(format!("Redis pool: {e}"))
+        })?;
 
         let key = nip98_replay_key(ctx, event_id);
 
@@ -59,14 +72,28 @@ impl Nip98ReplayGuard for RedisNip98ReplayGuard {
             .arg(ttl)
             .query_async(&mut *conn)
             .await
-            .map_err(|e| AuthError::Internal(format!("Redis SET NX EX: {e}")))?;
+            .map_err(|e| {
+                tracing::warn!(
+                    community = %ctx.community(),
+                    error = %e,
+                    "nip98 replay: redis SET NX EX failed — caller MUST fail closed"
+                );
+                AuthError::Internal(format!("Redis SET NX EX: {e}"))
+            })?;
 
         match result.as_deref() {
             Some("OK") => Ok(true),
             None => Ok(false),
-            Some(other) => Err(AuthError::Internal(format!(
-                "unexpected SET NX EX reply: {other}"
-            ))),
+            Some(other) => {
+                tracing::error!(
+                    community = %ctx.community(),
+                    reply = %other,
+                    "nip98 replay: redis SET NX EX returned an unexpected reply — investigate"
+                );
+                Err(AuthError::Internal(format!(
+                    "unexpected SET NX EX reply: {other}"
+                )))
+            }
         }
     }
 }
@@ -147,5 +174,29 @@ mod tests {
         // the contract holds.
         assert!(guard.try_mark(&ctx, &eid, 30).await.expect("mark"));
         assert!(!guard.try_mark(&ctx, &eid, 30).await.expect("replay"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis"]
+    async fn above_ceiling_ttl_is_clamped() {
+        let guard = RedisNip98ReplayGuard::new(redis_pool());
+        let ctx = fresh_ctx();
+        let eid = fresh_event_id();
+
+        // Caller asks for u64::MAX (well past Redis's i64::MAX `EX` limit).
+        // Impl MUST clamp down to MAX_REPLAY_TTL_SECS so the SET succeeds; if
+        // we instead forwarded u64::MAX, Redis would reject the EX arg and
+        // try_mark would return Err — and per the trait contract, callers
+        // fail closed on Err. That's correctness-preserving but UX-hostile:
+        // every nip98 request errors. The clamp turns a foot-gun into a
+        // contained warning.
+        assert!(guard
+            .try_mark(&ctx, &eid, u64::MAX)
+            .await
+            .expect("mark with extreme ttl must succeed via clamp"));
+        assert!(!guard
+            .try_mark(&ctx, &eid, u64::MAX)
+            .await
+            .expect("replay with extreme ttl must succeed via clamp"));
     }
 }
