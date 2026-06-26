@@ -1083,12 +1083,19 @@ pub async fn query_due_reminders(
 /// [`rollback_reminder_claim`] if a subsequent side effect (e.g. Redis
 /// publish) fails — the rollback guards on `delivered_at = stamp` so a
 /// stale rollback can never clobber a fresh winner's claim.
+///
+/// The stamp is `Utc::now().timestamp_micros()` (microsecond epoch). Using
+/// whole seconds would let two claims in the same wall-clock second share
+/// a stamp and defeat the rollback guard — the very ABA bug the guard
+/// exists to prevent. Microseconds fit in `BIGINT` and no other reader
+/// interprets `delivered_at` as a whole-seconds count (it's only ever
+/// checked `IS NULL`/`IS NOT NULL`).
 pub async fn claim_due_reminder(
     pool: &PgPool,
     event_id: &[u8],
     event_created_at: DateTime<Utc>,
 ) -> Result<Option<i64>> {
-    let now_epoch = Utc::now().timestamp();
+    let stamp = Utc::now().timestamp_micros();
     let result = sqlx::query(
         r#"
         UPDATE events
@@ -1096,14 +1103,14 @@ pub async fn claim_due_reminder(
         WHERE created_at = $2 AND id = $3 AND delivered_at IS NULL
         "#,
     )
-    .bind(now_epoch)
+    .bind(stamp)
     .bind(event_created_at)
     .bind(event_id)
     .execute(pool)
     .await?;
 
     if result.rows_affected() > 0 {
-        Ok(Some(now_epoch))
+        Ok(Some(stamp))
     } else {
         Ok(None)
     }
@@ -1413,9 +1420,11 @@ mod claim_dedup_tests {
         assert!(reverted, "rollback with matching stamp must revert the row");
 
         // After rollback `delivered_at` is NULL again — a second claim wins.
-        // (We don't compare the two stamps: `Utc::now().timestamp()` has
-        // 1-second resolution, so back-to-back claims often share a value.
-        // What matters is that the second claim returns Some, not None.)
+        // The second claim's stamp differs from the first's because
+        // `timestamp_micros()` distinguishes back-to-back calls; we don't
+        // assert that here (the dedicated same-wall-clock-second test below
+        // pins that invariant). What matters here is that the second claim
+        // returns Some, not None.
         let _stamp_2 = claim_due_reminder(&pool, &id, created_at)
             .await
             .expect("second claim runs")
@@ -1447,8 +1456,10 @@ mod claim_dedup_tests {
             .expect("first claim wins");
 
         // Simulate the row's `delivered_at` advancing (operator manual
-        // clear-then-reclaim, or any post-claim mutation). A stamp 1
-        // second later is sufficient — the guard compares exact equality.
+        // clear-then-reclaim, or any post-claim mutation). Any distinct
+        // value triggers the guard; we use `stamp_old + 1` (1 microsecond
+        // later) because the guard compares exact equality and a 1-µs
+        // delta is the tightest distinct-stamp shape we can construct.
         let stamp_new = stamp_old + 1;
         sqlx::query(
             r#"
@@ -1483,6 +1494,94 @@ mod claim_dedup_tests {
             current,
             Some(stamp_new),
             "delivered_at must remain stamp_new — the stale rollback was correctly a no-op"
+        );
+    }
+
+    /// (§5c acceptance — closes Eva [4]) The realistic ABA window: two
+    /// claims that happen in the same wall-clock second must produce
+    /// distinct stamps, so a stale rollback from the first cannot match
+    /// (and clobber) the live second claim. This pins the actual race —
+    /// without microsecond precision, `Utc::now().timestamp()` would
+    /// return the same `i64` for both back-to-back claims, the rollback
+    /// guard `delivered_at = $stamp_a` would falsely match the live
+    /// `delivered_at = stamp_b` row, and the rollback would revert the
+    /// live claim. A subsequent publish would then re-claim and re-fire,
+    /// producing the silent duplicate-delivery this whole guard exists
+    /// to prevent.
+    ///
+    /// Shape: claim → rollback (round-trip ok) → reclaim. The two real
+    /// claims happen at machine speed with no `sleep` — they land in the
+    /// same wall-clock second on any modern host. With microsecond
+    /// stamps they differ by tens of µs; we assert `stamp_a != stamp_b`.
+    /// Then a stale rollback with `stamp_a` against the live `stamp_b`
+    /// row must return false.
+    ///
+    /// Adversarial: revert `claim_due_reminder` to `Utc::now().timestamp()`
+    /// (whole seconds). On the same wall-clock second, `stamp_a == stamp_b`,
+    /// the `stamp_a != stamp_b` assertion fails, AND the stale rollback
+    /// returns true (silently clobbering the live claim). Verified by
+    /// hand before commit.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn rollback_under_same_wall_clock_second_does_not_clobber() {
+        let pool = setup_pool().await;
+        let (id, created_at) = insert_due_reminder(&pool).await;
+
+        // First claim — the "slow pod" whose publish will (notionally) fail.
+        let stamp_a = claim_due_reminder(&pool, &id, created_at)
+            .await
+            .expect("first claim runs")
+            .expect("first claim wins");
+
+        // Round-trip the rollback (this is the slow pod's publish-failure
+        // path completing successfully — but imagine its `rollback` call
+        // hasn't reached the DB yet in the racy version).
+        let reverted_a = rollback_reminder_claim(&pool, &id, created_at, stamp_a)
+            .await
+            .expect("rollback A runs");
+        assert!(reverted_a, "first rollback must revert (stamps match)");
+
+        // Second claim immediately after — the "fast pod" that wins next.
+        // On the same wall-clock second as the first claim — no sleep.
+        let stamp_b = claim_due_reminder(&pool, &id, created_at)
+            .await
+            .expect("second claim runs")
+            .expect("second claim wins after rollback");
+
+        // The forcing assertion: under microsecond stamps these MUST
+        // differ. Under the old seconds-granularity bug, `stamp_a ==
+        // stamp_b` (machine speed → same second), and this assertion
+        // is what fails first when the fix is reverted.
+        assert_ne!(
+            stamp_a, stamp_b,
+            "back-to-back claims must produce distinct stamps — \
+             same-stamp collision is the ABA bug Eva [4] flagged. \
+             stamp_a={stamp_a}, stamp_b={stamp_b}"
+        );
+
+        // Now the racy late rollback: slow pod fires its stale rollback
+        // with `stamp_a` against the live `stamp_b` row. Must return
+        // false — guard rejects the stale stamp.
+        let reverted_stale = rollback_reminder_claim(&pool, &id, created_at, stamp_a)
+            .await
+            .expect("stale rollback runs");
+        assert!(
+            !reverted_stale,
+            "stale rollback with stamp_a must NOT revert the live stamp_b row"
+        );
+
+        // Confirm the row's `delivered_at` is still `stamp_b`, not NULL.
+        let current: Option<i64> =
+            sqlx::query_scalar("SELECT delivered_at FROM events WHERE created_at = $1 AND id = $2")
+                .bind(created_at)
+                .bind(&id)
+                .fetch_one(&pool)
+                .await
+                .expect("re-read delivered_at");
+        assert_eq!(
+            current,
+            Some(stamp_b),
+            "delivered_at must remain stamp_b — the stale rollback was correctly a no-op"
         );
     }
 }
