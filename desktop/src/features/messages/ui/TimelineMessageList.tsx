@@ -78,6 +78,7 @@ type TimelineMessageListProps = {
   searchMatchingMessageIds?: Set<string>;
   /** The current find-in-channel query string. */
   searchQuery?: string;
+  showInitialDayDivider?: boolean;
   /** Per-thread unread counts keyed by thread root id. */
   threadUnreadCounts?: ReadonlyMap<string, number>;
 };
@@ -112,6 +113,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   searchActiveMessageId = null,
   searchMatchingMessageIds,
   searchQuery,
+  showInitialDayDivider = true,
   threadUnreadCounts,
   unfollowThreadById,
 }: TimelineMessageListProps) {
@@ -168,8 +170,11 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   // The flattened item stream, memoized on the entries and the unread boundary
   // (the unread divider is its own item, so it shifts subsequent rows).
   const itemsResult = React.useMemo(
-    () => buildTimelineItems(entries, firstUnreadMessageId),
-    [entries, firstUnreadMessageId],
+    () =>
+      buildTimelineItems(entries, firstUnreadMessageId, {
+        showInitialDayDivider,
+      }),
+    [entries, firstUnreadMessageId, showInitialDayDivider],
   );
   const agentConversationMarkerByMessageId = React.useMemo(
     () =>
