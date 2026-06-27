@@ -300,7 +300,7 @@ export function MessageThreadPanelSkeleton({
 
   const threadBody = (
     <AuxiliaryPanelBody
-      className="overflow-y-auto overflow-x-hidden overscroll-contain pb-24"
+      className="overflow-y-auto overflow-x-hidden overscroll-contain pb-40 [overflow-anchor:none]"
       data-testid="message-thread-loading"
     >
       <div
@@ -449,16 +449,28 @@ export function MessageThreadPanel({
     [agentConversationMarkers],
   );
 
-  const { isAtBottom, newMessageCount, onScroll, scrollToBottom } =
-    useAnchoredScroll({
-      channelId: threadHeadId,
-      contentRef: threadContentRef,
-      isLoading: repliesRenderState === "pending",
-      messages: threadMessages,
-      onTargetReached: onScrollTargetResolved,
-      scrollContainerRef: threadBodyRef,
-      targetMessageId: scrollTargetId,
-    });
+  const {
+    isAtBottom,
+    newMessageCount,
+    onScroll,
+    scrollToBottom,
+    scrollToBottomOnNextUpdate,
+  } = useAnchoredScroll({
+    channelId: threadHeadId,
+    contentRef: threadContentRef,
+    isLoading: repliesRenderState === "pending",
+    messages: threadMessages,
+    onTargetReached: onScrollTargetResolved,
+    scrollContainerRef: threadBodyRef,
+    targetMessageId: scrollTargetId,
+  });
+  const handleSendReply = React.useCallback(
+    (content: string, mentionPubkeys: string[], mediaTags?: string[][]) => {
+      scrollToBottomOnNextUpdate();
+      return onSend(content, mentionPubkeys, mediaTags);
+    },
+    [onSend, scrollToBottomOnNextUpdate],
+  );
 
   if (!threadHead) {
     return null;
@@ -480,7 +492,7 @@ export function MessageThreadPanel({
 
   const threadScrollRegion = (
     <AuxiliaryPanelBody
-      className="overflow-y-auto overflow-x-hidden overscroll-contain pb-24"
+      className="overflow-y-auto overflow-x-hidden overscroll-contain pb-40 [overflow-anchor:none]"
       data-testid="message-thread-body"
       onScroll={onScroll}
       ref={threadBodyRef}
@@ -663,7 +675,7 @@ export function MessageThreadPanel({
             onCancelReply={composerReplyTarget ? onCancelReply : undefined}
             onEditLastOwnMessage={onEditLastOwnMessage}
             onEditSave={onEditSave}
-            onSend={onSend}
+            onSend={handleSendReply}
             placeholder={`Reply in thread to ${threadHead.author}`}
             profiles={profiles}
             replyTarget={composerReplyTarget}
