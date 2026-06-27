@@ -501,4 +501,220 @@ mod tests {
             .await
             .unwrap());
     }
+
+    // ─── Red-team Attack 5: audit chain forgery ──────────────────────────────
+    //
+    // Threat model: an adversary with some level of access (compromised pod,
+    // direct DB poke, malicious caller) tries to make community A's chain
+    // reveal, depend on, link to, or be corrupted by community B's data.
+    //
+    // The hash-layer protections (`compute_hash` folds community_id FIRST,
+    // `community_id_is_part_of_identity` in hash.rs::tests) and the service-
+    // layer protections (`AuditService::log` scopes head lookup + advisory
+    // lock + INSERT all by community_id; `get_entries` and `verify_chain`
+    // hard-WHERE on community_id) together encode Inv_NonInterference for
+    // audit. These tests probe the seams the existing isolation tests don't
+    // touch: adversarial query parameters, post-write tampering of the
+    // tenant column itself, and concurrent same-community writers (negative
+    // control proving the per-community advisory lock is load-bearing).
+    //
+    // Verify discipline: each test was mutated→red→restored against the
+    // current implementation before landing — see commit message for the
+    // specific mutations.
+    mod redteam_attack5 {
+        use super::*;
+
+        /// `get_entries` takes `from_seq: i64`. An adversary in community A
+        /// might pass `i64::MIN` (or any value B's seq would also satisfy)
+        /// hoping to coax the query into returning B's rows. The
+        /// `community_id = $1` filter must hold regardless of the seq range.
+        #[tokio::test]
+        #[ignore = "requires Postgres"]
+        async fn get_entries_with_adversarial_from_seq_cannot_leak() {
+            let _g = db_lock().lock().await;
+            let Some(pool) = test_pool().await else {
+                return;
+            };
+            let svc = AuditService::new(pool.clone());
+            let a = make_community(&pool).await;
+            let b = make_community(&pool).await;
+
+            // Populate both communities.
+            svc.log(new_entry(a, AuditAction::EventCreated))
+                .await
+                .unwrap();
+            svc.log(new_entry(a, AuditAction::ChannelCreated))
+                .await
+                .unwrap();
+            svc.log(new_entry(b, AuditAction::EventCreated))
+                .await
+                .unwrap();
+            svc.log(new_entry(b, AuditAction::EventDeleted))
+                .await
+                .unwrap();
+
+            // Adversarial seq ranges that would satisfy B's rows if the
+            // community filter were absent or weakened.
+            for &from in &[i64::MIN, -1, 0, 1] {
+                let rows = svc
+                    .get_entries(CommunityId::from_uuid(a), from, 1000)
+                    .await
+                    .unwrap();
+                assert!(
+                    rows.iter().all(|e| e.community_id == a),
+                    "get_entries(A, from_seq={from}) leaked another community's row",
+                );
+                assert_eq!(
+                    rows.len(),
+                    2,
+                    "get_entries(A, from_seq={from}) returned wrong row count",
+                );
+            }
+        }
+
+        /// `verify_chain` takes `from_seq, to_seq: i64`. An adversary might
+        /// pass a wide range hoping to pull a sibling community's rows into
+        /// the verification. The `community_id = $1` predicate must reject
+        /// every B row regardless of range.
+        #[tokio::test]
+        #[ignore = "requires Postgres"]
+        async fn verify_chain_with_wide_range_does_not_traverse_siblings() {
+            let _g = db_lock().lock().await;
+            let Some(pool) = test_pool().await else {
+                return;
+            };
+            let svc = AuditService::new(pool.clone());
+            let a = make_community(&pool).await;
+            let b = make_community(&pool).await;
+
+            // A has two entries; B has two with the SAME seqs (independent chain).
+            svc.log(new_entry(a, AuditAction::EventCreated))
+                .await
+                .unwrap();
+            svc.log(new_entry(a, AuditAction::ChannelCreated))
+                .await
+                .unwrap();
+            svc.log(new_entry(b, AuditAction::EventCreated))
+                .await
+                .unwrap();
+            svc.log(new_entry(b, AuditAction::ChannelCreated))
+                .await
+                .unwrap();
+
+            // A's chain verifies over A's seqs even with a range that would
+            // cover B's seqs too — the community filter scopes it.
+            assert!(svc
+                .verify_chain(CommunityId::from_uuid(a), i64::MIN, i64::MAX)
+                .await
+                .unwrap());
+            assert!(svc
+                .verify_chain(CommunityId::from_uuid(b), i64::MIN, i64::MAX)
+                .await
+                .unwrap());
+
+            // If B's rows leaked into A's verify, hashes would mismatch
+            // (compute_hash folds community_id) — the fact that verify returns
+            // true is the witness that the WHERE held.
+        }
+
+        /// Direct-DB tamper of the `community_id` column itself: a row
+        /// originally written into A gets its community_id flipped to B at
+        /// rest. Verifying B's chain over that row must HashMismatch — the
+        /// hash binds the community_id, so the forgery cannot pass verify.
+        ///
+        /// This is the converse of `cross_community_row_does_not_verify`
+        /// (which forges by INSERT). Here we forge by UPDATE on an
+        /// already-chained row.
+        #[tokio::test]
+        #[ignore = "requires Postgres"]
+        async fn post_write_community_id_swap_is_detected_by_verify() {
+            let _g = db_lock().lock().await;
+            let Some(pool) = test_pool().await else {
+                return;
+            };
+            let svc = AuditService::new(pool.clone());
+            let a = make_community(&pool).await;
+            let b = make_community(&pool).await;
+
+            let a1 = svc
+                .log(new_entry(a, AuditAction::EventCreated))
+                .await
+                .unwrap();
+
+            // Adversary flips A's row to be a B row at rest. (Production code
+            // never does this; the lint/RLS layers should prevent it. This
+            // simulates a DB-level compromise.)
+            //
+            // The B chain currently has no seq=1 row, so the swap doesn't
+            // collide on the PK.
+            sqlx::query("UPDATE audit_log SET community_id = $1 WHERE community_id = $2 AND seq = $3")
+                .bind(b)
+                .bind(a)
+                .bind(a1.seq)
+                .execute(&pool)
+                .await
+                .unwrap();
+
+            // Verifying B's chain over the forged row recomputes the hash
+            // with community_id = B, but the stored hash was computed for A
+            // → HashMismatch.
+            let r = svc.verify_chain(CommunityId::from_uuid(b), 1, 1).await;
+            assert!(
+                matches!(r, Err(AuditError::HashMismatch { seq: 1 })),
+                "post-write community swap should fail verify (got {r:?})",
+            );
+        }
+
+        /// Negative control proving the per-community advisory lock is
+        /// load-bearing: many concurrent writers in the SAME community must
+        /// produce a contiguous, internally-consistent chain — no PK
+        /// collisions, no chain forks, no missing links.
+        ///
+        /// If the lock were dropped, two writers could read the same
+        /// `prev_seq` and race the INSERT — one would fail the PK
+        /// `(community_id, seq)`, or in a buggy variant two rows would share
+        /// `prev_hash` (forking the chain). The fact that this test passes
+        /// is the witness that the lock is doing its job WITHIN a community.
+        /// Combined with `chains_are_independent_per_community` (which
+        /// proves the lock key VARIES across communities), this pins both
+        /// halves of the "lock is per-community, not global" property.
+        #[tokio::test]
+        #[ignore = "requires Postgres"]
+        async fn concurrent_writers_same_community_produce_consistent_chain() {
+            let _g = db_lock().lock().await;
+            let Some(pool) = test_pool().await else {
+                return;
+            };
+            let svc = std::sync::Arc::new(AuditService::new(pool.clone()));
+            let c = make_community(&pool).await;
+
+            // Fire N concurrent writes into one community.
+            const N: usize = 12;
+            let mut handles = Vec::with_capacity(N);
+            for _ in 0..N {
+                let svc = svc.clone();
+                handles.push(tokio::spawn(async move {
+                    svc.log(new_entry(c, AuditAction::EventCreated)).await
+                }));
+            }
+            for h in handles {
+                h.await.unwrap().expect("concurrent write failed");
+            }
+
+            // Chain is contiguous from 1..=N and internally consistent.
+            let rows = svc
+                .get_entries(CommunityId::from_uuid(c), 1, (N as i64) + 1)
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), N, "expected exactly N rows in this community");
+            for (i, row) in rows.iter().enumerate() {
+                assert_eq!(row.seq, (i as i64) + 1, "seq must be contiguous from 1");
+                assert_eq!(row.community_id, c);
+            }
+            assert!(svc
+                .verify_chain(CommunityId::from_uuid(c), 1, N as i64)
+                .await
+                .unwrap());
+        }
+    }
 }
