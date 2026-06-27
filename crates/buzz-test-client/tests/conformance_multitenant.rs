@@ -1699,12 +1699,11 @@ mod workflows {
     }
 
     /// Fire a workflow by id on `http_base`'s community (kind:46020, `d`=id).
-    /// Returns the parsed `{accepted, message}` body so the caller can assert on
-    /// the *wire-observable* accept/reject and message. The relay resolves the
-    /// workflow with `get_workflow(host_community, id)` — community-scoped — so a
-    /// foreign-community id fails closed with a generic `invalid: workflow not
-    /// found`, indistinguishable from "no such id at all" (no cross-tenant
-    /// enumeration oracle).
+    /// Returns a normalized `{accepted, message}` body so the caller can assert
+    /// on the *wire-observable* accept/reject and message. The HTTP bridge maps
+    /// `IngestError::Rejected` to HTTP 400 + `{error}` while the WS door maps the
+    /// same condition to `OK false`; for this conformance row either envelope is
+    /// acceptable. The safety property is the scoped lookup and generic message.
     async fn trigger_workflow(
         http_base: &str,
         keys: &Keys,
@@ -1714,7 +1713,31 @@ mod workflows {
             .tags(vec![Tag::parse(["d", workflow_id]).unwrap()])
             .sign_with_keys(keys)
             .unwrap();
-        submit_event(http_base, keys, event).await
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{http_base}/events"))
+            .header("X-Pubkey", keys.public_key().to_hex())
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_string(&event).expect("serialize event"))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("POST workflow trigger to {http_base} failed: {e}"));
+        let status = resp.status();
+        let body = resp.text().await.expect("read workflow trigger body");
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| {
+            panic!("parse workflow trigger JSON from {http_base}: {e} (body: {body})")
+        });
+        if status.is_success() {
+            return parsed;
+        }
+        if status == reqwest::StatusCode::BAD_REQUEST {
+            return serde_json::json!({
+                "accepted": false,
+                "message": parsed["error"].as_str().unwrap_or_default(),
+            });
+        }
+        panic!("POST workflow trigger to {http_base} returned HTTP {status}: {body}");
     }
 
     /// Obligation (trigger-confinement half): a workflow id defined under

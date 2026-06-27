@@ -143,6 +143,9 @@ impl GitS3Probe {
 
     fn pointer_key(owner: &str, repo: &str) -> String {
         let repo = repo.strip_suffix(".git").unwrap_or(repo);
+        if let Ok(community) = std::env::var("BUZZ_E2E_GIT_COMMUNITY_ID") {
+            return format!("repos/{community}/{owner}/{repo}/pointer");
+        }
         format!("repos/{owner}/{repo}/pointer")
     }
 

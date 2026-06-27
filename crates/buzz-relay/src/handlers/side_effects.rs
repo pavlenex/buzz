@@ -1883,7 +1883,7 @@ async fn handle_standard_deletion_event(
             // if the backfill was missed (set_reaction_event_id is best-effort).
             let removed = state
                 .db
-                .remove_reaction_by_source_event_id(&target_id)
+                .remove_reaction_by_source_event_id(tenant.community(), &target_id)
                 .await
                 .unwrap_or(false);
             if !removed {
@@ -1925,7 +1925,13 @@ async fn handle_standard_deletion_event(
                             .unwrap_or_else(chrono::Utc::now);
                             if let Err(e) = state
                                 .db
-                                .remove_reaction(&react_target_id, react_target_ts, &actor, emoji)
+                                .remove_reaction(
+                                    tenant.community(),
+                                    &react_target_id,
+                                    react_target_ts,
+                                    &actor,
+                                    emoji,
+                                )
                                 .await
                             {
                                 tracing::warn!(
@@ -2087,10 +2093,11 @@ async fn handle_git_repo_announcement(
     // (see `api::git::hydrate`). Announce only (1) reserves the repo name and
     // (2) seeds the empty-manifest pointer that makes the repo clone-able.
     //
-    // `.names/<repo_id>` is the relay's name registry. Each reservation holds
-    // an `owner` file naming the announcer. It serves three jobs at once:
+    // `.names/<community>/<repo_id>` is the relay's name registry. Each
+    // reservation holds an `owner` file naming the announcer. It serves three
+    // jobs at once inside the server-resolved community boundary:
     //   - uniqueness: `create_dir` is atomic, so concurrent kind:30617 events
-    //     for the same name can't both claim it (TOCTOU-free);
+    //     for the same community/name can't both claim it (TOCTOU-free);
     //   - idempotent re-announce: a reservation owned by the same pubkey is an
     //     update, not a collision;
     //   - per-pubkey quota: count the reservations whose `owner` matches.
@@ -2100,7 +2107,9 @@ async fn handle_git_repo_announcement(
     // pointer (not this registry) preventing actual ref-state corruption. A
     // CAS-backed name index is the multi-instance follow-up.
     let git_repo_root = &state.config.git_repo_path;
-    let names_dir = git_repo_root.join(".names");
+    let names_dir = git_repo_root
+        .join(".names")
+        .join(tenant.community().to_string());
     std::fs::create_dir_all(&names_dir)
         .map_err(|e| anyhow::anyhow!("failed to create name reservation index: {e}"))?;
 

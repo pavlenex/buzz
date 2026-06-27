@@ -300,7 +300,7 @@ impl Db {
             r#"
             INSERT INTO communities (host)
             VALUES ($1)
-            ON CONFLICT (host) DO UPDATE SET host = EXCLUDED.host
+            ON CONFLICT (lower(host)) DO UPDATE SET host = EXCLUDED.host
             RETURNING id, host
             "#,
         )
@@ -1154,6 +1154,7 @@ impl Db {
     /// Add (or re-activate) a reaction.
     pub async fn add_reaction(
         &self,
+        community: CommunityId,
         event_id: &[u8],
         event_created_at: DateTime<Utc>,
         pubkey: &[u8],
@@ -1162,6 +1163,7 @@ impl Db {
     ) -> Result<bool> {
         reaction::add_reaction(
             &self.pool,
+            community,
             event_id,
             event_created_at,
             pubkey,
@@ -1174,37 +1176,56 @@ impl Db {
     /// Soft-delete a reaction.
     pub async fn remove_reaction(
         &self,
+        community: CommunityId,
         event_id: &[u8],
         event_created_at: DateTime<Utc>,
         pubkey: &[u8],
         emoji: &str,
     ) -> Result<bool> {
-        reaction::remove_reaction(&self.pool, event_id, event_created_at, pubkey, emoji).await
+        reaction::remove_reaction(
+            &self.pool,
+            community,
+            event_id,
+            event_created_at,
+            pubkey,
+            emoji,
+        )
+        .await
     }
 
     /// Soft-delete a reaction by its source event ID.
     pub async fn remove_reaction_by_source_event_id(
         &self,
+        community: CommunityId,
         reaction_event_id: &[u8],
     ) -> Result<bool> {
-        reaction::remove_reaction_by_source_event_id(&self.pool, reaction_event_id).await
+        reaction::remove_reaction_by_source_event_id(&self.pool, community, reaction_event_id).await
     }
 
     /// Look up the active reaction row for one actor + emoji + target tuple.
     pub async fn get_active_reaction_record(
         &self,
+        community: CommunityId,
         event_id: &[u8],
         event_created_at: DateTime<Utc>,
         pubkey: &[u8],
         emoji: &str,
     ) -> Result<Option<reaction::ActiveReactionRecord>> {
-        reaction::get_active_reaction_record(&self.pool, event_id, event_created_at, pubkey, emoji)
-            .await
+        reaction::get_active_reaction_record(
+            &self.pool,
+            community,
+            event_id,
+            event_created_at,
+            pubkey,
+            emoji,
+        )
+        .await
     }
 
     /// Backfill the source event ID on an active reaction row.
     pub async fn set_reaction_event_id(
         &self,
+        community: CommunityId,
         event_id: &[u8],
         event_created_at: DateTime<Utc>,
         pubkey: &[u8],
@@ -1213,6 +1234,7 @@ impl Db {
     ) -> Result<bool> {
         reaction::set_reaction_event_id(
             &self.pool,
+            community,
             event_id,
             event_created_at,
             pubkey,
@@ -1225,20 +1247,30 @@ impl Db {
     /// Get all active reactions for an event, grouped by emoji.
     pub async fn get_reactions(
         &self,
+        community: CommunityId,
         event_id: &[u8],
         event_created_at: DateTime<Utc>,
         limit: u32,
         cursor: Option<&str>,
     ) -> Result<Vec<reaction::ReactionGroup>> {
-        reaction::get_reactions(&self.pool, event_id, event_created_at, limit, cursor).await
+        reaction::get_reactions(
+            &self.pool,
+            community,
+            event_id,
+            event_created_at,
+            limit,
+            cursor,
+        )
+        .await
     }
 
     /// Batch-fetch emoji counts for a set of (event_id, event_created_at) pairs.
     pub async fn get_reactions_bulk(
         &self,
+        community: CommunityId,
         event_ids: &[(&[u8], DateTime<Utc>)],
     ) -> Result<Vec<reaction::BulkReactionEntry>> {
-        reaction::get_reactions_bulk(&self.pool, event_ids).await
+        reaction::get_reactions_bulk(&self.pool, community, event_ids).await
     }
 
     /// Find events that @mention the given pubkey.
@@ -1851,36 +1883,43 @@ impl Db {
         Ok(result.rows_affected())
     }
 
-    /// Check if a pubkey is in the allowlist.
-    pub async fn is_pubkey_allowed(&self, pubkey: &[u8]) -> Result<bool> {
-        let row = sqlx::query("SELECT COUNT(*) as cnt FROM pubkey_allowlist WHERE pubkey = $1")
-            .bind(pubkey)
-            .fetch_one(&self.pool)
-            .await?;
+    /// Check if a pubkey is in the allowlist for `community`.
+    pub async fn is_pubkey_allowed(&self, community: CommunityId, pubkey: &[u8]) -> Result<bool> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) as cnt FROM pubkey_allowlist WHERE community_id = $1 AND pubkey = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(pubkey)
+        .fetch_one(&self.pool)
+        .await?;
         let cnt: i64 = row.try_get("cnt")?;
         Ok(cnt > 0)
     }
 
-    /// Check if the allowlist has any entries (i.e. is enforcement active).
-    pub async fn has_allowlist_entries(&self) -> Result<bool> {
-        let row = sqlx::query("SELECT COUNT(*) as cnt FROM pubkey_allowlist")
-            .fetch_one(&self.pool)
-            .await?;
+    /// Check if the community allowlist has any entries (i.e. is enforcement active).
+    pub async fn has_allowlist_entries(&self, community: CommunityId) -> Result<bool> {
+        let row =
+            sqlx::query("SELECT COUNT(*) as cnt FROM pubkey_allowlist WHERE community_id = $1")
+                .bind(community.as_uuid())
+                .fetch_one(&self.pool)
+                .await?;
         let cnt: i64 = row.try_get("cnt")?;
         Ok(cnt > 0)
     }
 
-    /// Add a pubkey to the allowlist.
+    /// Add a pubkey to the community allowlist.
     pub async fn add_to_allowlist(
         &self,
+        community: CommunityId,
         pubkey: &[u8],
         added_by: &[u8],
         note: Option<&str>,
     ) -> Result<bool> {
         let result = sqlx::query(
-            "INSERT INTO pubkey_allowlist (pubkey, added_by, note) VALUES ($1, $2, $3) \
+            "INSERT INTO pubkey_allowlist (community_id, pubkey, added_by, note) VALUES ($1, $2, $3, $4) \
              ON CONFLICT DO NOTHING",
         )
+        .bind(community.as_uuid())
         .bind(pubkey)
         .bind(added_by)
         .bind(note)
@@ -1889,20 +1928,27 @@ impl Db {
         Ok(result.rows_affected() > 0)
     }
 
-    /// Remove a pubkey from the allowlist.
-    pub async fn remove_from_allowlist(&self, pubkey: &[u8]) -> Result<bool> {
-        let result = sqlx::query("DELETE FROM pubkey_allowlist WHERE pubkey = $1")
-            .bind(pubkey)
-            .execute(&self.pool)
-            .await?;
+    /// Remove a pubkey from the community allowlist.
+    pub async fn remove_from_allowlist(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<bool> {
+        let result =
+            sqlx::query("DELETE FROM pubkey_allowlist WHERE community_id = $1 AND pubkey = $2")
+                .bind(community.as_uuid())
+                .bind(pubkey)
+                .execute(&self.pool)
+                .await?;
         Ok(result.rows_affected() > 0)
     }
 
-    /// List all pubkeys in the allowlist.
-    pub async fn list_allowlist(&self) -> Result<Vec<AllowlistEntry>> {
+    /// List all pubkeys in the community allowlist.
+    pub async fn list_allowlist(&self, community: CommunityId) -> Result<Vec<AllowlistEntry>> {
         let rows = sqlx::query(
-            "SELECT pubkey, added_by, added_at, note FROM pubkey_allowlist ORDER BY added_at DESC",
+            "SELECT pubkey, added_by, added_at, note FROM pubkey_allowlist WHERE community_id = $1 ORDER BY added_at DESC",
         )
+        .bind(community.as_uuid())
         .fetch_all(&self.pool)
         .await?;
 
@@ -2490,6 +2536,72 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
+    async fn allowlist_is_scoped_to_community() {
+        let db = setup_db().await;
+        let community_a = CommunityId::from_uuid(make_community(&db.pool).await);
+        let community_b = CommunityId::from_uuid(make_community(&db.pool).await);
+        let pubkey = [7u8; 32];
+        let added_by = [9u8; 32];
+
+        assert!(db
+            .add_to_allowlist(community_a, &pubkey, &added_by, Some("a-only"))
+            .await
+            .expect("add allowlist row"));
+        assert!(!db
+            .add_to_allowlist(community_a, &pubkey, &added_by, Some("duplicate"))
+            .await
+            .expect("duplicate allowlist row is idempotent"));
+
+        assert!(
+            db.is_pubkey_allowed(community_a, &pubkey)
+                .await
+                .expect("allowlist check A"),
+            "pubkey added to A must be allowed in A"
+        );
+        assert!(
+            !db.is_pubkey_allowed(community_b, &pubkey)
+                .await
+                .expect("allowlist check B"),
+            "pubkey added only to A must not be allowed in B"
+        );
+        assert!(db
+            .has_allowlist_entries(community_a)
+            .await
+            .expect("A has entries"));
+        assert!(!db
+            .has_allowlist_entries(community_b)
+            .await
+            .expect("B has no entries"));
+
+        let listed = db
+            .list_allowlist(community_a)
+            .await
+            .expect("list A allowlist");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].pubkey, pubkey);
+
+        assert!(
+            !db.remove_from_allowlist(community_b, &pubkey)
+                .await
+                .expect("remove from B is no-op"),
+            "removing from B must not delete A's row"
+        );
+        assert!(db
+            .is_pubkey_allowed(community_a, &pubkey)
+            .await
+            .expect("A still allowed after B remove"));
+        assert!(db
+            .remove_from_allowlist(community_a, &pubkey)
+            .await
+            .expect("remove from A"));
+        assert!(!db
+            .is_pubkey_allowed(community_a, &pubkey)
+            .await
+            .expect("A not allowed after remove"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
     async fn communities_of_channels_present_for_existing_absent_for_missing() {
         let db = setup_db().await;
         let community = make_community(&db.pool).await;
@@ -2527,6 +2639,135 @@ mod tests {
             result.len(),
             1,
             "result map must contain only existing channels"
+        );
+    }
+
+    /// BUG-5 regression: the `reactions` table is community-scoped
+    /// (`PK (community_id, event_created_at, event_id, pubkey, emoji)`), so a
+    /// reaction added under community A must be invisible and unremovable from
+    /// community B — even for the *identical* `(event_id, pubkey, emoji)` shape.
+    /// Before the fix, `add_reaction` omitted `community_id` (NOT NULL → 500) and
+    /// every read/remove filtered `event_id` only (latent cross-tenant bleed).
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn reactions_are_scoped_to_community() {
+        let db = setup_db().await;
+        let community_a = CommunityId::from_uuid(make_community(&db.pool).await);
+        let community_b = CommunityId::from_uuid(make_community(&db.pool).await);
+
+        // Identical referenced-event shape across both tenants.
+        let event_id = [0xABu8; 32];
+        let event_created_at = Utc::now();
+        let pubkey = [7u8; 32];
+        let emoji = "👍";
+
+        // (1) Add succeeds under A (this INSERT 500'd before the fix).
+        assert!(
+            db.add_reaction(
+                community_a,
+                &event_id,
+                event_created_at,
+                &pubkey,
+                emoji,
+                None
+            )
+            .await
+            .expect("add reaction under A"),
+            "first reaction under A must be inserted"
+        );
+        // Idempotent: re-adding the same active reaction is a no-op.
+        assert!(
+            !db.add_reaction(
+                community_a,
+                &event_id,
+                event_created_at,
+                &pubkey,
+                emoji,
+                None
+            )
+            .await
+            .expect("duplicate reaction under A"),
+            "active duplicate under A must not re-insert"
+        );
+
+        // (2) Visible on A, invisible on B (grouped read path).
+        let groups_a = db
+            .get_reactions(community_a, &event_id, event_created_at, 100, None)
+            .await
+            .expect("get reactions A");
+        assert_eq!(groups_a.len(), 1, "A must see its own reaction group");
+        assert_eq!(groups_a[0].emoji, emoji);
+        assert_eq!(groups_a[0].count, 1);
+
+        let groups_b = db
+            .get_reactions(community_b, &event_id, event_created_at, 100, None)
+            .await
+            .expect("get reactions B");
+        assert!(
+            groups_b.is_empty(),
+            "B must NOT see A's reaction for the same event shape, got {groups_b:?}"
+        );
+
+        // (3) Active-record lookup is scoped: present on A, absent on B.
+        assert!(
+            db.get_active_reaction_record(community_a, &event_id, event_created_at, &pubkey, emoji)
+                .await
+                .expect("active record A")
+                .is_some(),
+            "A's active reaction record must be present"
+        );
+        assert!(
+            db.get_active_reaction_record(community_b, &event_id, event_created_at, &pubkey, emoji)
+                .await
+                .expect("active record B")
+                .is_none(),
+            "B must not find A's active reaction record"
+        );
+
+        // (4) B can add the identical shape independently (no PK collision).
+        assert!(
+            db.add_reaction(
+                community_b,
+                &event_id,
+                event_created_at,
+                &pubkey,
+                emoji,
+                None
+            )
+            .await
+            .expect("add reaction under B"),
+            "B must be able to add the same shape as its own scoped row"
+        );
+
+        // (5) Removing from B does not touch A's row.
+        assert!(
+            db.remove_reaction(community_b, &event_id, event_created_at, &pubkey, emoji)
+                .await
+                .expect("remove under B"),
+            "B remove must affect B's own row"
+        );
+        assert!(
+            db.get_active_reaction_record(community_a, &event_id, event_created_at, &pubkey, emoji)
+                .await
+                .expect("active record A after B remove")
+                .is_some(),
+            "A's reaction must survive a B-side removal"
+        );
+
+        // (6) A remove affects only A; A's read now empty.
+        assert!(
+            db.remove_reaction(community_a, &event_id, event_created_at, &pubkey, emoji)
+                .await
+                .expect("remove under A"),
+            "A remove must affect A's row"
+        );
+        let groups_a_after = db
+            .get_reactions(community_a, &event_id, event_created_at, 100, None)
+            .await
+            .expect("get reactions A after remove");
+        assert!(
+            groups_a_after.is_empty(),
+            "A's reaction must be gone after A removes it"
         );
     }
 }

@@ -1832,7 +1832,14 @@ async fn ingest_event_inner(
         // exists — short-circuit without storing the event.
         let inserted = state
             .db
-            .add_reaction(&target_id, target_created_at, &actor_bytes, emoji, None)
+            .add_reaction(
+                tenant.community(),
+                &target_id,
+                target_created_at,
+                &actor_bytes,
+                emoji,
+                None,
+            )
             .await
             .map_err(|e| IngestError::Internal(format!("error: {e}")))?;
 
@@ -1861,7 +1868,13 @@ async fn ingest_event_inner(
                 // Compensate: undo the reaction row so state stays consistent.
                 if let Err(re) = state
                     .db
-                    .remove_reaction(&target_id, target_created_at, &actor_bytes, emoji)
+                    .remove_reaction(
+                        tenant.community(),
+                        &target_id,
+                        target_created_at,
+                        &actor_bytes,
+                        emoji,
+                    )
                     .await
                 {
                     warn!(event_id = %event_id_hex, "reaction compensation failed: {re}");
@@ -1875,6 +1888,7 @@ async fn ingest_event_inner(
             if let Err(e) = state
                 .db
                 .set_reaction_event_id(
+                    tenant.community(),
                     &target_id,
                     target_created_at,
                     &actor_bytes,

@@ -699,7 +699,7 @@ async fn resolve_upload_scopes(
         let pubkey_bytes = blossom_pubkey.to_bytes().to_vec();
         if !state
             .db
-            .is_pubkey_allowed(&pubkey_bytes)
+            .is_pubkey_allowed(tenant.community(), &pubkey_bytes)
             .await
             .unwrap_or(false)
         {

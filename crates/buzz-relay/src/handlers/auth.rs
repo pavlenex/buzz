@@ -88,7 +88,11 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             if state.config.pubkey_allowlist_enabled
                 && auth_ctx.auth_method == buzz_auth::AuthMethod::Nip42
             {
-                let allowed = match state.db.is_pubkey_allowed(pubkey.as_bytes()).await {
+                let allowed = match state
+                    .db
+                    .is_pubkey_allowed(conn.tenant.community(), pubkey.as_bytes())
+                    .await
+                {
                     Ok(v) => v,
                     Err(e) => {
                         warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), error = %e,

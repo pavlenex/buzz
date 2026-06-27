@@ -322,6 +322,7 @@ pub async fn backfill_from_allowlist(pool: &PgPool, community: CommunityId) -> R
         "INSERT INTO relay_members (community_id, pubkey, role, added_by, created_at) \
          SELECT $1, encode(pubkey, 'hex'), 'member', NULL, added_at \
          FROM pubkey_allowlist \
+         WHERE community_id = $1 \
          ON CONFLICT (community_id, pubkey) DO NOTHING",
     )
     .bind(community.as_uuid())

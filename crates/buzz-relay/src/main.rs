@@ -111,8 +111,8 @@ async fn main() -> anyhow::Result<()> {
     // (`relay_url_authority` → `normalize_host`), so the bootstrapped owner lands
     // in exactly the community that live requests for this host will resolve to.
     //
-    // `ensure_configured_community` is idempotent (`ON CONFLICT (host)`), so this
-    // is safe to run every startup. An empty authority (unparseable `relay_url`)
+    // `ensure_configured_community` is idempotent, so this is safe to run every
+    // startup. An empty authority (unparseable `relay_url`)
     // is a misconfiguration — fail fast when membership is enforced rather than
     // seeding an empty-host community that no request can ever resolve to.
     let deployment_community = {
