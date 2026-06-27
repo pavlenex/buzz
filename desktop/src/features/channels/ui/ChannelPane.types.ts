@@ -89,6 +89,7 @@ export type ChannelPaneProps = {
     emoji: string,
     remove: boolean,
   ) => Promise<void>;
+  onThreadScrollTargetChange: (messageId: string | null) => void;
   onThreadScrollTargetResolved: () => void;
   onThreadPanelResizeStart: (
     event: React.PointerEvent<HTMLButtonElement>,

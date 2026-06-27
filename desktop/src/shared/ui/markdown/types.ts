@@ -1,3 +1,4 @@
+import type { ParsedAgentConversationLink } from "@/features/agents/agentConversationLink";
 import type { ParsedMessageLink } from "@/features/messages/lib/messageLink";
 import type { Channel } from "@/shared/api/types";
 import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
@@ -30,6 +31,7 @@ export type MarkdownRuntime = {
   linkPreviewHrefs: ReadonlySet<string>;
   mentionPubkeysByName?: Record<string, string>;
   onOpenChannel: (channelId: string) => void;
+  onOpenAgentConversationLink: (link: ParsedAgentConversationLink) => void;
   onOpenMessageLink: (link: ParsedMessageLink) => void;
 };
 
