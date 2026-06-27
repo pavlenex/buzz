@@ -2246,3 +2246,100 @@ fn parse_api_token_row(row: sqlx::postgres::PgRow) -> Result<ApiTokenRecord> {
         revoked_at: row.try_get("revoked_at")?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    //! Pin the load-bearing contract for `Db::communities_of_channels`:
+    //! a channel id that does NOT exist MUST be absent from the result
+    //! map, never mapped to a default. The relay-side read-row emitter
+    //! relies on this — a missing entry triggers `MissingLookup →
+    //! ImplBug{row_community_lookup_missing} → CoverageBreach`. If this
+    //! helper ever started returning a default/zero entry for unknown
+    //! channels, that fail-closed chain would go blind.
+    use super::*;
+    use buzz_core::CommunityId;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
+
+    async fn setup_db() -> Db {
+        let pool = PgPool::connect(TEST_DB_URL)
+            .await
+            .expect("connect to test DB");
+        Db { pool }
+    }
+
+    async fn make_community(pool: &PgPool) -> Uuid {
+        let id = Uuid::new_v4();
+        let host = format!("communities-of-channels-{}.example", id.simple());
+        sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+            .bind(id)
+            .bind(host)
+            .execute(pool)
+            .await
+            .expect("insert community");
+        id
+    }
+
+    async fn insert_channel(pool: &PgPool, community_id: Uuid, channel_id: Uuid) {
+        let creator: Vec<u8> = vec![0u8; 32];
+        sqlx::query(
+            r#"
+            INSERT INTO channels
+                (id, community_id, name, channel_type, visibility, created_by)
+            VALUES
+                ($1, $2, $3, 'stream'::channel_type, 'open'::channel_visibility, $4)
+            "#,
+        )
+        .bind(channel_id)
+        .bind(community_id)
+        .bind(format!("ch-{}", channel_id.simple()))
+        .bind(&creator)
+        .execute(pool)
+        .await
+        .expect("insert channel");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn communities_of_channels_present_for_existing_absent_for_missing() {
+        let db = setup_db().await;
+        let community = make_community(&db.pool).await;
+        let existing = Uuid::new_v4();
+        insert_channel(&db.pool, community, existing).await;
+
+        // Channel that is NOT inserted — the load-bearing case.
+        let missing = Uuid::new_v4();
+
+        let result = db
+            .communities_of_channels(&[existing, missing])
+            .await
+            .expect("communities_of_channels");
+
+        // (1) Existing channel → present with its true community.
+        assert_eq!(
+            result.get(&existing).copied(),
+            Some(CommunityId::from_uuid(community)),
+            "existing channel must map to its true community",
+        );
+
+        // (2) Missing channel → ABSENT from the map (never defaulted).
+        // This is the contract the relay-side `MissingLookup → ImplBug`
+        // fail-closed guard-rail depends on. If this assertion ever
+        // weakens to `result.get(&missing) != Some(community)`, the
+        // mutate-bite below stops biting.
+        assert!(
+            !result.contains_key(&missing),
+            "missing channel must be absent from the result map, got {:?}",
+            result.get(&missing),
+        );
+
+        // (3) Map size matches: exactly one entry, the existing one.
+        assert_eq!(
+            result.len(),
+            1,
+            "result map must contain only existing channels"
+        );
+    }
+}
