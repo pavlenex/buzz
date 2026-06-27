@@ -1748,14 +1748,15 @@ impl Db {
         relay_members::backfill_from_allowlist(&self.pool).await
     }
 
-    /// Returns `true` if `pubkey` (64-char hex) is currently archived.
-    pub async fn is_archived(&self, pubkey: &str) -> Result<bool> {
-        archived_identities::is_archived(&self.pool, pubkey).await
+    /// Returns `true` if `pubkey` (64-char hex) is archived in `community_id`.
+    pub async fn is_archived(&self, community_id: CommunityId, pubkey: &str) -> Result<bool> {
+        archived_identities::is_archived(&self.pool, community_id, pubkey).await
     }
 
-    /// Archives an identity. Returns `true` if inserted, `false` if already archived.
+    /// Archives an identity in `community_id`. Returns `true` if inserted, `false` if already archived.
     pub async fn archive(
         &self,
+        community_id: CommunityId,
         pubkey: &str,
         consent_path: &str,
         actor: &str,
@@ -1765,6 +1766,7 @@ impl Db {
     ) -> Result<bool> {
         archived_identities::archive(
             &self.pool,
+            community_id,
             pubkey,
             consent_path,
             actor,
@@ -1775,14 +1777,17 @@ impl Db {
         .await
     }
 
-    /// Unarchives an identity. Returns `true` if deleted, `false` if absent.
-    pub async fn unarchive(&self, pubkey: &str) -> Result<bool> {
-        archived_identities::unarchive(&self.pool, pubkey).await
+    /// Unarchives an identity from `community_id`. Returns `true` if deleted, `false` if absent.
+    pub async fn unarchive(&self, community_id: CommunityId, pubkey: &str) -> Result<bool> {
+        archived_identities::unarchive(&self.pool, community_id, pubkey).await
     }
 
-    /// Returns all archived identities ordered by archive time ascending.
-    pub async fn list_archived(&self) -> Result<Vec<archived_identities::ArchivedIdentity>> {
-        archived_identities::list_archived(&self.pool).await
+    /// Returns all identities archived in `community_id`, ordered by archive time ascending.
+    pub async fn list_archived(
+        &self,
+        community_id: CommunityId,
+    ) -> Result<Vec<archived_identities::ArchivedIdentity>> {
+        archived_identities::list_archived(&self.pool, community_id).await
     }
 
     /// Soft-delete NIP-29 discovery events for a channel created by a specific relay pubkey.
