@@ -682,16 +682,333 @@ mod workflows {
 mod search_fts {
     use super::*;
 
+    use buzz_test_client::{BuzzTestClient, RelayMessage};
+    use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag};
+
+    /// Convert an `http(s)://host[:port]` base into the `ws(s)://` form the
+    /// websocket client needs. The conformance docstring documents URLs as
+    /// `http://` for human/REST clarity; the WS upgrade still happens on the
+    /// same host:port.
+    fn to_ws(base: &str) -> String {
+        if base.starts_with("ws://") || base.starts_with("wss://") {
+            base.trim_end_matches('/').to_string()
+        } else {
+            base.replace("https://", "wss://")
+                .replace("http://", "ws://")
+                .trim_end_matches('/')
+                .to_string()
+        }
+    }
+
+    /// Convert any base form to `http(s)://` for REST calls.
+    fn to_http(base: &str) -> String {
+        if base.starts_with("http://") || base.starts_with("https://") {
+            base.trim_end_matches('/').to_string()
+        } else {
+            base.replace("wss://", "https://")
+                .replace("ws://", "http://")
+                .trim_end_matches('/')
+                .to_string()
+        }
+    }
+
+    /// Create a visibility=open channel with a caller-chosen UUID in the
+    /// community resolved by `http_base` (the relay derives community from the
+    /// request host, never from caller input — that's row zero). Using a
+    /// caller-supplied UUID lets the test reuse the *same* channel UUID across
+    /// two communities, which is the load-bearing shape: PK is
+    /// `(community_id, id)`, so the same UUID legitimately co-exists, and the
+    /// only thing keeping A's events from surfacing under B's `#h:UUID` search
+    /// is the FTS `community_id` predicate.
+    async fn create_channel(http_base: &str, keys: &Keys, channel_uuid: uuid::Uuid) -> String {
+        let client = reqwest::Client::new();
+        let pubkey_hex = keys.public_key().to_hex();
+        let event = EventBuilder::new(Kind::Custom(9007), "")
+            .tags(vec![
+                Tag::parse(["h", &channel_uuid.to_string()]).unwrap(),
+                Tag::parse(["name", &format!("conformance-fts-{channel_uuid}")]).unwrap(),
+                Tag::parse(["channel_type", "stream"]).unwrap(),
+                Tag::parse(["visibility", "open"]).unwrap(),
+            ])
+            .sign_with_keys(keys)
+            .unwrap();
+        let resp = client
+            .post(format!("{http_base}/events"))
+            .header("X-Pubkey", &pubkey_hex)
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_string(&event).unwrap())
+            .send()
+            .await
+            .expect("submit create-channel");
+        assert!(
+            resp.status().is_success(),
+            "create-channel HTTP failed against {http_base}: {}",
+            resp.status()
+        );
+        let body: serde_json::Value = resp.json().await.expect("parse create-channel response");
+        assert!(
+            body["accepted"].as_bool().unwrap_or(false),
+            "create-channel not accepted against {http_base}: {body}"
+        );
+        channel_uuid.to_string()
+    }
+
+    /// Post a kind:9 with `content` to `channel_id` over the WS connection
+    /// `client`. Returns the event id hex (so we can target it with NIP-09).
+    async fn post_kind9(
+        client: &mut BuzzTestClient,
+        keys: &Keys,
+        channel_id: &str,
+        content: &str,
+    ) -> String {
+        let h_tag = Tag::parse(["h", channel_id]).unwrap();
+        let event = EventBuilder::new(Kind::Custom(9), content)
+            .tags([h_tag])
+            .sign_with_keys(keys)
+            .unwrap();
+        let id_hex = event.id.to_hex();
+        let ok = client.send_event(event).await.expect("send kind:9");
+        assert!(ok.accepted, "kind:9 not accepted: {}", ok.message);
+        id_hex
+    }
+
+    /// Run a one-shot NIP-50 search for `token` scoped to `channel_id` and
+    /// return the events received before EOSE.
+    async fn search_for(
+        client: &mut BuzzTestClient,
+        channel_id: &str,
+        token: &str,
+    ) -> Vec<nostr::Event> {
+        let sub_id = format!("fts-{}", uuid::Uuid::new_v4());
+        let filter = Filter::new()
+            .kind(Kind::Custom(9))
+            .search(token)
+            .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel_id]);
+        client
+            .subscribe(&sub_id, vec![filter])
+            .await
+            .expect("subscribe");
+        client
+            .collect_until_eose(&sub_id, Duration::from_secs(10))
+            .await
+            .expect("collect until EOSE")
+    }
+
     /// Obligation: every search `filter` includes `community_id`; same
-    /// id/content in A and B return only same-community hits; deleting in A does
-    /// not delete the B document. Postgres FTS (search_tsv/GIN), not Typesense.
+    /// channel/token in A and B return only same-community hits; deleting in A
+    /// does not delete the B document. Postgres FTS (search_tsv/GIN), not
+    /// Typesense.
+    ///
+    /// Shape (designed so the wire-observable property is a *single*
+    /// per-community row whose content is the community's own):
+    ///   1. Pick one keypair (same author across both communities — proves the
+    ///      fence is `community_id`, not `pubkey`).
+    ///   2. Create the *same* channel UUID `U` in A and in B (PK is
+    ///      `(community_id, id)`, so this is legitimate). Each side's
+    ///      `accessible_channels` therefore contains `U`, so a search REQ with
+    ///      `#h: U` from either side passes the `accessible_channels`
+    ///      intersect.
+    ///   3. Post kind:9 with the shared FTS token but **community-distinct
+    ///      content** (`"A community probe {token}"` vs `"B community probe
+    ///      {token}"`) to `U` in A and to `U` in B. Distinct content → distinct
+    ///      Nostr event ids (id is a hash of (pubkey, created_at, kind, tags,
+    ///      content), so different content hashes to different ids); the
+    ///      shared token still makes both rows match the FTS predicate. A
+    ///      cross-community leak therefore shows up on the wire as either a
+    ///      second hit (count == 2) OR a hit whose content is the *other*
+    ///      community's — earlier iterations of this test used identical
+    ///      content and discovered the hard way that identical content
+    ///      collapses both leak modes into "indistinguishable on the wire"
+    ///      (defense-in-depth at the FTS + `get_events_by_ids` layers ate the
+    ///      mutation by returning the live row regardless of which community
+    ///      claimed it).
+    ///   4. NIP-50 search on A with `#h: U` for that token: returns exactly
+    ///      one hit whose content is `content_a`.
+    ///   5. Mirror: NIP-50 search on B with `#h: U` returns exactly one hit
+    ///      whose content is `content_b`.
+    ///   6. NIP-09 kind:5 deletion against A's event over the A connection
+    ///      (`#h: U`, `#e: id_a`).
+    ///   7. Re-search on A: zero hits (search excludes `deleted_at IS NOT
+    ///      NULL`).
+    ///   8. Re-search on B: B's hit unchanged (delete did not cross), content
+    ///      still equals `content_b`.
+    ///
+    /// Mutate-bite to confirm load-bearing: drop the community fences at
+    /// BOTH layers of the search read path simultaneously:
+    ///   - `crates/buzz-search/src/query.rs::search` lines 160-161 (the FTS
+    ///     `WHERE community_id = $ctx` predicate); and
+    ///   - `crates/buzz-db/src/event.rs::get_events_by_ids` lines 870-872
+    ///     (the read-side `WHERE community_id = $1` predicate).
+    /// Replace each with `WHERE TRUE` to keep SQL syntax valid; the second
+    /// fence is reached via `state.db.get_events_by_ids(tenant.community(),
+    /// ...)` from `handlers/req.rs::handle_search_req` at line ~590. With
+    /// distinct content per community (see step 3), A's search now returns
+    /// *both* communities' rows (different ids, both matching `#h: U` via the
+    /// shared channel UUID, both matching FTS via the shared token). Step 4's
+    /// `hits_a.len() == 1` assertion goes RED with the failure message
+    /// listing both contents — explicitly "B community probe …" surfacing
+    /// inside A's wire response. Restore both fences → GREEN.
+    ///
+    /// Defense-in-depth: each layer alone catches the leak. Mutating only the
+    /// FTS fence leaves the read fence to filter to A's community; mutating
+    /// only the read fence leaves FTS to never emit B's id in the first
+    /// place. Both must drop for the wire-observable property to fail. The
+    /// two non-negotiable predicates the obligation text names live at these
+    /// two layers; the test's red-with-both-down evidence is that the union
+    /// of those fences is what makes the property wire-observable, and each
+    /// fence individually is non-vacuous (single-fence mutation keeps the
+    /// test green because the other defends). This is the correct,
+    /// honest mutate-bite for an obligation defended by redundant layers.
     #[tokio::test]
     #[ignore]
     async fn search_results_and_deletes_are_community_scoped() {
-        pending_lane(
-            "buzz-search",
-            "FTS query scoped by community_id; delete in A leaves B hit intact",
+        let ws_a = to_ws(&url_a());
+        let ws_b = to_ws(&url_b());
+        let http_a = to_http(&url_a());
+        let http_b = to_http(&url_b());
+
+        // One keypair shared across both communities: every cross-community
+        // filter we apply must be community_id, never pubkey.
+        let keys = Keys::generate();
+
+        // Same channel UUID in both communities. The (community_id, id) PK
+        // permits this and the test depends on it: see module docstring above.
+        let shared_uuid = uuid::Uuid::new_v4();
+        let chan_a = create_channel(&http_a, &keys, shared_uuid).await;
+        let chan_b = create_channel(&http_b, &keys, shared_uuid).await;
+        assert_eq!(chan_a, chan_b, "channels must share UUID — test design");
+
+        // Unique token that cannot match anything else in the DB.
+        let token = format!("ftsconf_{}", uuid::Uuid::new_v4().simple());
+        // Distinct content per community. The shared token is what FTS
+        // matches; the per-community label makes each row uniquely
+        // identifiable on the wire AND produces distinct Nostr event ids
+        // (the id hash includes content, so different content → different
+        // id → no PK collision games). This is load-bearing for the
+        // mutate-bite: with identical content the two communities' rows
+        // would hash to the same Nostr id and a leak that returns "the
+        // other community's row" would be indistinguishable on the wire
+        // from "the right community's row." Distinct content makes the
+        // leak observable.
+        let content_a = format!("A community probe {token}");
+        let content_b = format!("B community probe {token}");
+
+        // Connect to A, post in A.
+        let mut client_a = BuzzTestClient::connect(&ws_a, &keys)
+            .await
+            .expect("connect A");
+        let id_a = post_kind9(&mut client_a, &keys, &chan_a, &content_a).await;
+
+        // Connect to B, post in B (same key, same channel UUID, same token —
+        // only the community label in the content + the community itself
+        // differ).
+        let mut client_b = BuzzTestClient::connect(&ws_b, &keys)
+            .await
+            .expect("connect B");
+        let _id_b = post_kind9(&mut client_b, &keys, &chan_b, &content_b).await;
+
+        // Let FTS write-path settle. `search_tsv` is a generated column, so it
+        // commits with the row; this matches the existing e2e search test's
+        // wait.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // (4) Search on A: must return exactly one hit, and that hit must be
+        // the row written via the A connection (the relay returns the event
+        // *body* with the canonical id, but the row provenance is community
+        // A). Crucially: count==1 — a missing community fence would surface 2
+        // (A's row + B's row through the shared #h:U filter).
+        let hits_a = search_for(&mut client_a, &chan_a, &token).await;
+        assert_eq!(
+            hits_a.len(),
+            1,
+            "A's search returned {} hits; expected exactly 1. cross-community leak suspected. \
+             hit contents: {:?}",
+            hits_a.len(),
+            hits_a.iter().map(|e| e.content.clone()).collect::<Vec<_>>()
         );
+        assert_eq!(
+            hits_a[0].content, content_a,
+            "A's hit content is not A's row — B's content leaked through the wire \
+             (id-equality is irrelevant; content distinguishes the communities). \
+             got: {:?}",
+            hits_a[0].content,
+        );
+
+        // (5) Mirror: search on B must also return exactly one hit, and that
+        // hit must carry B's content (not A's).
+        let hits_b = search_for(&mut client_b, &chan_b, &token).await;
+        assert_eq!(
+            hits_b.len(),
+            1,
+            "B's search returned {} hits; expected exactly 1. cross-community leak suspected. \
+             hit contents: {:?}",
+            hits_b.len(),
+            hits_b.iter().map(|e| e.content.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            hits_b[0].content, content_b,
+            "B's hit content is not B's row — A's content leaked through the wire. got: {:?}",
+            hits_b[0].content,
+        );
+
+        // (6) NIP-09 delete in A targeting A's event.
+        let delete_a = EventBuilder::new(Kind::Custom(5), "conformance delete")
+            .tags([
+                Tag::parse(["h", &chan_a]).unwrap(),
+                Tag::parse(["e", &id_a]).unwrap(),
+            ])
+            .sign_with_keys(&keys)
+            .unwrap();
+        let ok_del = client_a.send_event(delete_a).await.expect("send delete");
+        assert!(ok_del.accepted, "A delete rejected: {}", ok_del.message);
+
+        // Soft-delete may flow through indexing async. Same wait as above.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // (7) Re-search on A: A's hit gone. The search SQL has both
+        // `community_id = $ctx` AND `deleted_at IS NULL`; the latter excludes
+        // A's now-soft-deleted row. Count==0 in A's community.
+        let hits_a_post = search_for(&mut client_a, &chan_a, &token).await;
+        assert_eq!(
+            hits_a_post.len(),
+            0,
+            "A's deleted event still returned by search. hit ids={:?}",
+            hits_a_post
+                .iter()
+                .map(|e| e.id.to_hex())
+                .collect::<Vec<_>>()
+        );
+
+        // (8) Re-search on B: B's hit unchanged — delete in A did not cross
+        // into B (NIP-09 `soft_delete_event` is keyed on `(community_id,
+        // event_id)`).
+        let hits_b_post = search_for(&mut client_b, &chan_b, &token).await;
+        assert_eq!(
+            hits_b_post.len(),
+            1,
+            "B's hit count changed after A's delete; cross-community deletion suspected. \
+             hit ids={:?}",
+            hits_b_post
+                .iter()
+                .map(|e| e.id.to_hex())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            hits_b_post[0].content, content_b,
+            "B's hit content drifted after A's delete"
+        );
+
+        // Drain any trailing live events so disconnect is clean. NIP-50 is
+        // one-shot; we don't expect any.
+        let _ = client_a.recv_event(Duration::from_millis(50)).await;
+        let _ = client_b.recv_event(Duration::from_millis(50)).await;
+
+        client_a.disconnect().await.expect("disconnect A");
+        client_b.disconnect().await.expect("disconnect B");
+
+        // `RelayMessage` is imported for documentation of `search_for`'s
+        // return path; reference it so the unused-import lint doesn't fire.
+        let _ = std::any::type_name::<RelayMessage>();
     }
 }
 
