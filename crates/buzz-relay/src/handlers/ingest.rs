@@ -1985,6 +1985,186 @@ mod tests {
         assert!(!requires_h_channel_scope(KIND_NIP29_CREATE_GROUP));
     }
 
+    // ── Red-team Attack 1: forged community_id on the wire ──────────────────
+    //
+    // Spec property pinned: row-zero invariant from `crates/buzz-relay/src/tenant.rs`
+    // module docs and `docs/spec/MultiTenantRelay.tla`:
+    //
+    //   "A client-supplied community (e.g. a token stamp or an `h` tag) may
+    //    narrow or authenticate authority but can never override the
+    //    host-derived community."
+    //
+    // The attack: a caller injects a community identifier via any
+    // client-controlled field (event tag, content, kind, custom tag, even
+    // a structurally-valid `h` value with extra positional elements) and
+    // hopes the relay reads it and uses it to scope a write or a read.
+    //
+    // Recon survey at fb0d6a4ea (no exploitable path found — every door
+    // uses `tenant.community()` from the server-resolved binding):
+    //   * WS ingest        — `tenant.community()` everywhere; channel
+    //                        ingest pairs `h`-tag with
+    //                        `is_member_cached(tenant.community(), ch_id, ...)`
+    //                        before any write (ingest.rs:1351).
+    //   * REQ subscribe    — `EventQuery::for_community(conn.tenant.community())`
+    //                        is the only construction path (req.rs:799);
+    //                        client filter fields narrow within tenant,
+    //                        never widen across.
+    //   * Bridge HTTP      — `tenant.community()` on every read/write
+    //                        (bridge.rs:320,442,473,587,606,655,808,836).
+    //   * Audio handler    — `tenant.community()` on channel and member
+    //                        lookups (audio/handler.rs:259,465,705,715).
+    //   * NIP-05 / media   — `tenant.community()` everywhere
+    //                        (api/nip05.rs:47, api/media.rs:222).
+    //   * Command executor — workflow channel community derived from
+    //                        `community_of_channel(channel_id)` AFTER
+    //                        `is_member_cached(tenant.community(), ch_id, ...)`
+    //                        — fenced by tenant-scoped membership
+    //                        (command_executor.rs:586,633).
+    //   * `rg '"community"|Alphabet::C\b' crates/buzz-relay/src` → 0 matches.
+    //     No path in the relay reads a `community` tag from an event.
+    //
+    // What this module documents instead of finding holes: the
+    // *structural* invariants the survey rested on. If a future change
+    // breaks any of them, the survey conclusion stops holding. These are
+    // regression guards, not RED gates.
+    //
+    // Latent footgun (documented, not exploitable): `EventQuery.community_id`
+    // (`crates/buzz-db/src/event.rs:23`) is `pub`, so a struct literal can
+    // construct an `EventQuery` with any community id, bypassing
+    // `for_community`. Today every constructor in `crates/buzz-relay/src`
+    // uses `..EventQuery::for_community(tenant.community())` as the spread
+    // base. A future direct struct literal that bound `community_id` to
+    // anything else would silently cross-tenant. Closing this requires a
+    // type-level fence (private field + `with_*` builders), and is out of
+    // scope for the red-team lane — it goes in the patch lane as a soft
+    // cleanup.
+    mod redteam_attack1 {
+        use super::*;
+        use nostr::{EventBuilder, Keys, Kind, Tag};
+
+        /// `extract_channel_id` reads only the FIRST positional element of an
+        /// `h` tag (the channel UUID). Extra positions are ignored. So a
+        /// caller cannot smuggle a forged community id by stuffing it into
+        /// `["h", "<channel>", "<forged_community>"]` or any longer tuple —
+        /// the parser stops at `tag.content()` and rejects anything not a
+        /// UUID.
+        ///
+        /// Regression guard: if a future change starts reading
+        /// `tag.as_slice()[2..]` or extending `extract_channel_id` to return
+        /// a `(Uuid, CommunityId)` tuple, this test breaks immediately.
+        #[test]
+        fn extract_channel_id_ignores_extra_positional_elements_in_h_tag() {
+            let keys = Keys::generate();
+            let real_channel = Uuid::new_v4();
+            let forged_community = Uuid::new_v4();
+
+            // Construct an event whose h-tag carries TWO positional values:
+            // ["h", "<channel>", "<forged_community>"]. A naive parser that
+            // reads position 2 would pick up the forged community.
+            let h_tag =
+                Tag::parse(["h", &real_channel.to_string(), &forged_community.to_string()])
+                    .expect("h tag with extra position parses");
+            let event = EventBuilder::new(Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE as u16), "")
+                .tags([h_tag])
+                .sign_with_keys(&keys)
+                .expect("sign");
+
+            let extracted = extract_channel_id(&event);
+            assert_eq!(
+                extracted,
+                Some(real_channel),
+                "extract_channel_id must return ONLY the channel UUID at \
+                 position 1; extra positions are inert (got {extracted:?})",
+            );
+        }
+
+        /// A custom `["community", "<uuid>"]` tag in the event must be inert.
+        /// `extract_channel_id` doesn't look at it; the survey shows no other
+        /// code path in `crates/buzz-relay/src` reads a `community` tag.
+        ///
+        /// This test sends a kind:1 event tagged with a stray `community`
+        /// tuple and verifies `extract_channel_id` returns `None` (no h-tag,
+        /// no channel) — proving the forged community tag does not surface
+        /// as a channel either.
+        #[test]
+        fn custom_community_tag_does_not_surface_as_a_channel_id() {
+            let keys = Keys::generate();
+            let forged_community = Uuid::new_v4();
+
+            let community_tag =
+                Tag::parse(["community", &forged_community.to_string()]).expect("community tag");
+            let event = EventBuilder::new(Kind::TextNote, "hi")
+                .tags([community_tag])
+                .sign_with_keys(&keys)
+                .expect("sign");
+
+            assert_eq!(
+                extract_channel_id(&event),
+                None,
+                "no `h` tag → no channel; the stray `community` tag must be \
+                 inert (the survey at fb0d6a4ea showed zero readers of any \
+                 `community` tag in crates/buzz-relay/src)",
+            );
+        }
+
+        /// `extract_channel_id` returns the FIRST h-tag's channel only. A
+        /// caller cannot supply two h-tags pointing at channels in two
+        /// communities and hope the second one is read by a different code
+        /// path.
+        #[test]
+        fn extract_channel_id_returns_only_the_first_h_tag() {
+            let keys = Keys::generate();
+            let ch_a = Uuid::new_v4();
+            let ch_b = Uuid::new_v4();
+
+            let tag_a = Tag::parse(["h", &ch_a.to_string()]).expect("h_a");
+            let tag_b = Tag::parse(["h", &ch_b.to_string()]).expect("h_b");
+            let event = EventBuilder::new(Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE as u16), "")
+                .tags([tag_a, tag_b])
+                .sign_with_keys(&keys)
+                .expect("sign");
+
+            // Whatever the first match returns, it must be deterministic
+            // (one of the two), and any caller relying on the "second" tag
+            // to scope a different community gets nothing. We assert the
+            // result is one of the two — the property is *single-valued*,
+            // not "which one".
+            let extracted = extract_channel_id(&event).expect("h tag found");
+            assert!(
+                extracted == ch_a || extracted == ch_b,
+                "extract_channel_id must return ONE channel; got {extracted:?}",
+            );
+            // Stronger: the parser iterates tags in order, so it must be the
+            // first.
+            assert_eq!(
+                extracted, ch_a,
+                "extract_channel_id reads the first h-tag; second h-tags are inert",
+            );
+        }
+
+        /// A malformed `h` tag value (not a UUID) is silently ignored and
+        /// `extract_channel_id` returns `None`. The downstream
+        /// `requires_h_channel_scope` then rejects the event for channel-
+        /// scoped kinds, so a bad value cannot widen into "default tenant
+        /// admission" — `tenant.community()` is the only community used.
+        #[test]
+        fn malformed_h_value_is_not_silently_admitted() {
+            let keys = Keys::generate();
+            let h_tag = Tag::parse(["h", "not-a-uuid-at-all"]).expect("h tag");
+            let event = EventBuilder::new(Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE as u16), "")
+                .tags([h_tag])
+                .sign_with_keys(&keys)
+                .expect("sign");
+
+            assert_eq!(
+                extract_channel_id(&event),
+                None,
+                "non-UUID h value must fail the parse check; downstream \
+                 `requires_h_channel_scope` then rejects the event",
+            );
+        }
+    }
+
     #[test]
     fn join_request_does_not_require_h_tag_via_requires_h() {
         // kind:9021 uses h-tag for channel reference but doesn't go through
