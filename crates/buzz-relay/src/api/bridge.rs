@@ -1380,4 +1380,136 @@ mod tests {
             "owner must still receive their own snapshot"
         );
     }
+
+    // ── Red-team Attack 3: cross-pod NIP-98 replay ──────────────────────────
+    //
+    // Spec property pinned: §5 "shared NIP-98 Redis replay seen-set (mandatory:
+    // any-pod means mints land anywhere)" from the rewrite plan, and the
+    // explicit shape from `crates/buzz-auth/src/nip98_replay.rs:1-15`:
+    //
+    //   > With multiple relay pods ("any pod, any connection" per the rewrite
+    //   > §4 architecture), an in-process cache (moka, DashMap) does not carry
+    //   > the freshness proof across pods, so replay protection is a §5 hard
+    //   > gate.
+    //
+    // The required shape: shared state (Redis), atomic set-if-absent, TTL
+    // ≥ 120s, community-scoped key (`buzz:{community}:nip98:{event_id_hex}`).
+    //
+    // What we have today: `check_nip98_replay` (bridge.rs:74-93) consults
+    // `state.nip98_seen` — `moka::sync::Cache<[u8; 32], ()>` (state.rs:247),
+    // a per-process in-memory cache. The `RedisNip98ReplayGuard` is BUILT
+    // (`crates/buzz-pubsub/src/nip98_replay.rs:24-`) and tested, but
+    // NOTHING in `buzz-relay` consumes it — `rg "Nip98ReplayGuard|try_mark"
+    // crates/buzz-relay/src` returns zero matches.
+    //
+    // Consequences (the attack surface):
+    //   1. Cross-pod replay (the §5 gate violation): mint a NIP-98 token on
+    //      pod A — admitted, moka-cached on A. Replay the same token against
+    //      pod B (any pod, any connection) — pod B's moka is empty → admitted
+    //      again. The freshness proof is forfeit.
+    //   2. No community scoping in the cache key — the moka key is just
+    //      `[u8; 32]` event_id. A same-id event in two communities (the
+    //      `nip98_replay::tests::key_isolates_communities_for_same_event_id`
+    //      property) would collide here. Content-addressing makes natural
+    //      collision implausible, but the isolation gate must hold by
+    //      construction.
+    mod redteam_attack3 {
+        use moka::sync::Cache;
+        use std::sync::Arc;
+
+        /// Construct a moka cache with the same parameters as
+        /// `AppState::new` builds `nip98_seen` (state.rs:379-384). Used to
+        /// model "what one pod's process holds in isolation".
+        fn pod_local_seen_set() -> Arc<Cache<[u8; 32], ()>> {
+            Arc::new(
+                Cache::builder()
+                    .max_capacity(10_000)
+                    .time_to_live(std::time::Duration::from_secs(120))
+                    .build(),
+            )
+        }
+
+        /// The exact body of `check_nip98_replay`'s seen-set check
+        /// (bridge.rs:84-91), reproduced as a free function so the test
+        /// witnesses the production logic, not a paraphrase. If
+        /// `check_nip98_replay` ever stops consulting only `state.nip98_seen`,
+        /// the line-read in this comment is the next maintainer's signal to
+        /// update the witness.
+        fn check_against(cache: &Cache<[u8; 32], ()>, event_id_bytes: [u8; 32]) -> Result<(), ()> {
+            let entry = cache.entry(event_id_bytes);
+            let result = entry.or_insert(());
+            if !result.is_fresh() {
+                Err(())
+            } else {
+                Ok(())
+            }
+        }
+
+        /// **Current-behavior witness — passes today, must be deleted in the
+        /// same diff as the fix.** Documents the cross-pod admission shape:
+        /// two pods each hold their own moka cache, a NIP-98 event id minted
+        /// against pod A is admitted *again* against pod B. The freshness
+        /// proof a single shared seen-set provides does not exist today.
+        #[test]
+        fn current_behavior_cross_pod_replay_admitted_by_per_pod_moka() {
+            let pod_a = pod_local_seen_set();
+            let pod_b = pod_local_seen_set();
+            // A signed NIP-98 token's event id is content-addressed; we use a
+            // deterministic byte array to stand in for the verified id.
+            let event_id_bytes = [0x42u8; 32];
+
+            // Pod A admits and marks (the first use is fresh).
+            check_against(&pod_a, event_id_bytes).expect("pod A: first use admitted");
+
+            // Pod A correctly rejects the second use against itself.
+            check_against(&pod_a, event_id_bytes)
+                .expect_err("pod A: same-process replay must be rejected");
+
+            // Pod B has its own in-process cache — the freshness proof from
+            // pod A's mark does not reach it. The same token is admitted
+            // *again*. This is the §5 gate violation.
+            check_against(&pod_b, event_id_bytes).expect(
+                "current behavior: pod B's per-process moka admits the replay; \
+                 must be DELETED with the fix once a shared guard is wired",
+            );
+        }
+
+        /// **Current-behavior witness — passes today, must be deleted with
+        /// the fix.** Documents the missing community-scoping in the cache
+        /// key: the moka key is `[u8; 32]` event_id with no community
+        /// prefix, so a same-id event in two communities (the
+        /// `key_isolates_communities_for_same_event_id` property in
+        /// `buzz-auth::nip98_replay::tests`) would falsely collide on this
+        /// cache. Content-addressing makes natural cross-community
+        /// collision implausible, but the isolation gate must hold by
+        /// construction — not by the absence of input.
+        ///
+        /// This isn't a *safety* leak (the false-positive direction
+        /// over-rejects, not under-rejects), but it is a liveness fence
+        /// failure: a malicious request in community A could burn a slot
+        /// for an event id that a legitimate request in community B will
+        /// later try to use, denying it. The fix (community-scoped Redis
+        /// key from `nip98_replay_key`) closes both directions.
+        #[test]
+        fn current_behavior_cache_key_lacks_community_scope() {
+            let pod = pod_local_seen_set();
+            let event_id_bytes = [0x99u8; 32];
+
+            // Community A mints first.
+            check_against(&pod, event_id_bytes).expect("community A: admitted");
+
+            // Community B presents the same event id (in a real attack via
+            // a separate signed NIP-98 token whose id happens to collide;
+            // here we simulate with the same byte array). The cache has no
+            // way to distinguish — it sees only the event_id. So community
+            // B is rejected *as if it had replayed*, even though the
+            // freshness proof per `nip98_replay_key` would have admitted
+            // it under a community-scoped key.
+            check_against(&pod, event_id_bytes).expect_err(
+                "current behavior: cache rejects community B's same-id event \
+                 because the key carries no community prefix; must be DELETED \
+                 with the fix once the seen-set keys on (community, event_id)",
+            );
+        }
+    }
 }
