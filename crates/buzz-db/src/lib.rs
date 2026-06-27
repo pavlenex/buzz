@@ -345,52 +345,65 @@ impl Db {
     /// historical duplicate survivors correctly.
     pub async fn get_latest_global_replaceable(
         &self,
+        community_id: CommunityId,
         kind: i32,
         pubkey_bytes: &[u8],
     ) -> Result<Option<StoredEvent>> {
-        event::get_latest_global_replaceable(&self.pool, kind, pubkey_bytes).await
+        event::get_latest_global_replaceable(&self.pool, community_id, kind, pubkey_bytes).await
     }
 
     /// Fetches a single non-deleted event by its raw ID bytes.
     ///
     /// Returns `None` if the event does not exist or has been soft-deleted.
-    pub async fn get_event_by_id(&self, id_bytes: &[u8]) -> Result<Option<StoredEvent>> {
-        event::get_event_by_id(&self.pool, id_bytes).await
+    pub async fn get_event_by_id(
+        &self,
+        community_id: CommunityId,
+        id_bytes: &[u8],
+    ) -> Result<Option<StoredEvent>> {
+        event::get_event_by_id(&self.pool, community_id, id_bytes).await
     }
 
     /// Fetches a single event by its raw ID bytes, **including soft-deleted rows**.
     pub async fn get_event_by_id_including_deleted(
         &self,
+        community_id: CommunityId,
         id_bytes: &[u8],
     ) -> Result<Option<StoredEvent>> {
-        event::get_event_by_id_including_deleted(&self.pool, id_bytes).await
+        event::get_event_by_id_including_deleted(&self.pool, community_id, id_bytes).await
     }
 
     /// Soft-deletes an event. Returns `Ok(true)` if deleted, `Ok(false)` if already deleted.
-    pub async fn soft_delete_event(&self, event_id: &[u8]) -> Result<bool> {
-        event::soft_delete_event(&self.pool, event_id).await
+    pub async fn soft_delete_event(
+        &self,
+        community_id: CommunityId,
+        event_id: &[u8],
+    ) -> Result<bool> {
+        event::soft_delete_event(&self.pool, community_id, event_id).await
     }
 
     /// Soft-delete the live row for an addressable coordinate `(kind, pubkey, d_tag)`.
     /// Used by NIP-09 a-tag deletion for parameterized-replaceable kinds.
     pub async fn soft_delete_by_coordinate(
         &self,
+        community_id: CommunityId,
         kind: i32,
         pubkey: &[u8],
         d_tag: &str,
     ) -> Result<bool> {
-        event::soft_delete_by_coordinate(&self.pool, kind, pubkey, d_tag).await
+        event::soft_delete_by_coordinate(&self.pool, community_id, kind, pubkey, d_tag).await
     }
 
     /// Atomically soft-delete an event and decrement thread reply counters.
     pub async fn soft_delete_event_and_update_thread(
         &self,
+        community_id: CommunityId,
         event_id: &[u8],
         parent_event_id: Option<&[u8]>,
         root_event_id: Option<&[u8]>,
     ) -> Result<bool> {
         event::soft_delete_event_and_update_thread(
             &self.pool,
+            community_id,
             event_id,
             parent_event_id,
             root_event_id,
@@ -399,21 +412,30 @@ impl Db {
     }
 
     /// Returns the most recent `created_at` for a channel.
-    pub async fn get_last_message_at(&self, channel_id: Uuid) -> Result<Option<DateTime<Utc>>> {
-        event::get_last_message_at(&self.pool, channel_id).await
+    pub async fn get_last_message_at(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<Option<DateTime<Utc>>> {
+        event::get_last_message_at(&self.pool, community_id, channel_id).await
     }
 
     /// Bulk-fetch the most recent `created_at` for a set of channel IDs.
     pub async fn get_last_message_at_bulk(
         &self,
+        community_id: CommunityId,
         channel_ids: &[Uuid],
     ) -> Result<std::collections::HashMap<Uuid, DateTime<Utc>>> {
-        event::get_last_message_at_bulk(&self.pool, channel_ids).await
+        event::get_last_message_at_bulk(&self.pool, community_id, channel_ids).await
     }
 
     /// Batch-fetch non-deleted events by their raw IDs.
-    pub async fn get_events_by_ids(&self, ids: &[&[u8]]) -> Result<Vec<StoredEvent>> {
-        event::get_events_by_ids(&self.pool, ids).await
+    pub async fn get_events_by_ids(
+        &self,
+        community_id: CommunityId,
+        ids: &[&[u8]],
+    ) -> Result<Vec<StoredEvent>> {
+        event::get_events_by_ids(&self.pool, community_id, ids).await
     }
 
     /// Atomically insert an event AND its thread metadata in a single transaction.
@@ -494,18 +516,31 @@ impl Db {
     }
 
     /// Fetches a channel record by ID.
-    pub async fn get_channel(&self, channel_id: Uuid) -> Result<channel::ChannelRecord> {
-        channel::get_channel(&self.pool, channel_id).await
+    pub async fn get_channel(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<channel::ChannelRecord> {
+        channel::get_channel(&self.pool, community_id, channel_id).await
     }
 
     /// Returns the canvas content for a channel, if any.
-    pub async fn get_canvas(&self, channel_id: Uuid) -> Result<Option<String>> {
-        channel::get_canvas(&self.pool, channel_id).await
+    pub async fn get_canvas(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<Option<String>> {
+        channel::get_canvas(&self.pool, community_id, channel_id).await
     }
 
     /// Sets or clears the canvas content for a channel.
-    pub async fn set_canvas(&self, channel_id: Uuid, canvas: Option<&str>) -> Result<()> {
-        channel::set_canvas(&self.pool, channel_id, canvas).await
+    pub async fn set_canvas(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        canvas: Option<&str>,
+    ) -> Result<()> {
+        channel::set_canvas(&self.pool, community_id, channel_id, canvas).await
     }
 
     /// Adds a member to a channel.
@@ -540,49 +575,75 @@ impl Db {
     }
 
     /// Returns `true` if the pubkey is an active member.
-    pub async fn is_member(&self, channel_id: Uuid, pubkey: &[u8]) -> Result<bool> {
-        channel::is_member(&self.pool, channel_id, pubkey).await
+    pub async fn is_member(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        pubkey: &[u8],
+    ) -> Result<bool> {
+        channel::is_member(&self.pool, community_id, channel_id, pubkey).await
     }
 
     /// Returns all active members of a channel.
-    pub async fn get_members(&self, channel_id: Uuid) -> Result<Vec<channel::MemberRecord>> {
-        channel::get_members(&self.pool, channel_id).await
+    pub async fn get_members(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<Vec<channel::MemberRecord>> {
+        channel::get_members(&self.pool, community_id, channel_id).await
     }
 
     /// Returns active members for multiple channels in a single query.
     pub async fn get_members_bulk(
         &self,
+        community_id: CommunityId,
         channel_ids: &[Uuid],
     ) -> Result<Vec<channel::MemberRecord>> {
-        channel::get_members_bulk(&self.pool, channel_ids).await
+        channel::get_members_bulk(&self.pool, community_id, channel_ids).await
     }
 
     /// Get all channel IDs accessible to a pubkey.
-    pub async fn get_accessible_channel_ids(&self, pubkey: &[u8]) -> Result<Vec<Uuid>> {
-        channel::get_accessible_channel_ids(&self.pool, pubkey).await
+    pub async fn get_accessible_channel_ids(
+        &self,
+        community_id: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Vec<Uuid>> {
+        channel::get_accessible_channel_ids(&self.pool, community_id, pubkey).await
     }
 
     /// Lists channels, optionally filtered by visibility.
     pub async fn list_channels(
         &self,
+        community_id: CommunityId,
         visibility: Option<&str>,
     ) -> Result<Vec<channel::ChannelRecord>> {
-        channel::list_channels(&self.pool, visibility).await
+        channel::list_channels(&self.pool, community_id, visibility).await
     }
 
     /// Returns full channel records for all channels a user can access.
     pub async fn get_accessible_channels(
         &self,
+        community_id: CommunityId,
         pubkey: &[u8],
         visibility_filter: Option<&str>,
         member_only: Option<bool>,
     ) -> Result<Vec<channel::AccessibleChannel>> {
-        channel::get_accessible_channels(&self.pool, pubkey, visibility_filter, member_only).await
+        channel::get_accessible_channels(
+            &self.pool,
+            community_id,
+            pubkey,
+            visibility_filter,
+            member_only,
+        )
+        .await
     }
 
-    /// Returns all bot-role members with their aggregated channel names.
-    pub async fn get_bot_members(&self) -> Result<Vec<channel::BotMemberRecord>> {
-        channel::get_bot_members(&self.pool).await
+    /// Returns all bot-role members with their aggregated channel names in one community.
+    pub async fn get_bot_members(
+        &self,
+        community_id: CommunityId,
+    ) -> Result<Vec<channel::BotMemberRecord>> {
+        channel::get_bot_members(&self.pool, community_id).await
     }
 
     /// Bulk-fetch user records by pubkey.
@@ -593,62 +654,99 @@ impl Db {
     /// Updates a channel's name and/or description.
     pub async fn update_channel(
         &self,
+        community_id: CommunityId,
         channel_id: Uuid,
         updates: channel::ChannelUpdate,
     ) -> Result<channel::ChannelRecord> {
-        channel::update_channel(&self.pool, channel_id, updates).await
+        channel::update_channel(&self.pool, community_id, channel_id, updates).await
     }
 
     /// Sets the topic for a channel.
-    pub async fn set_topic(&self, channel_id: Uuid, topic: &str, set_by: &[u8]) -> Result<()> {
-        channel::set_topic(&self.pool, channel_id, topic, set_by).await
+    pub async fn set_topic(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        topic: &str,
+        set_by: &[u8],
+    ) -> Result<()> {
+        channel::set_topic(&self.pool, community_id, channel_id, topic, set_by).await
     }
 
     /// Sets the purpose for a channel.
-    pub async fn set_purpose(&self, channel_id: Uuid, purpose: &str, set_by: &[u8]) -> Result<()> {
-        channel::set_purpose(&self.pool, channel_id, purpose, set_by).await
+    pub async fn set_purpose(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        purpose: &str,
+        set_by: &[u8],
+    ) -> Result<()> {
+        channel::set_purpose(&self.pool, community_id, channel_id, purpose, set_by).await
     }
 
     /// Archives a channel.
-    pub async fn archive_channel(&self, channel_id: Uuid) -> Result<()> {
-        channel::archive_channel(&self.pool, channel_id).await
+    pub async fn archive_channel(&self, community_id: CommunityId, channel_id: Uuid) -> Result<()> {
+        channel::archive_channel(&self.pool, community_id, channel_id).await
     }
 
     /// Unarchives a channel.
-    pub async fn unarchive_channel(&self, channel_id: Uuid) -> Result<()> {
-        channel::unarchive_channel(&self.pool, channel_id).await
+    pub async fn unarchive_channel(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<()> {
+        channel::unarchive_channel(&self.pool, community_id, channel_id).await
     }
 
     /// Soft-delete a channel.
-    pub async fn soft_delete_channel(&self, channel_id: Uuid) -> Result<bool> {
-        channel::soft_delete_channel(&self.pool, channel_id).await
+    pub async fn soft_delete_channel(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<bool> {
+        channel::soft_delete_channel(&self.pool, community_id, channel_id).await
     }
 
     /// Returns the count of active members in a channel.
-    pub async fn get_member_count(&self, channel_id: Uuid) -> Result<i64> {
-        channel::get_member_count(&self.pool, channel_id).await
+    pub async fn get_member_count(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<i64> {
+        channel::get_member_count(&self.pool, community_id, channel_id).await
     }
 
     /// Bulk-fetch member counts for a set of channel IDs.
     pub async fn get_member_counts_bulk(
         &self,
+        community_id: CommunityId,
         channel_ids: &[Uuid],
     ) -> Result<std::collections::HashMap<Uuid, i64>> {
-        channel::get_member_counts_bulk(&self.pool, channel_ids).await
+        channel::get_member_counts_bulk(&self.pool, community_id, channel_ids).await
     }
 
     /// Get the active role of a pubkey in a channel.
-    pub async fn get_member_role(&self, channel_id: Uuid, pubkey: &[u8]) -> Result<Option<String>> {
-        channel::get_member_role(&self.pool, channel_id, pubkey).await
+    pub async fn get_member_role(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        pubkey: &[u8],
+    ) -> Result<Option<String>> {
+        channel::get_member_role(&self.pool, community_id, channel_id, pubkey).await
     }
 
     /// Bump the TTL deadline for an ephemeral channel after a new message.
-    pub async fn bump_ttl_deadline(&self, channel_id: Uuid) -> Result<()> {
-        channel::bump_ttl_deadline(&self.pool, channel_id).await
+    pub async fn bump_ttl_deadline(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<()> {
+        channel::bump_ttl_deadline(&self.pool, community_id, channel_id).await
     }
 
     /// Archive ephemeral channels whose TTL deadline has passed.
-    pub async fn reap_expired_ephemeral_channels(&self) -> Result<Vec<Uuid>> {
+    pub async fn reap_expired_ephemeral_channels(
+        &self,
+    ) -> Result<Vec<channel::ReapedEphemeralChannel>> {
         channel::reap_expired_ephemeral_channels(&self.pool).await
     }
 
@@ -845,6 +943,7 @@ impl Db {
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_thread_metadata(
         &self,
+        community_id: CommunityId,
         event_id: &[u8],
         event_created_at: DateTime<Utc>,
         channel_id: Uuid,
@@ -857,6 +956,7 @@ impl Db {
     ) -> Result<()> {
         thread::insert_thread_metadata(
             &self.pool,
+            community_id,
             event_id,
             event_created_at,
             channel_id,
@@ -873,25 +973,36 @@ impl Db {
     /// Fetch replies under a root event.
     pub async fn get_thread_replies(
         &self,
+        community_id: CommunityId,
         root_event_id: &[u8],
         depth_limit: Option<u32>,
         limit: u32,
         cursor: Option<&[u8]>,
     ) -> Result<Vec<thread::ThreadReply>> {
-        thread::get_thread_replies(&self.pool, root_event_id, depth_limit, limit, cursor).await
+        thread::get_thread_replies(
+            &self.pool,
+            community_id,
+            root_event_id,
+            depth_limit,
+            limit,
+            cursor,
+        )
+        .await
     }
 
     /// Fetch aggregated thread stats.
     pub async fn get_thread_summary(
         &self,
+        community_id: CommunityId,
         event_id: &[u8],
     ) -> Result<Option<thread::ThreadSummary>> {
-        thread::get_thread_summary(&self.pool, event_id).await
+        thread::get_thread_summary(&self.pool, community_id, event_id).await
     }
 
     /// Top-level messages for a channel.
     pub async fn get_channel_messages_top_level(
         &self,
+        community_id: CommunityId,
         channel_id: Uuid,
         limit: u32,
         before_cursor: Option<DateTime<Utc>>,
@@ -900,6 +1011,7 @@ impl Db {
     ) -> Result<Vec<thread::TopLevelMessage>> {
         thread::get_channel_messages_top_level(
             &self.pool,
+            community_id,
             channel_id,
             limit,
             before_cursor,
@@ -912,18 +1024,21 @@ impl Db {
     /// Look up a single thread_metadata row by event_id.
     pub async fn get_thread_metadata_by_event(
         &self,
+        community_id: CommunityId,
         event_id: &[u8],
     ) -> Result<Option<thread::ThreadMetadataRecord>> {
-        thread::get_thread_metadata_by_event(&self.pool, event_id).await
+        thread::get_thread_metadata_by_event(&self.pool, community_id, event_id).await
     }
 
     /// Decrement reply counts.
     pub async fn decrement_reply_count(
         &self,
+        community_id: CommunityId,
         parent_event_id: &[u8],
         root_event_id: Option<&[u8]>,
     ) -> Result<()> {
-        thread::decrement_reply_count(&self.pool, parent_event_id, root_event_id).await
+        thread::decrement_reply_count(&self.pool, community_id, parent_event_id, root_event_id)
+            .await
     }
 
     /// Add (or re-activate) a reaction.
@@ -1673,13 +1788,15 @@ impl Db {
     /// Soft-delete NIP-29 discovery events for a channel created by a specific relay pubkey.
     pub async fn soft_delete_discovery_events(
         &self,
+        community_id: CommunityId,
         channel_id: Uuid,
         relay_pubkey: &[u8],
     ) -> Result<u64> {
         let result = sqlx::query(
             "UPDATE events SET deleted_at = NOW() \
-             WHERE channel_id = $1 AND pubkey = $2 AND deleted_at IS NULL AND kind IN (39000, 39001, 39002)",
+             WHERE community_id = $1 AND channel_id = $2 AND pubkey = $3 AND deleted_at IS NULL AND kind IN (39000, 39001, 39002)",
         )
+        .bind(community_id.as_uuid())
         .bind(channel_id)
         .bind(relay_pubkey)
         .execute(&self.pool)
