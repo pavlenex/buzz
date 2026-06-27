@@ -351,11 +351,13 @@ CREATE INDEX IF NOT EXISTS idx_relay_members_role ON relay_members(role);
 -- ── Archived identities (NIP-IA) ──────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS archived_identities (
-    pubkey            TEXT PRIMARY KEY,
+    community_id      UUID NOT NULL REFERENCES communities(id),
+    pubkey            TEXT NOT NULL,
     consent_path      TEXT NOT NULL CHECK (consent_path IN ('self', 'owner', 'admin')),
     actor             TEXT NOT NULL,
     reason            TEXT,
     replaced_by       TEXT,
     request_event_id  TEXT NOT NULL,
-    archived_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    archived_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, pubkey)
 );
