@@ -6,7 +6,7 @@
 //! migration into it, exercises a scenario, and drops it. Tests are
 //! parallel-safe.
 
-use buzz_core::CommunityId;
+use buzz_core::{kind::AUTHOR_ONLY_KINDS, CommunityId};
 use buzz_search::{ChannelScope, SearchQuery, SearchService};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
 use uuid::Uuid;
@@ -901,6 +901,90 @@ async fn excluded_kinds_are_storage_level_unsearchable() {
 
     // Tight bound: exactly one hit (the control). Catches any future
     // weakening where some-but-not-all excluded kinds surface.
+    assert_eq!(
+        result.hits.len(),
+        1,
+        "expected exactly 1 hit (the kind:9 control), got {} (kinds={kinds:?})",
+        result.hits.len(),
+    );
+
+    teardown(pool, &schema).await;
+}
+
+/// Tripwire: every Rust-side author-only kind MUST be excluded from
+/// `search_tsv` at the storage layer.
+///
+/// The schema generated column hard-codes the privacy skip-set, while
+/// `AUTHOR_ONLY_KINDS` is a Rust const. If a future author-only kind is added
+/// without the matching schema migration, search would still spend FTS budget on
+/// those private hits before the relay post-filter rejects them. Catch that
+/// drift here by inserting one row per author-only kind and proving only the
+/// public kind:9 control is searchable.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn author_only_kinds_are_storage_level_unsearchable() {
+    let (pool, schema) = setup().await;
+
+    let c = mk_community(&pool, "author-only-tripwire.example").await;
+    let token = "authoronly_tripwire_marker_qwerty";
+
+    insert_event(
+        &pool,
+        c,
+        rand_bytes32(),
+        rand_bytes32(),
+        9,
+        &format!("public control — {token}"),
+        None,
+        1_700_000_000,
+    )
+    .await;
+
+    for (i, &kind) in AUTHOR_ONLY_KINDS.iter().enumerate() {
+        insert_event(
+            &pool,
+            c,
+            rand_bytes32(),
+            rand_bytes32(),
+            kind as i32,
+            &format!("author-only kind:{kind} — {token}"),
+            None,
+            1_700_000_100 + i as i64,
+        )
+        .await;
+    }
+
+    let svc = SearchService::new(pool.clone());
+    let result = svc
+        .search(&SearchQuery {
+            community: c,
+            q: token.into(),
+            channel_scope: ChannelScope::Any,
+            kinds: None,
+            authors: None,
+            since: None,
+            until: None,
+            page: 1,
+            per_page: 100,
+        })
+        .await
+        .expect("search ok");
+
+    let kinds: Vec<i32> = result.hits.iter().map(|h| h.kind).collect();
+    assert!(
+        kinds.contains(&9),
+        "kind:9 control row MUST be searchable, got kinds={kinds:?}",
+    );
+
+    for &kind in AUTHOR_ONLY_KINDS {
+        assert!(
+            !kinds.contains(&(kind as i32)),
+            "AUTHOR_ONLY kind:{kind} MUST NOT be searchable — \
+             schema skip-set is missing this kind. AUTHOR_ONLY_KINDS={AUTHOR_ONLY_KINDS:?}, \
+             hits={kinds:?}",
+        );
+    }
+
     assert_eq!(
         result.hits.len(),
         1,
