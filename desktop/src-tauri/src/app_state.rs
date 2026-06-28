@@ -11,7 +11,6 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::huddle::HuddleState;
 use crate::managed_agents::ManagedAgentProcess;
-
 pub struct AppState {
     pub keys: Mutex<Keys>,
     pub http_client: reqwest::Client,
@@ -84,11 +83,6 @@ pub fn build_app_state() -> AppState {
     AppState {
         keys: Mutex::new(keys),
         http_client: reqwest::Client::builder()
-            // Keep URL authority/Host headers intact for relay tenant binding,
-            // but avoid macOS/IPv6 localhost flakiness for local dev services.
-            // reqwest uses the URL port over this port-0 DNS override, so
-            // http://localhost:3000 still sends Host: localhost:3000 while
-            // connecting to 127.0.0.1:3000 instead of ::1.
             .resolve("localhost", std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
             .pool_idle_timeout(std::time::Duration::from_secs(10))
             .pool_max_idle_per_host(1)
