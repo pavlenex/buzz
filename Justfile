@@ -297,9 +297,30 @@ dev *ARGS: bootstrap _ensure-sidecar-stubs _ensure-migrations
     #!/usr/bin/env bash
     set -euo pipefail
     export PATH="{{justfile_directory()}}/bin:$PATH"
+    bind_addr="${BUZZ_BIND_ADDR:-0.0.0.0:3000}"
+    relay_port="${bind_addr##*:}"; [[ -n "$relay_port" ]] || relay_port=3000
+    health_port="${BUZZ_HEALTH_PORT:-8080}"
+    metrics_port="${BUZZ_METRICS_PORT:-9102}"
+    if command -v lsof >/dev/null 2>&1; then
+        for spec in "relay:$relay_port" "health:$health_port" "metrics:$metrics_port"; do
+            name="${spec%%:*}"; port="${spec##*:}"
+            if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+                echo "Error: $name port $port is already in use; refusing to launch desktop against a stale relay." >&2
+                lsof -nP -iTCP:"$port" -sTCP:LISTEN >&2 || true
+                echo "Stop the process above (often a stale buzz-relay) and rerun: just dev" >&2
+                exit 1
+            fi
+        done
+    fi
     cargo build -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p buzz-cli -p git-credential-nostr -p buzz-relay
     ./target/debug/buzz-relay &
     RELAY_PID=$!
+    sleep 1
+    if ! kill -0 "$RELAY_PID" 2>/dev/null; then
+        echo "Error: buzz-relay exited during startup; refusing to launch desktop against a stale relay." >&2
+        wait "$RELAY_PID" || true
+        exit 1
+    fi
     cleanup() {
         [[ -n "${INSTANCE_ID:-}" ]] && ../scripts/cleanup-instance-agents.sh "$INSTANCE_ID" || true
         kill "$RELAY_PID" 2>/dev/null || true
