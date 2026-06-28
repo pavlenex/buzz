@@ -794,7 +794,6 @@ export const ChannelPane = React.memo(function ChannelPane({
                 hasComposerOverlay={hasMainComposerOverlay}
                 hasOlderMessages={hasOlderMessages}
                 isFetchingOlder={isFetchingOlder}
-                layoutShiftKey={useSplitAuxiliaryPane ? "split" : "overlay"}
                 isFollowingThreadById={isFollowingThreadById}
                 isMessageUnreadById={isMessageUnreadById}
                 personaLookup={personaLookup}

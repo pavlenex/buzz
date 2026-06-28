@@ -38,10 +38,10 @@ type UseAnchoredScrollOptions = {
   /** Inner content element — must wrap every renderable row, including the
    *  sentinel and bottom anchor. Used to schedule layout work on resize. */
   contentRef: React.RefObject<HTMLDivElement | null>;
-  /** Resets when changed; lets us drop anchor + scroll state across channels. */
+  /** Scopes channel-level side effects and observer subscriptions. */
   channelId?: string | null;
   /** Resets when changed; includes channel plus route-specific layout state. */
-  resetKey?: string | null;
+  resetKey?: string | number | null;
   /** Suppresses initial scroll-to-bottom while a skeleton is showing. */
   isLoading: boolean;
   /** Source of truth for the rendered list. Used to detect new-at-bottom
