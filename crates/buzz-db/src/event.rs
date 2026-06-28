@@ -259,6 +259,8 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
              WHERE e.community_id = ",
         );
         b.push_bind(q.community_id.as_uuid());
+        b.push(" AND m.community_id = ");
+        b.push_bind(q.community_id.as_uuid());
         b.push(" AND e.deleted_at IS NULL AND m.pubkey_hex = ");
         b.push_bind(p_hex.to_ascii_lowercase());
         b
@@ -488,6 +490,8 @@ pub async fn count_events(pool: &PgPool, q: &EventQuery) -> Result<i64> {
                 ON e.community_id = m.community_id AND e.id = m.event_id \
              WHERE e.community_id = ",
         );
+        b.push_bind(q.community_id.as_uuid());
+        b.push(" AND m.community_id = ");
         b.push_bind(q.community_id.as_uuid());
         b.push(" AND e.deleted_at IS NULL AND m.pubkey_hex = ");
         b.push_bind(p_hex.to_ascii_lowercase());

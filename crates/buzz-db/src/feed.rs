@@ -117,7 +117,8 @@ fn build_mentions_query(
 /// Find events that @mention the given pubkey (have `["p", pubkey_hex]` in tags).
 ///
 /// Joins against the `event_mentions` table -- Phase 2 implementation.
-/// **Performance**: indexed lookup on `(pubkey_hex, event_created_at DESC)`.
+/// **Performance**: community-leading indexed lookup on
+/// `(community_id, pubkey_hex, event_created_at DESC)`.
 ///
 /// Only returns community-global events and events from `accessible_channel_ids`.
 /// `limit` is capped at [`FEED_MAX_LIMIT`] regardless of the value passed by the caller.
@@ -179,8 +180,8 @@ fn build_needs_action_query(
 /// Only returns community-global events and events from channels the user has access to
 /// (`accessible_channel_ids`). This prevents surfacing approval requests from channels
 /// the user was removed from.
-/// **Performance**: indexed lookup via `event_mentions` join on
-/// `(pubkey_hex, event_kind, event_created_at DESC)`.
+/// **Performance**: community-leading indexed lookup via `event_mentions` join on
+/// `(community_id, pubkey_hex, event_kind, event_created_at DESC)`.
 /// `limit` is capped at [`FEED_MAX_LIMIT`] regardless of the value passed by the caller.
 pub async fn query_needs_action(
     pool: &PgPool,

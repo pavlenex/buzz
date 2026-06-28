@@ -1255,6 +1255,35 @@ mod channelless_global_events_dms {
 }
 
 // ---------------------------------------------------------------------------
+// Feed read-side isolation (Perci — buzz-db/relay bridge)
+// ---------------------------------------------------------------------------
+mod feed_read_side_isolation {
+    use super::*;
+
+    /// Obligation: two-host feed reads are scoped by the request host's
+    /// community. A mention/feed item for the same pubkey in A must never be
+    /// returned by B's feed endpoint, including the empty-accessible-channel
+    /// case where SQL must mean "community-global only" rather than "all
+    /// channels".
+    ///
+    /// DB-level adversarial regressions for this exact leak shape landed in
+    /// `crates/buzz-db/src/feed.rs`; this row is the wire-level conformance
+    /// lane left pending until the two-host feed client harness is wired.
+    #[tokio::test]
+    #[ignore]
+    async fn feed_mentions_do_not_cross_communities_over_the_wire() {
+        pending_lane(
+            "feed read-side conformance",
+            concat!(
+                "two-host feed mentions query for the same pubkey returns only the ",
+                "host-derived community's events; empty accessible-channel lists ",
+                "remain community-global only",
+            ),
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Channels and channel membership (Mari — buzz-db)
 // ---------------------------------------------------------------------------
 mod channels_membership {
