@@ -65,6 +65,7 @@ import type { Channel } from "@/shared/api/types";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { channelChrome } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 type ChannelPaneProps = {
   activeChannel: Channel | null;
   activityAgents?: BotActivityAgent[];
@@ -274,6 +275,33 @@ export const ChannelPane = React.memo(function ChannelPane({
     !activeChannel.archivedAt;
   const hasMainComposerOverlay = !isNonMemberView;
   const activeChannelId = activeChannel?.id ?? null;
+  const huddleMemberPubkeys = React.useMemo(() => {
+    if (activeChannel?.channelType !== "dm" || !agentPubkeys) {
+      return [];
+    }
+
+    const normalizedCurrentPubkey = currentPubkey
+      ? normalizePubkey(currentPubkey)
+      : null;
+    const seen = new Set<string>();
+
+    return activeChannel.participantPubkeys.filter((pubkey) => {
+      const normalizedPubkey = normalizePubkey(pubkey);
+      if (
+        normalizedCurrentPubkey &&
+        normalizedPubkey === normalizedCurrentPubkey
+      ) {
+        return false;
+      }
+
+      if (!agentPubkeys.has(normalizedPubkey) || seen.has(normalizedPubkey)) {
+        return false;
+      }
+
+      seen.add(normalizedPubkey);
+      return true;
+    });
+  }, [activeChannel, agentPubkeys, currentPubkey]);
   const isActiveWelcomeChannel =
     activeChannel !== null && isWelcomeChannel(activeChannel);
   useComposerHeightPadding(
@@ -677,6 +705,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             followThreadById={followThreadById}
             hasComposerOverlay={hasMainComposerOverlay}
             hasOlderMessages={hasOlderMessages}
+            huddleMemberPubkeys={huddleMemberPubkeys}
             isFetchingOlder={isFetchingOlder}
             isFollowingThreadById={isFollowingThreadById}
             isMessageUnreadById={isMessageUnreadById}
@@ -842,6 +871,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               disabled={isComposerDisabled}
               editTarget={threadEditTarget}
               firstUnreadReplyId={threadFirstUnreadReplyId}
+              huddleMemberPubkeys={huddleMemberPubkeys}
               isFollowingThread={isFollowingThread}
               isMessageUnreadById={isMessageUnreadById}
               isSending={isSending}

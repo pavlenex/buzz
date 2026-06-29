@@ -61,6 +61,7 @@ export function ProfileAvatarWithStatus({
   statusTestId,
   testId,
 }: ProfileAvatarWithStatusProps) {
+  const statusLabel = status ? getPresenceLabel(status) : null;
   const cutout = status
     ? {
         cx: geometry.centerX,
@@ -82,12 +83,15 @@ export function ProfileAvatarWithStatus({
       badge={
         status ? (
           <span
-            aria-label={getPresenceLabel(status)}
+            aria-label={statusLabel ?? undefined}
             className="flex h-full w-full items-center justify-center rounded-full"
             data-testid={statusTestId}
             role="img"
           >
             <PresenceDot className="h-full w-full" status={status} />
+            {statusLabel ? (
+              <span className="sr-only">{statusLabel}</span>
+            ) : null}
           </span>
         ) : undefined
       }

@@ -179,10 +179,10 @@ export function UserProfilePopover({
   const { isStarting: isStartingHuddle, startHuddle } = useHuddle();
   const profileQuery = useUserProfileQuery(open ? pubkey : undefined);
   const relayAgentsQuery = useRelayAgentsQuery({
-    enabled: open && role === "bot",
+    enabled: open,
   });
   const managedAgentsQuery = useManagedAgentsQuery({
-    enabled: open && role === "bot",
+    enabled: open,
   });
   const presenceQuery = usePresenceQuery(open ? [pubkey] : [], {
     enabled: open,
@@ -196,6 +196,7 @@ export function UserProfilePopover({
   const managedAgent = managedAgentsQuery.data?.find(
     (a) => a.pubkey === pubkey,
   );
+  const isBotProfile = role === "bot" || Boolean(relayAgent || managedAgent);
   const profile = profileQuery.data;
   const displayName = profile?.displayName ?? truncatePubkey(pubkey);
   // Owner signal mirrors UserProfilePanel: a declared NIP-OA owner whose agent
@@ -204,7 +205,7 @@ export function UserProfilePopover({
   // it to every viewer. Combine declared ownership with local management, same
   // shape as the pane/sidebar/memory fixes. Every real boundary is server-side;
   // this only decides whether to paint the "View activity log" button.
-  const isOwner = useIsManagedAgent(role === "bot" ? pubkey : null);
+  const isOwner = useIsManagedAgent(isBotProfile ? pubkey : null);
   const ownerPubkey = profile?.ownerPubkey ?? null;
   const identityQuery = useIdentityQuery();
   const currentPubkey = identityQuery.data?.pubkey;
@@ -219,14 +220,14 @@ export function UserProfilePopover({
     ownerPubkey.toLowerCase() === currentPubkey.toLowerCase();
   const viewerIsOwner = isCurrentUserOwner || isOwner === true;
   const canViewActivity =
-    role === "bot" && viewerIsOwner && Boolean(onOpenAgentSession);
+    isBotProfile && viewerIsOwner && Boolean(onOpenAgentSession);
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
   const userStatus = userStatusQuery.data?.[pubkey.toLowerCase()];
   const userStatusText = userStatus?.text.trim() ?? "";
   const hasUserStatus = Boolean(userStatusText || userStatus?.emoji);
   const profileDescription = profile?.about?.trim() ?? "";
   const profileSubheader = profileDescription || profile?.nip05Handle?.trim();
-  const activeTurns = useActiveAgentTurns(role === "bot" ? pubkey : null);
+  const activeTurns = useActiveAgentTurns(isBotProfile ? pubkey : null);
   const channelsQuery = useChannelsQuery();
   const channelIdToName = React.useMemo(() => {
     const map: Record<string, string> = {};
@@ -317,7 +318,7 @@ export function UserProfilePopover({
     try {
       const dm = await openDmMutation.mutateAsync({ pubkeys: [pubkey] });
       await goChannel(dm.id);
-      await startHuddle(dm.id, []);
+      await startHuddle(dm.id, isBotProfile ? [pubkey] : []);
       await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
       if (isMountedRef.current) {
         setOpen(false);
@@ -334,6 +335,7 @@ export function UserProfilePopover({
   }, [
     clearHoverTimer,
     goChannel,
+    isBotProfile,
     isStartingHuddle,
     openDmMutation,
     pendingAction,
@@ -499,7 +501,7 @@ export function UserProfilePopover({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <HoverPubkeyName displayName={displayName} pubkey={pubkey} />
-                {role === "bot" && botIdenticonValue ? (
+                {isBotProfile && botIdenticonValue ? (
                   <BotIdenticon
                     value={botIdenticonValue}
                     size={20}
@@ -518,7 +520,7 @@ export function UserProfilePopover({
             </div>
           </div>
 
-          {role === "bot" && (managedAgent || relayAgent) ? (
+          {isBotProfile && (managedAgent || relayAgent) ? (
             <div className="flex flex-wrap gap-1.5">
               {managedAgent?.agentCommand ? (
                 <InfoBadge>{runtimeLabel(managedAgent.agentCommand)}</InfoBadge>

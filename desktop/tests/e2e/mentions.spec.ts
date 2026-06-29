@@ -61,6 +61,27 @@ function commandCount(commands: string[], command: string) {
   return commands.filter((entry) => entry === command).length;
 }
 
+async function readStartHuddleMemberPubkeys(
+  page: import("@playwright/test").Page,
+) {
+  const commandLog = await readCommandPayloadLog(page);
+  return commandLog.flatMap((entry) => {
+    if (entry.command !== "start_huddle") {
+      return [];
+    }
+
+    const payload =
+      entry.payload && typeof entry.payload === "object"
+        ? (entry.payload as {
+            memberPubkeys?: unknown;
+            member_pubkeys?: unknown;
+          })
+        : null;
+    const memberPubkeys = payload?.memberPubkeys ?? payload?.member_pubkeys;
+    return Array.isArray(memberPubkeys) ? memberPubkeys.map(String) : [];
+  });
+}
+
 async function emitMockMessage(
   page: import("@playwright/test").Page,
   channelName: string,
@@ -1187,6 +1208,33 @@ test("hovering avatar opens popover, clicking opens profile panel", async ({
   await expect(page.getByTestId("user-profile-panel")).toBeVisible();
 });
 
+test("bot profile huddle passes the bot pubkey", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("channel-agents").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("agents");
+
+  const charlieMessage = page
+    .getByTestId("message-row")
+    .filter({ hasText: "Indexing the channel catalog now." })
+    .first();
+  await charlieMessage.locator("button").first().hover();
+
+  const profilePopover = page.locator(
+    '[data-testid="user-profile-popover"][data-state="open"]',
+  );
+  await expect(profilePopover).toBeVisible();
+  await expect(profilePopover.getByText("Codex")).toBeVisible();
+  await profilePopover
+    .getByTestId(
+      `user-profile-popover-huddle-${TEST_IDENTITIES.charlie.pubkey}`,
+    )
+    .click();
+
+  await expect
+    .poll(() => readStartHuddleMemberPubkeys(page))
+    .toEqual(expect.arrayContaining([TEST_IDENTITIES.charlie.pubkey]));
+});
+
 test("profile popover wave sends a direct message", async ({ page }) => {
   await installMockBridge(page, { sendMessageDelayMs: 2_500 });
 
@@ -1241,4 +1289,35 @@ test("profile popover wave sends a direct message", async ({ page }) => {
       }),
     ]),
   );
+});
+
+test("wave attachment huddle passes the bot DM pubkey", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("channel-agents").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("agents");
+
+  const charlieMessage = page
+    .getByTestId("message-row")
+    .filter({ hasText: "Indexing the channel catalog now." })
+    .first();
+  await charlieMessage.locator("button").first().hover();
+
+  const profilePopover = page.locator(
+    '[data-testid="user-profile-popover"][data-state="open"]',
+  );
+  await expect(profilePopover).toBeVisible();
+  await expect(profilePopover.getByText("Codex")).toBeVisible();
+  await profilePopover
+    .getByTestId(`user-profile-popover-wave-${TEST_IDENTITIES.charlie.pubkey}`)
+    .click();
+
+  await expect(page.getByTestId("message-wave-attachment")).toBeVisible();
+  await page
+    .getByTestId("message-wave-attachment")
+    .getByRole("button", { name: "Start huddle" })
+    .click();
+
+  await expect
+    .poll(() => readStartHuddleMemberPubkeys(page))
+    .toEqual(expect.arrayContaining([TEST_IDENTITIES.charlie.pubkey]));
 });

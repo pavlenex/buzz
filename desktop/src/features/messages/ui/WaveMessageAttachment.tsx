@@ -17,11 +17,13 @@ import {
 type WaveMessageAttachmentProps = {
   channelId?: string | null;
   fallbackText: string;
+  huddleMemberPubkeys?: readonly string[];
 };
 
 export function WaveMessageAttachment({
   channelId,
   fallbackText,
+  huddleMemberPubkeys = [],
 }: WaveMessageAttachmentProps) {
   const queryClient = useQueryClient();
   const { isStarting, startHuddle } = useHuddle();
@@ -36,7 +38,7 @@ export function WaveMessageAttachment({
       }
 
       try {
-        await startHuddle(channelId, []);
+        await startHuddle(channelId, [...huddleMemberPubkeys]);
         await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
       } catch (error) {
         toast.error(
@@ -44,7 +46,7 @@ export function WaveMessageAttachment({
         );
       }
     },
-    [channelId, isStarting, queryClient, startHuddle],
+    [channelId, huddleMemberPubkeys, isStarting, queryClient, startHuddle],
   );
 
   return (

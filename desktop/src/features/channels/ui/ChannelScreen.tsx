@@ -311,8 +311,15 @@ export function ChannelScreen({
     for (const agent of relayAgents) {
       pubkeys.add(normalizePubkey(agent.pubkey));
     }
+    for (const [pubkey, profile] of Object.entries(
+      messageProfilesQuery.data?.profiles ?? {},
+    )) {
+      if (profile.isAgent) {
+        pubkeys.add(normalizePubkey(pubkey));
+      }
+    }
     return pubkeys;
-  }, [channelMembers, managedAgents, relayAgents]);
+  }, [channelMembers, managedAgents, messageProfilesQuery.data, relayAgents]);
   const {
     agentSessionCandidates,
     botTypingEntries,
