@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   canOpenAgentConversationInChannel,
   getDmTaskAgentPubkeys,
+  getThreadTaskAgentPubkeys,
   mergeAutoRouteMentionPubkeys,
 } from "./ChannelPane.helpers.ts";
 
@@ -110,6 +111,64 @@ test("DM task agent inference requires exactly one other known agent", () => {
       }),
       currentPubkey: "human",
       knownAgentPubkeys,
+    }),
+    [],
+  );
+});
+
+test("thread task agent inference requires exactly one known agent and one human", () => {
+  const knownAgentPubkeys = new Set(["agent-one", "agent-two"]);
+
+  assert.deepEqual(
+    getThreadTaskAgentPubkeys({
+      currentPubkey: "human",
+      knownAgentPubkeys,
+      messages: [
+        {
+          pubkey: "human",
+          tags: [["p", "agent-one"]],
+        },
+        {
+          pubkey: "agent-one",
+          tags: [["p", "human"]],
+        },
+      ],
+    }),
+    ["agent-one"],
+  );
+
+  assert.deepEqual(
+    getThreadTaskAgentPubkeys({
+      currentPubkey: "human",
+      knownAgentPubkeys,
+      messages: [
+        {
+          pubkey: "human",
+          tags: [["p", "agent-one"]],
+        },
+        {
+          pubkey: "other-human",
+          tags: [["p", "human"]],
+        },
+      ],
+    }),
+    [],
+  );
+
+  assert.deepEqual(
+    getThreadTaskAgentPubkeys({
+      currentPubkey: "human",
+      knownAgentPubkeys,
+      messages: [
+        {
+          pubkey: "human",
+          tags: [["p", "agent-one"]],
+        },
+        {
+          pubkey: "agent-two",
+          tags: [["p", "human"]],
+        },
+      ],
     }),
     [],
   );

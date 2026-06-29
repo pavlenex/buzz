@@ -44,7 +44,9 @@ import {
   getChannelIntroDescription,
   getChannelIntroKind,
   getDmTaskAgentPubkeys,
+  getThreadTaskAgentPubkeys,
   isWelcomeSetupSystemMessage,
+  mergeTaskAgentMentionPubkeys,
   mentionsKnownAgent,
 } from "@/features/channels/ui/ChannelPane.helpers";
 import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types";
@@ -421,13 +423,17 @@ export const ChannelPane = React.memo(function ChannelPane({
       mentionPubkeys: string[],
       mediaTags?: string[][],
     ) => {
+      const sendMentionPubkeys = mergeTaskAgentMentionPubkeys({
+        agentPubkeys: dmTaskAgentPubkeys,
+        mentionPubkeys,
+      });
       const shouldCompleteWelcomeBanner =
         isActiveWelcomeChannel &&
         (containsWelcomePersonaMention(content) ||
-          mentionsKnownAgent(mentionPubkeys, knownAgentPubkeys));
+          mentionsKnownAgent(sendMentionPubkeys, knownAgentPubkeys));
 
       messageTimelineRef.current?.scrollToBottomOnNextUpdate();
-      await onSendMessage(content, mentionPubkeys, mediaTags);
+      await onSendMessage(content, sendMentionPubkeys, mediaTags);
 
       if (shouldCompleteWelcomeBanner) {
         completeWelcomeComposerBanner();
@@ -435,6 +441,7 @@ export const ChannelPane = React.memo(function ChannelPane({
     },
     [
       completeWelcomeComposerBanner,
+      dmTaskAgentPubkeys,
       isActiveWelcomeChannel,
       knownAgentPubkeys,
       onSendMessage,
@@ -764,6 +771,22 @@ export const ChannelPane = React.memo(function ChannelPane({
       ...threadMessages.map((entry) => entry.message),
     ];
   }, [threadHeadMessage, threadMessages]);
+  const threadTaskAgentPubkeys = getThreadTaskAgentPubkeys({
+    currentPubkey,
+    knownAgentPubkeys,
+    messages: threadSourceMessages,
+  });
+  const handleSendThreadReply = React.useCallback(
+    (content: string, mentionPubkeys: string[], mediaTags?: string[][]) => {
+      const sendMentionPubkeys = mergeTaskAgentMentionPubkeys({
+        agentPubkeys: threadTaskAgentPubkeys,
+        mentionPubkeys,
+      });
+
+      return onSendThreadReply(content, sendMentionPubkeys, mediaTags);
+    },
+    [onSendThreadReply, threadTaskAgentPubkeys],
+  );
   const hiddenAgentConversationMessageIds = React.useMemo(() => {
     if (!enableAgentConversations) {
       return new Set<string>();
@@ -1194,7 +1217,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                   : undefined
               }
               onSelectReplyTarget={onSelectThreadReplyTarget}
-              onSend={onSendThreadReply}
+              onSend={handleSendThreadReply}
               onScrollTargetResolved={onThreadScrollTargetResolved}
               onToggleReaction={onToggleReaction}
               onUnfollowThread={onUnfollowThread}
