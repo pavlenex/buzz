@@ -87,17 +87,19 @@ async function emitMockMessage(
   channelName: string,
   content: string,
   options?: {
+    mentionPubkeys?: string[];
     parentEventId?: string;
     pubkey?: string;
   },
 ) {
   const event = await page.evaluate(
-    ({ ch, msg, parentEventId, pubkey }) => {
+    ({ ch, mentionPubkeys, msg, parentEventId, pubkey }) => {
       return (
         window as Window & {
           __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
+            mentionPubkeys?: string[];
             parentEventId?: string | null;
             pubkey?: string;
           }) => { id: string; created_at: number; pubkey: string };
@@ -105,12 +107,14 @@ async function emitMockMessage(
       ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: ch,
         content: msg,
+        mentionPubkeys,
         parentEventId: parentEventId ?? undefined,
         pubkey: pubkey ?? undefined,
       });
     },
     {
       ch: channelName,
+      mentionPubkeys: options?.mentionPubkeys,
       msg: content,
       parentEventId: options?.parentEventId ?? null,
       pubkey: options?.pubkey ?? TEST_IDENTITIES.alice.pubkey,
@@ -1224,6 +1228,39 @@ test("bot profile huddle passes the bot pubkey", async ({ page }) => {
   );
   await expect(profilePopover).toBeVisible();
   await expect(profilePopover.getByText("Codex")).toBeVisible();
+  await profilePopover
+    .getByTestId(
+      `user-profile-popover-huddle-${TEST_IDENTITIES.charlie.pubkey}`,
+    )
+    .click();
+
+  await expect
+    .poll(() => readStartHuddleMemberPubkeys(page))
+    .toEqual(expect.arrayContaining([TEST_IDENTITIES.charlie.pubkey]));
+});
+
+test("agent mention profile huddle passes the bot pubkey", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await waitForMockLiveSubscription(page, "general");
+
+  await emitMockMessage(page, "general", "Can @charlie take this?", {
+    mentionPubkeys: [TEST_IDENTITIES.charlie.pubkey],
+  });
+  await waitForTimelineSettled(page);
+
+  const mentionChip = page
+    .getByTestId("message-row")
+    .filter({ hasText: "Can charlie take this?" })
+    .locator("[data-mention].agent-mention-highlight", { hasText: "charlie" });
+  await expect(mentionChip).toBeVisible();
+  await mentionChip.hover();
+
+  const profilePopover = page.locator(
+    '[data-testid="user-profile-popover"][data-state="open"]',
+  );
+  await expect(profilePopover).toBeVisible();
   await profilePopover
     .getByTestId(
       `user-profile-popover-huddle-${TEST_IDENTITIES.charlie.pubkey}`,

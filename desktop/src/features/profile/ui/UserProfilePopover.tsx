@@ -197,6 +197,10 @@ export function UserProfilePopover({
     (a) => a.pubkey === pubkey,
   );
   const isBotProfile = role === "bot" || Boolean(relayAgent || managedAgent);
+  const isAgentClassificationPending =
+    open &&
+    role !== "bot" &&
+    (relayAgentsQuery.isPending || managedAgentsQuery.isPending);
   const profile = profileQuery.data;
   const displayName = profile?.displayName ?? truncatePubkey(pubkey);
   // Owner signal mirrors UserProfilePanel: a declared NIP-OA owner whose agent
@@ -308,7 +312,12 @@ export function UserProfilePopover({
   ]);
 
   const handleHuddle = React.useCallback(async () => {
-    if (!showProfileActions || pendingAction !== null || isStartingHuddle) {
+    if (
+      !showProfileActions ||
+      pendingAction !== null ||
+      isStartingHuddle ||
+      isAgentClassificationPending
+    ) {
       return;
     }
 
@@ -335,6 +344,7 @@ export function UserProfilePopover({
   }, [
     clearHoverTimer,
     goChannel,
+    isAgentClassificationPending,
     isBotProfile,
     isStartingHuddle,
     openDmMutation,
@@ -641,7 +651,8 @@ export function UserProfilePopover({
                     disabled={
                       pendingAction !== null ||
                       openDmMutation.isPending ||
-                      isStartingHuddle
+                      isStartingHuddle ||
+                      isAgentClassificationPending
                     }
                     onClick={() => {
                       void handleHuddle();

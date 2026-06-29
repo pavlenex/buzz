@@ -239,7 +239,7 @@ test("inbox agent hover huddle passes the agent pubkey", async ({ page }) => {
     "Agent progress: channel index complete.",
   );
 
-  await agentRow.getByTestId("home-inbox-item-avatar-mock-feed-agent").hover();
+  await agentRow.getByTestId("home-inbox-avatar-mock-feed-agent").hover();
   const profilePopover = page.locator(
     '[data-testid="user-profile-popover"][data-state="open"]',
   );

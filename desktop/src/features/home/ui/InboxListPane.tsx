@@ -202,7 +202,7 @@ export function InboxListPane({
               >
                 <span
                   className="inline-flex shrink-0 rounded-full focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-                  data-testid={`home-inbox-item-avatar-${item.id}`}
+                  data-testid={`home-inbox-avatar-${item.id}`}
                 >
                   <UserAvatar
                     avatarUrl={item.avatarUrl}

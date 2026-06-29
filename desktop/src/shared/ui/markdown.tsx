@@ -2096,7 +2096,12 @@ function createMarkdownComponents(
       }
 
       return pubkey ? (
-        <UserProfilePopover pubkey={pubkey} triggerElement="span">
+        <UserProfilePopover
+          botIdenticonValue={mentionLabel}
+          pubkey={pubkey}
+          role={isAgentMention ? "bot" : undefined}
+          triggerElement="span"
+        >
           {mentionNode}
         </UserProfilePopover>
       ) : (
