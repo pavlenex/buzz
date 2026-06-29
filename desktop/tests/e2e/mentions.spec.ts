@@ -42,6 +42,21 @@ async function readCommandLog(page: import("@playwright/test").Page) {
   });
 }
 
+async function readCommandPayloadLog(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    return (
+      (
+        window as Window & {
+          __BUZZ_E2E_COMMAND_LOG__?: Array<{
+            command: string;
+            payload: unknown;
+          }>;
+        }
+      ).__BUZZ_E2E_COMMAND_LOG__ ?? []
+    );
+  });
+}
+
 function commandCount(commands: string[], command: string) {
   return commands.filter((entry) => entry === command).length;
 }
@@ -1170,4 +1185,42 @@ test("hovering avatar opens popover, clicking opens profile panel", async ({
   await avatarButton.click();
   await expect(profilePopover).toHaveCount(0);
   await expect(page.getByTestId("user-profile-panel")).toBeVisible();
+});
+
+test("profile popover wave sends a direct message", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const aliceMessage = page
+    .getByTestId("message-row")
+    .filter({ hasText: "Hey team — checking in." })
+    .first();
+  await aliceMessage.locator("button").first().hover();
+
+  const profilePopover = page.locator(
+    '[data-testid="user-profile-popover"][data-state="open"]',
+  );
+  await expect(profilePopover).toBeVisible();
+  await profilePopover
+    .getByTestId(`user-profile-popover-wave-${TEST_IDENTITIES.alice.pubkey}`)
+    .click();
+
+  await expect(page.getByTestId("chat-title")).toHaveText("alice-tyler");
+  await waitForTimelineSettled(page);
+  await expect(page.getByTestId("message-row").last()).toContainText(
+    "npub1mock... waved at you.",
+  );
+
+  const commandLog = await readCommandPayloadLog(page);
+  expect(commandLog).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        command: "send_channel_message",
+        payload: expect.objectContaining({
+          content: "npub1mock... waved at you.",
+        }),
+      }),
+    ]),
+  );
 });

@@ -10,7 +10,8 @@ import {
   useChannelsQuery,
   useOpenDmMutation,
 } from "@/features/channels/hooks";
-import { useUserProfileQuery } from "@/features/profile/hooks";
+import { useProfileQuery, useUserProfileQuery } from "@/features/profile/hooks";
+import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
 import {
   useRelayAgentsQuery,
   useManagedAgentsQuery,
@@ -26,6 +27,7 @@ import { StatusEmoji } from "@/features/user-status/ui/StatusEmoji";
 import { ProfileAvatarWithStatus } from "@/features/profile/ui/ProfileAvatarWithStatus";
 import { useAgentSession } from "@/shared/context/AgentSessionContext";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
+import { sendChannelMessage } from "@/shared/api/tauri";
 
 import { Popover, PopoverAnchor, PopoverContent } from "@/shared/ui/popover";
 import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
@@ -120,7 +122,7 @@ export function UserProfilePopover({
 }: UserProfilePopoverProps) {
   const [open, setOpen] = React.useState(false);
   const [pendingAction, setPendingAction] = React.useState<
-    "message" | "huddle" | null
+    "message" | "huddle" | "wave" | null
   >(null);
   const isMountedRef = React.useRef(false);
   const hoverTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
@@ -159,11 +161,13 @@ export function UserProfilePopover({
   // this only decides whether to paint the "View activity log" button.
   const isOwner = useIsManagedAgent(role === "bot" ? pubkey : null);
   const ownerPubkey = profile?.ownerPubkey ?? null;
-  const currentPubkey = useIdentityQuery().data?.pubkey;
+  const identityQuery = useIdentityQuery();
+  const currentPubkey = identityQuery.data?.pubkey;
   const isSelf =
     currentPubkey !== undefined &&
     currentPubkey.toLowerCase() === pubkey.toLowerCase();
   const showProfileActions = currentPubkey !== undefined && !isSelf;
+  const selfProfileQuery = useProfileQuery(open && showProfileActions);
   const isCurrentUserOwner =
     currentPubkey !== undefined &&
     ownerPubkey !== null &&
@@ -292,6 +296,46 @@ export function UserProfilePopover({
     queryClient,
     showProfileActions,
     startHuddle,
+  ]);
+
+  const handleWave = React.useCallback(async () => {
+    if (!showProfileActions || pendingAction !== null) return;
+
+    clearHoverTimer();
+    setPendingAction("wave");
+
+    try {
+      const dm = await openDmMutation.mutateAsync({ pubkeys: [pubkey] });
+      const senderName =
+        selfProfileQuery.data?.displayName?.trim() ||
+        (currentPubkey ? truncatePubkey(currentPubkey) : "Someone");
+      await sendChannelMessage(dm.id, `${senderName} waved at you.`);
+      await queryClient.invalidateQueries({
+        queryKey: channelMessagesKey(dm.id),
+      });
+      await goChannel(dm.id);
+      if (isMountedRef.current) {
+        setOpen(false);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to send wave.",
+      );
+    } finally {
+      if (isMountedRef.current) {
+        setPendingAction(null);
+      }
+    }
+  }, [
+    clearHoverTimer,
+    currentPubkey,
+    goChannel,
+    openDmMutation,
+    pendingAction,
+    pubkey,
+    queryClient,
+    selfProfileQuery.data?.displayName,
+    showProfileActions,
   ]);
 
   React.useEffect(() => {
@@ -440,9 +484,9 @@ export function UserProfilePopover({
                 </StatusLine>
               ) : null}
               {showProfileActions ? (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="flex gap-2">
                   <Button
-                    className="w-full"
+                    className="min-w-0 flex-1"
                     data-testid={`user-profile-popover-message-${pubkey}`}
                     disabled={
                       pendingAction !== null || openDmMutation.isPending
@@ -465,7 +509,7 @@ export function UserProfilePopover({
                     Message
                   </Button>
                   <Button
-                    className="w-full"
+                    className="min-w-0 flex-1"
                     data-testid={`user-profile-popover-huddle-${pubkey}`}
                     disabled={
                       pendingAction !== null ||
@@ -488,6 +532,31 @@ export function UserProfilePopover({
                       <Headphones />
                     )}
                     Huddle
+                  </Button>
+                  <Button
+                    className="shrink-0 px-3"
+                    data-testid={`user-profile-popover-wave-${pubkey}`}
+                    disabled={
+                      pendingAction !== null || openDmMutation.isPending
+                    }
+                    onClick={() => {
+                      void handleWave();
+                    }}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    {pendingAction === "wave" ? (
+                      <Spinner
+                        aria-hidden="true"
+                        className="h-3.5 w-3.5 border-2"
+                      />
+                    ) : (
+                      <span aria-hidden="true" className="text-sm leading-none">
+                        👋
+                      </span>
+                    )}
+                    Wave
                   </Button>
                 </div>
               ) : null}
