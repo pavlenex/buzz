@@ -131,8 +131,8 @@ function ChannelWorkingAgents({
       pubkey,
     };
   });
-  const visibleAgents = agents.slice(0, 3);
-  const overflowCount = Math.max(0, agents.length - visibleAgents.length);
+  const visibleAgents = agents.slice(0, agents.length > 3 ? 2 : 3);
+  const overflowCount = agents.length > 3 ? agents.length - 2 : 0;
   const label =
     agents.length > 1
       ? `${agents.length} agents working · ${elapsed}`
@@ -158,10 +158,10 @@ function ChannelWorkingAgents({
               <ProfileAvatar
                 avatarUrl={agent.avatarUrl}
                 className={cn(
-                  "h-[18px] w-[18px] border text-3xs shadow-xs ring-1",
+                  "h-[18px] w-[18px] text-3xs shadow-xs",
                   isActive
-                    ? "border-sidebar-active bg-sidebar-active-foreground/15 text-sidebar-active-foreground ring-sidebar-active-foreground/25"
-                    : "border-sidebar bg-sidebar text-sidebar-foreground ring-primary/25",
+                    ? "bg-sidebar-active-foreground/15 text-sidebar-active-foreground"
+                    : "bg-sidebar text-sidebar-foreground",
                 )}
                 iconClassName="h-3 w-3"
                 key={agent.pubkey}
@@ -172,10 +172,10 @@ function ChannelWorkingAgents({
             {overflowCount > 0 ? (
               <span
                 className={cn(
-                  "flex h-[18px] min-w-[18px] items-center justify-center rounded-full border px-1 text-3xs font-semibold leading-none shadow-xs ring-1",
+                  "flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-3xs font-semibold leading-none shadow-xs",
                   isActive
-                    ? "border-sidebar-active bg-sidebar-active-foreground/15 text-sidebar-active-foreground ring-sidebar-active-foreground/25"
-                    : "border-sidebar bg-sidebar text-sidebar-foreground ring-primary/25",
+                    ? "bg-sidebar-active-foreground/15 text-sidebar-active-foreground"
+                    : "bg-sidebar text-sidebar-foreground",
                 )}
               >
                 +{overflowCount}
