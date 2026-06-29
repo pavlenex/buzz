@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { getCachedSearchHitEvent } from "@/app/navigation/searchHitEventCache";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
@@ -8,6 +9,8 @@ import {
   getThreadReference,
   isBroadcastReply,
 } from "@/features/messages/lib/threading";
+import { mergeTimelineCacheMessages } from "@/features/messages/hooks";
+import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
 import { useProfileQuery } from "@/features/profile/hooks";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -128,6 +131,16 @@ async function fetchRouteTargetEvents(
   return [...eventsById.values()];
 }
 
+function mergeRouteEvents(
+  currentEvents: RelayEvent[] | undefined,
+  routeEvents: RelayEvent[],
+): RelayEvent[] {
+  return routeEvents.reduce(
+    (messages, event) => mergeTimelineCacheMessages(messages, event),
+    currentEvents ?? [],
+  );
+}
+
 export function ChannelRouteScreen({
   channelId,
   selectedPostId,
@@ -136,6 +149,7 @@ export function ChannelRouteScreen({
   targetReplyId,
   targetThreadRootId,
 }: ChannelRouteScreenProps) {
+  const queryClient = useQueryClient();
   const { closeForumPost, goForumPost } = useAppNavigation();
   const channelsQuery = useChannelsQuery();
   const identityQuery = useIdentityQuery();
@@ -189,6 +203,10 @@ export function ChannelRouteScreen({
 
     const cachedTarget = getCachedSearchHitEvent(targetMessageId);
     if (cachedTarget) {
+      queryClient.setQueryData<RelayEvent[]>(
+        channelMessagesKey(channelId),
+        (currentEvents) => mergeRouteEvents(currentEvents, [cachedTarget]),
+      );
       setTargetMessageEvents((currentEvents) =>
         currentEvents.some((event) => event.id === cachedTarget.id)
           ? currentEvents
@@ -212,6 +230,10 @@ export function ChannelRouteScreen({
       targetThreadRootId,
     ).then((events) => {
       if (!isCancelled) {
+        queryClient.setQueryData<RelayEvent[]>(
+          channelMessagesKey(channelId),
+          (currentEvents) => mergeRouteEvents(currentEvents, events),
+        );
         setTargetMessageEvents((currentEvents) => {
           const eventsById = new Map<string, RelayEvent>();
           for (const event of [...currentEvents, ...events]) {
@@ -228,6 +250,7 @@ export function ChannelRouteScreen({
   }, [
     selectedPostId,
     channelId,
+    queryClient,
     targetAgentConversationReplyId,
     targetMessageId,
     targetThreadRootId,
