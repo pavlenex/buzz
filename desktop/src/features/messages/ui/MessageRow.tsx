@@ -57,6 +57,7 @@ export const MessageRow = React.memo(
     highlightThreadLineDepths,
     hoverBackground = true,
     huddleMemberPubkeys,
+    huddleMemberPubkeysPending = false,
     actionBarPlacement = "floating",
     collapseDescendantsLabel,
     isFollowingThread,
@@ -92,6 +93,7 @@ export const MessageRow = React.memo(
     highlightThreadLineDepths?: ReadonlyArray<number>;
     hoverBackground?: boolean;
     huddleMemberPubkeys?: readonly string[];
+    huddleMemberPubkeysPending?: boolean;
     actionBarPlacement?: "floating" | "inside";
     collapseDescendantsLabel?: string;
     isFollowingThread?: boolean;
@@ -293,6 +295,7 @@ export const MessageRow = React.memo(
                   channelId={channelId}
                   fallbackText={waveMessage.fallbackText}
                   huddleMemberPubkeys={huddleMemberPubkeys}
+                  huddleMemberPubkeysPending={huddleMemberPubkeysPending}
                 />
               );
             }
@@ -779,6 +782,7 @@ export const MessageRow = React.memo(
     prev.highlightThreadLineDepths === next.highlightThreadLineDepths &&
     prev.hoverBackground === next.hoverBackground &&
     prev.huddleMemberPubkeys === next.huddleMemberPubkeys &&
+    prev.huddleMemberPubkeysPending === next.huddleMemberPubkeysPending &&
     prev.isFollowingThread === next.isFollowingThread &&
     prev.isUnread === next.isUnread &&
     prev.layoutVariant === next.layoutVariant &&

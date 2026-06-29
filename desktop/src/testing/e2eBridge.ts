@@ -80,6 +80,7 @@ type E2eConfig = {
     };
     managedAgents?: MockManagedAgentSeed[];
     relayAgents?: MockRelayAgentSeed[];
+    agentListDelayMs?: number;
     agentMemory?: RawAgentMemoryListing | Record<string, RawAgentMemoryListing>;
     createManagedAgentDelayMs?: number;
     channelsReadError?: string;
@@ -4615,7 +4616,19 @@ async function handleGetFeed(
   };
 }
 
-async function handleListRelayAgents(): Promise<RawRelayAgent[]> {
+async function delayAgentList(config: E2eConfig | undefined) {
+  const agentListDelayMs = config?.mock?.agentListDelayMs ?? 0;
+  if (agentListDelayMs > 0) {
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, agentListDelayMs);
+    });
+  }
+}
+
+async function handleListRelayAgents(
+  config: E2eConfig | undefined,
+): Promise<RawRelayAgent[]> {
+  await delayAgentList(config);
   syncMockRelayAgentsFromManagedAgents();
   return mockRelayAgents.map(cloneRelayAgent);
 }
@@ -4742,7 +4755,10 @@ async function handleDiscoverManagedAgentPrereqs(
   };
 }
 
-async function handleListManagedAgents(): Promise<RawManagedAgent[]> {
+async function handleListManagedAgents(
+  config: E2eConfig | undefined,
+): Promise<RawManagedAgent[]> {
+  await delayAgentList(config);
   return mockManagedAgents.map(cloneManagedAgent);
 }
 
@@ -6687,7 +6703,7 @@ export function maybeInstallE2eTauriMocks() {
           activeConfig,
         );
       case "list_relay_agents":
-        return handleListRelayAgents();
+        return handleListRelayAgents(activeConfig);
       case "list_personas":
         return handleListPersonas();
       case "create_persona":
@@ -6796,7 +6812,7 @@ export function maybeInstallE2eTauriMocks() {
       case "export_persona_to_json":
         return handleExportPersonaToJson(payload as { id: string });
       case "list_managed_agents":
-        return handleListManagedAgents();
+        return handleListManagedAgents(activeConfig);
       case "get_agent_memory":
         return handleGetAgentMemory(
           (payload as Parameters<typeof handleGetAgentMemory>[0]) ?? {},

@@ -105,6 +105,7 @@ type MockBridgeOptions = {
   };
   managedAgents?: MockManagedAgentSeed[];
   relayAgents?: MockRelayAgentSeed[];
+  agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   channelsReadError?: string;
   feedReadError?: string;

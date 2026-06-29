@@ -18,22 +18,26 @@ type WaveMessageAttachmentProps = {
   channelId?: string | null;
   fallbackText: string;
   huddleMemberPubkeys?: readonly string[];
+  huddleMemberPubkeysPending?: boolean;
 };
 
 export function WaveMessageAttachment({
   channelId,
   fallbackText,
   huddleMemberPubkeys = [],
+  huddleMemberPubkeysPending = false,
 }: WaveMessageAttachmentProps) {
   const queryClient = useQueryClient();
   const { isStarting, startHuddle } = useHuddle();
+  const startHuddleDisabled =
+    !channelId || isStarting || huddleMemberPubkeysPending;
 
   const handleStartHuddle = React.useCallback(
     async (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
       event.stopPropagation();
 
-      if (!channelId || isStarting) {
+      if (startHuddleDisabled) {
         return;
       }
 
@@ -46,7 +50,13 @@ export function WaveMessageAttachment({
         );
       }
     },
-    [channelId, huddleMemberPubkeys, isStarting, queryClient, startHuddle],
+    [
+      channelId,
+      huddleMemberPubkeys,
+      queryClient,
+      startHuddle,
+      startHuddleDisabled,
+    ],
   );
 
   return (
@@ -66,7 +76,7 @@ export function WaveMessageAttachment({
       </AttachmentContent>
       <AttachmentActions>
         <AttachmentAction
-          disabled={!channelId || isStarting}
+          disabled={startHuddleDisabled}
           onClick={handleStartHuddle}
           size="xs"
           type="button"

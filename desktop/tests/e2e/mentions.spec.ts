@@ -20,6 +20,8 @@ const REUSABLE_PERSONA_AGENT_PUBKEY =
   "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 const ALLOWLIST_RELAY_AGENT_PUBKEY =
   "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+const DELAYED_RELAY_AGENT_PUBKEY =
+  "9999999999999999999999999999999999999999999999999999999999999999";
 const CASEY_PROFILE_PUBKEY =
   "1111111111111111111111111111111111111111111111111111111111111111";
 const PROFILE_ONLY_AGENT_PUBKEY =
@@ -1357,4 +1359,60 @@ test("wave attachment huddle passes the bot DM pubkey", async ({ page }) => {
   await expect
     .poll(() => readStartHuddleMemberPubkeys(page))
     .toEqual(expect.arrayContaining([TEST_IDENTITIES.charlie.pubkey]));
+});
+
+test("wave attachment huddle waits for delayed bot DM pubkey", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    agentListDelayMs: 5_000,
+    relayAgents: [
+      {
+        pubkey: DELAYED_RELAY_AGENT_PUBKEY,
+        name: "orbit",
+        channelNames: ["general"],
+      },
+    ],
+    searchProfiles: [
+      {
+        pubkey: DELAYED_RELAY_AGENT_PUBKEY,
+        displayName: "orbit",
+      },
+    ],
+  });
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await waitForMockLiveSubscription(page, "general");
+
+  await emitMockMessage(page, "general", "Orbit checking in.", {
+    pubkey: DELAYED_RELAY_AGENT_PUBKEY,
+  });
+  await waitForTimelineSettled(page);
+
+  const orbitMessage = page
+    .getByTestId("message-row")
+    .filter({ hasText: "Orbit checking in." })
+    .first();
+  await orbitMessage.locator("button").first().hover();
+
+  const profilePopover = page.locator(
+    '[data-testid="user-profile-popover"][data-state="open"]',
+  );
+  await expect(profilePopover).toBeVisible();
+  await profilePopover
+    .getByTestId(`user-profile-popover-wave-${DELAYED_RELAY_AGENT_PUBKEY}`)
+    .click();
+
+  const startHuddleButton = page
+    .getByTestId("message-wave-attachment")
+    .getByRole("button", { name: "Start huddle" });
+  await expect(startHuddleButton).toBeDisabled();
+  await expect(startHuddleButton).toBeEnabled({ timeout: 7_000 });
+  await startHuddleButton.click();
+
+  await expect
+    .poll(() => readStartHuddleMemberPubkeys(page))
+    .toEqual(expect.arrayContaining([DELAYED_RELAY_AGENT_PUBKEY]));
 });

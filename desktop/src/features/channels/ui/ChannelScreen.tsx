@@ -320,6 +320,12 @@ export function ChannelScreen({
     }
     return pubkeys;
   }, [channelMembers, managedAgents, messageProfilesQuery.data, relayAgents]);
+  const agentPubkeysPending =
+    activeChannel?.channelType === "dm" &&
+    (channelMembersQuery.isPending ||
+      managedAgentsQuery.isPending ||
+      relayAgentsQuery.isPending ||
+      (messageProfilePubkeys.length > 0 && messageProfilesQuery.isPending));
   const {
     agentSessionCandidates,
     botTypingEntries,
@@ -765,6 +771,7 @@ export function ChannelScreen({
                   activeChannel={activeChannel}
                   activityAgents={channelAgentSessionAgents}
                   agentPubkeys={agentPubkeys}
+                  agentPubkeysPending={agentPubkeysPending}
                   agentSessionAgents={agentSessionAgents}
                   botTypingEntries={botTypingEntries}
                   channelFind={channelFind}
