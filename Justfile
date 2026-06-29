@@ -231,6 +231,13 @@ test-unit:
     #!/usr/bin/env bash
     if command -v cargo-nextest &>/dev/null; then
         cargo nextest run -p buzz-core -p buzz-auth --lib
+        # buzz-db migrator/lint tests: pure SQL-parsing unit tests (no infra).
+        # They guard the embedded-migrator invariant (exactly the consolidated
+        # 0001; cutover/backfill stays an operator script, not startup state)
+        # and the tenant-scoping lints. The Postgres-backed buzz-db tests are
+        # #[ignore]d, so --lib runs only the infra-free set. Without this gate a
+        # stray file in migrations/ or a broken lint ships green.
+        cargo nextest run -p buzz-db --lib
         # Multi-tenant conformance gate (buzz-conformance): the independent
         # replay checker + golden fixtures. No infra — pure in-process trace
         # replay — so it belongs in the unit job. Run all targets (lib + the

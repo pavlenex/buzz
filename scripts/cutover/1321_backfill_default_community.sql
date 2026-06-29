@@ -1,4 +1,4 @@
--- 0002_backfill_default_community.sql
+-- scripts/cutover/1321_backfill_default_community.sql
 --
 -- One-off cutover: single-community (pre-1321) Postgres -> multi-tenant (1321)
 -- schema. Assigns EVERY existing row to one default community derived from the
@@ -46,15 +46,18 @@
 -- PRECONDITIONS
 --   * DB is the pre-1321 single-community schema (no community_id columns, no
 --     `communities` table). Guard below refuses to run otherwise.
---   * Run psql from the buzz repo root so the \i path resolves.
+--   * Run psql with this script via -f (not piped on stdin): the Phase B
+--     include below uses \ir, which resolves relative to THIS file, so the
+--     repo's migrations/0001 is found regardless of the operator's cwd.
 --   * TAKE A pg_dump / PVC SNAPSHOT FIRST. No down-path; the snapshot IS the
 --     rollback.
 --
--- USAGE  (from the buzz repo root)
+-- USAGE  (run from anywhere; \ir below resolves the schema include relative to
+--         this file, so cwd does not matter)
 --   psql "$DATABASE_URL" \
 --        -v host="'sprout-oss.stage.blox.sqprod.co'" \
 --        -v ON_ERROR_STOP=1 \
---        -f migrations/0002_backfill_default_community.sql
+--        -f scripts/cutover/1321_backfill_default_community.sql
 --
 -- After commit: boot the 1321 relay with BUZZ_AUTO_MIGRATE=false. The schema is
 -- already correct; the relay's idempotent boot-time
@@ -128,7 +131,9 @@ END
 $move_types$;
 
 -- ── Phase B: the authoritative 1321 schema, verbatim, into clean public ──────
-\i migrations/0001_initial_schema.sql
+-- \ir = include relative to THIS script's directory (scripts/cutover/), so the
+-- repo's migrations/0001 resolves regardless of the operator's cwd.
+\ir ../../migrations/0001_initial_schema.sql
 
 -- ── Phase C: the one default community, normalized like the relay does ───────
 INSERT INTO public.communities (host)

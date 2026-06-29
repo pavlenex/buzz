@@ -84,6 +84,15 @@ run_unit_tests() {
   run_test_step "buzz-auth unit tests" \
     cargo test -p buzz-auth --lib -- --nocapture
 
+  # buzz-db migrator/lint unit tests (no infra): guard the embedded-migrator
+  # invariant (exactly the consolidated 0001; cutover/backfill stays an operator
+  # script, not startup state) and the tenant-scoping lints. The Postgres-backed
+  # buzz-db tests are #[ignore]d; nothing here (or in integration mode below,
+  # which runs `cargo test -p buzz-db` without --ignored) runs them — they need a
+  # separate isolated-DB gate, so --lib keeps this step infra-free.
+  run_test_step "buzz-db unit tests" \
+    cargo test -p buzz-db --lib -- --nocapture
+
   # Multi-tenant conformance gate: independent replay checker + golden
   # fixtures (buzz-conformance). Pure in-process trace replay, no infra.
   run_test_step "buzz-conformance tests" \
