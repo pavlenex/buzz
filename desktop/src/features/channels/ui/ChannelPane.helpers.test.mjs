@@ -107,6 +107,18 @@ test("DM task agent inference requires exactly one other known agent", () => {
   assert.deepEqual(
     getDmTaskAgentPubkeys({
       channel: channel({
+        channelType: "dm",
+        participantPubkeys: ["human", "agent-one", "human-two"],
+      }),
+      currentPubkey: "human",
+      knownAgentPubkeys,
+    }),
+    [],
+  );
+
+  assert.deepEqual(
+    getDmTaskAgentPubkeys({
+      channel: channel({
         participantPubkeys: ["human", "agent-one"],
       }),
       currentPubkey: "human",

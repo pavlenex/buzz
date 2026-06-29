@@ -110,15 +110,22 @@ export function getDmTaskAgentPubkeys({
   const normalizedCurrentPubkey = currentPubkey
     ? normalizePubkey(currentPubkey)
     : null;
+  const otherParticipants = new Map<string, string>();
 
-  return singleKnownAgentPubkey(
-    channel.participantPubkeys.filter(
-      (pubkey) =>
-        !normalizedCurrentPubkey ||
-        normalizePubkey(pubkey) !== normalizedCurrentPubkey,
-    ),
-    knownAgentPubkeys,
-  );
+  for (const pubkey of channel.participantPubkeys) {
+    const normalized = normalizePubkey(pubkey);
+    if (normalizedCurrentPubkey && normalized === normalizedCurrentPubkey) {
+      continue;
+    }
+
+    otherParticipants.set(normalized, pubkey);
+  }
+
+  if (otherParticipants.size !== 1) {
+    return [];
+  }
+
+  return singleKnownAgentPubkey(otherParticipants.values(), knownAgentPubkeys);
 }
 
 export function getThreadTaskAgentPubkeys({
