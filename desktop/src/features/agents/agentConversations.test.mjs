@@ -73,7 +73,17 @@ test("continued conversation auto-routes only a single messageable agent", () =>
   assert.deepEqual(
     getAutoRoutedAgentConversationPubkeys([
       { canMessage: true, pubkey: "agent-one" },
+      { canMessage: false, pubkey: "agent-two" },
+      { canMessage: false, pubkey: "agent-three" },
+    ]),
+    ["agent-one"],
+  );
+
+  assert.deepEqual(
+    getAutoRoutedAgentConversationPubkeys([
+      { canMessage: true, pubkey: "agent-one" },
       { canMessage: true, pubkey: "agent-two" },
+      { canMessage: false, pubkey: "agent-three" },
     ]),
     [],
   );

@@ -110,12 +110,15 @@ export function agentConversationsStorageKey(
 export function getAutoRoutedAgentConversationPubkeys(
   participants: readonly AgentConversationRouteableParticipant[],
 ): string[] {
-  if (participants.length !== 1) {
+  const messageableParticipants = participants.filter(
+    (participant) => participant.canMessage,
+  );
+
+  if (messageableParticipants.length !== 1) {
     return [];
   }
 
-  const [participant] = participants;
-  return participant.canMessage ? [participant.pubkey] : [];
+  return [messageableParticipants[0].pubkey];
 }
 
 export function buildAgentConversationMentionPubkeys({
