@@ -534,6 +534,12 @@ export const ChannelPane = React.memo(function ChannelPane({
       resolveTaskAgentForMessage,
     ],
   );
+  const canCreateAgentConversation = React.useMemo(
+    () =>
+      enableAgentConversations &&
+      canOpenAgentConversationInChannel({ channel: activeChannel }),
+    [activeChannel, enableAgentConversations],
+  );
   React.useEffect(() => {
     if (!pendingAgentConversationOpen) {
       return;
@@ -1003,6 +1009,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 directMessageIntro={directMessageIntro}
                 scrollContainerRef={timelineScrollRef}
                 currentPubkey={currentPubkey}
+                canCreateAgentConversation={canCreateAgentConversation}
                 fetchOlder={fetchOlder}
                 followThreadById={followThreadById}
                 hasComposerOverlay={hasMainComposerOverlay}
@@ -1216,6 +1223,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                   ? handleOpenAgentConversation
                   : undefined
               }
+              canCreateAgentConversation={canCreateAgentConversation}
               onSelectReplyTarget={onSelectThreadReplyTarget}
               onSend={handleSendThreadReply}
               onScrollTargetResolved={onThreadScrollTargetResolved}

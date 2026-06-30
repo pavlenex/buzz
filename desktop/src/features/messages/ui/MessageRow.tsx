@@ -118,6 +118,7 @@ export const MessageRow = React.memo(
   function MessageRow({
     channelId = null,
     collapseDepthGuideActions,
+    canCreateAgentConversation = true,
     connectDescendants = false,
     depthGuideDepths,
     highlighted = false,
@@ -155,6 +156,7 @@ export const MessageRow = React.memo(
   }: {
     agentConversationMarkers?: readonly AgentConversationMarker[];
     agentPubkeys?: ReadonlySet<string>;
+    canCreateAgentConversation?: boolean;
     channelId?: string | null;
     collapseDepthGuideActions?: ReadonlyArray<ThreadDepthGuideAction>;
     connectDescendants?: boolean;
@@ -471,7 +473,9 @@ export const MessageRow = React.memo(
           isUnread={isUnread}
           message={message}
           onContinueConversation={
-            message.pending ? undefined : onOpenAgentConversation
+            message.pending || !canCreateAgentConversation
+              ? undefined
+              : onOpenAgentConversation
           }
           onDelete={onDelete}
           onEdit={onEdit}
@@ -867,6 +871,7 @@ export const MessageRow = React.memo(
     prev.message.personaDisplayName === next.message.personaDisplayName &&
     prev.agentConversationMarkers === next.agentConversationMarkers &&
     prev.agentPubkeys === next.agentPubkeys &&
+    prev.canCreateAgentConversation === next.canCreateAgentConversation &&
     prev.collapseDepthGuideActions === next.collapseDepthGuideActions &&
     prev.collapseDescendantsLabel === next.collapseDescendantsLabel &&
     prev.connectDescendants === next.connectDescendants &&
