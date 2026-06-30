@@ -3449,15 +3449,6 @@ function mockGoogleCalendarStatus() {
   };
 }
 
-function mockSpotifyStatus() {
-  return {
-    configured: false,
-    connected: false,
-    connected_at: null,
-    scopes: [],
-  };
-}
-
 // A random 64-hex event id, matching the shape of real Nostr event ids
 // (sha256 → 64 hex). Most mock events use the 32-hex `createMockEvent` default,
 // but kind:7 reactions need a real 64-hex id: the timeline's deletion path only
@@ -7516,12 +7507,6 @@ export function maybeInstallE2eTauriMocks() {
         return mockGoogleCalendarStatus();
       case "get_google_calendar_events":
         return [];
-      case "get_spotify_status":
-        return mockSpotifyStatus();
-      case "connect_spotify":
-        return mockSpotifyStatus();
-      case "disconnect_spotify":
-        return mockSpotifyStatus();
       case "pick_and_upload_media":
         return await resolveMockUploadDescriptors(activeConfig);
       case "upload_media_bytes":

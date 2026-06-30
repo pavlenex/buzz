@@ -4,7 +4,6 @@ import {
   useGoogleCalendarConnectionMutations,
   useGoogleCalendarStatusQuery,
 } from "@/features/calendar/hooks";
-import { SpotifySettingsCard } from "@/features/spotify/ui/SpotifySettingsCard";
 import { Button } from "@/shared/ui/button";
 import {
   SettingsOptionGroup,
@@ -127,8 +126,6 @@ export function ConnectionsSettingsCard() {
           Google OAuth desktop app setup
           <ExternalLink className="h-3.5 w-3.5" />
         </a>
-
-        <SpotifySettingsCard />
       </div>
     </section>
   );
