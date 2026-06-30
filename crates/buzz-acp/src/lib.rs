@@ -2525,10 +2525,7 @@ fn signal_in_flight_task(
 /// and fires `ControlSignal::Cancel`. The cancel path returns the agent to
 /// the pool and clears `dream_in_flight` when the result arrives.
 fn cancel_in_flight_dream(pool: &mut AgentPool) {
-    let entry = pool
-        .task_map_mut()
-        .values_mut()
-        .find(|m| m.is_dream);
+    let entry = pool.task_map_mut().values_mut().find(|m| m.is_dream);
 
     if let Some(meta) = entry {
         if let Some(tx) = meta.control_tx.take() {
@@ -3136,7 +3133,16 @@ fn dispatch_heartbeat(
     let agent_index = agent.index;
 
     let abort_handle = pool.join_set.spawn(async move {
-        pool::run_prompt_task(agent, None, Some(prompt_text), ctx_clone, result_tx, None, None).await;
+        pool::run_prompt_task(
+            agent,
+            None,
+            Some(prompt_text),
+            ctx_clone,
+            result_tx,
+            None,
+            None,
+        )
+        .await;
     });
 
     pool.task_map_mut().insert(
@@ -4598,6 +4604,7 @@ mod dream_dispatch_tests {
             state: Default::default(),
             model_capabilities: None,
             desired_model: None,
+            model_overridden: false,
             protocol_version: 1,
         }
     }
@@ -4624,10 +4631,16 @@ mod dream_dispatch_tests {
             false, // heartbeat_in_flight
         );
 
-        assert!(!dream_in_flight, "must not set dream_in_flight when not pending");
+        assert!(
+            !dream_in_flight,
+            "must not set dream_in_flight when not pending"
+        );
         assert!(!dream_pending, "dream_pending must remain false");
         // Pool must still have the idle agent (not claimed).
-        assert!(pool.any_idle(), "agent must not be consumed when guard blocks");
+        assert!(
+            pool.any_idle(),
+            "agent must not be consumed when guard blocks"
+        );
     }
 
     // ─── Guard: heartbeat_in_flight=true (priority ordering) ──────────────────
@@ -4653,9 +4666,18 @@ mod dream_dispatch_tests {
             true, // heartbeat_in_flight — must block dream
         );
 
-        assert!(!dream_in_flight, "dream must not fire while heartbeat is in flight");
-        assert!(dream_pending, "dream_pending must remain true after guard blocked it");
-        assert!(pool.any_idle(), "agent must not be consumed by a blocked dispatch");
+        assert!(
+            !dream_in_flight,
+            "dream must not fire while heartbeat is in flight"
+        );
+        assert!(
+            dream_pending,
+            "dream_pending must remain true after guard blocked it"
+        );
+        assert!(
+            pool.any_idle(),
+            "agent must not be consumed by a blocked dispatch"
+        );
     }
 
     // ─── Guard: heartbeat disabled (heartbeat_in_flight=false always) ─────────
@@ -4684,7 +4706,10 @@ mod dream_dispatch_tests {
             false, // no heartbeat ever fires
         );
 
-        assert!(dream_in_flight, "dream must dispatch when heartbeat is disabled");
+        assert!(
+            dream_in_flight,
+            "dream must dispatch when heartbeat is disabled"
+        );
         assert!(!dream_pending, "dream_pending must clear after dispatch");
         assert!(!pool.any_idle(), "agent must be claimed for the dream task");
     }
@@ -4710,7 +4735,10 @@ mod dream_dispatch_tests {
         );
 
         assert!(!dream_in_flight, "no dispatch without an idle agent");
-        assert!(dream_pending, "dream_pending preserved so next idle gap picks it up");
+        assert!(
+            dream_pending,
+            "dream_pending preserved so next idle gap picks it up"
+        );
     }
 
     // ─── Fix 3: missing prompt clears pending, returns agent, logs error ───────
@@ -4735,7 +4763,10 @@ mod dream_dispatch_tests {
         // missing-prompt branch (maybe_dispatch_dream defers to it).
         dispatch_dream(&mut pool, &ctx, &mut dream_in_flight, &mut dream_pending);
 
-        assert!(!dream_in_flight, "no task is in flight when prompt is missing");
+        assert!(
+            !dream_in_flight,
+            "no task is in flight when prompt is missing"
+        );
         assert!(
             !dream_pending,
             "pending must be cleared so we don't retry on every subsequent signal"
@@ -4771,6 +4802,9 @@ mod dream_dispatch_tests {
         // dream_in_flight should stay true (not flipped back to false),
         // and no second agent should be claimed.
         assert!(dream_in_flight, "dream_in_flight state must not be toggled");
-        assert!(pool.any_idle(), "idle agent must not be claimed for a second dream");
+        assert!(
+            pool.any_idle(),
+            "idle agent must not be claimed for a second dream"
+        );
     }
 }

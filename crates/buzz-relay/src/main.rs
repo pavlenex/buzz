@@ -747,11 +747,7 @@ async fn main() -> anyhow::Result<()> {
 
                         if let Err(e) = dream_state
                             .pubsub
-                            .publish_event(
-                                &dream_tenant,
-                                buzz_pubsub::EventTopic::Global,
-                                &event,
-                            )
+                            .publish_event(&dream_tenant, buzz_pubsub::EventTopic::Global, &event)
                             .await
                         {
                             warn!(%community_id, pubkey = %pubkey_hex, "Dream sweep: publish failed: {e}");
@@ -1020,8 +1016,8 @@ fn agent_is_idle(presence: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::buzz_auto_migrate_enabled;
     use super::agent_is_idle;
+    use super::buzz_auto_migrate_enabled;
 
     #[test]
     fn buzz_auto_migrate_is_opt_in() {

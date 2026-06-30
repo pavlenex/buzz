@@ -1373,7 +1373,10 @@ pub async fn agents_over_memory_budget(
         .map(|row| {
             let pubkey: Vec<u8> = row.try_get("pubkey")?;
             let total_bytes: i64 = row.try_get("total_bytes")?;
-            Ok(AgentMemoryRow { pubkey, total_bytes })
+            Ok(AgentMemoryRow {
+                pubkey,
+                total_bytes,
+            })
         })
         .collect()
 }

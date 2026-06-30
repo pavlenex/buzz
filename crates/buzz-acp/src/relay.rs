@@ -1869,7 +1869,9 @@ async fn handle_ws_message(
                         if sent {
                             state.dream_sub_active = true;
                         } else {
-                            warn!("dream-due resubscribe failed after CLOSED — triggering reconnect");
+                            warn!(
+                                "dream-due resubscribe failed after CLOSED — triggering reconnect"
+                            );
                             return false;
                         }
                     } else if let Some(channel_id) = channel_id_from_sub_id(&subscription_id) {
@@ -2556,7 +2558,11 @@ pub(crate) fn build_dream_req_filter(agent_pubkey_hex: &str) -> serde_json::Valu
 }
 
 async fn send_dream_subscribe(ws: &mut WsStream, agent_pubkey_hex: &str) -> bool {
-    let req = json!(["REQ", DREAM_SIGNAL_SUB_ID, build_dream_req_filter(agent_pubkey_hex)]);
+    let req = json!([
+        "REQ",
+        DREAM_SIGNAL_SUB_ID,
+        build_dream_req_filter(agent_pubkey_hex)
+    ]);
     match serde_json::to_string(&req) {
         Ok(text) => {
             match ws_send_timeout(ws, Message::Text(text.into()), WS_SEND_TIMEOUT_SECS).await {
@@ -3849,10 +3855,7 @@ mod dream_subscription_tests {
     fn test_dream_filter_includes_kind_dream_due() {
         let filter = build_dream_req_filter(TEST_PUBKEY);
         let kinds = filter["kinds"].as_array().expect("kinds must be an array");
-        let kind_vals: Vec<u64> = kinds
-            .iter()
-            .filter_map(|v| v.as_u64())
-            .collect();
+        let kind_vals: Vec<u64> = kinds.iter().filter_map(|v| v.as_u64()).collect();
         assert!(
             kind_vals.contains(&(KIND_DREAM_DUE as u64)),
             "dream filter must include KIND_DREAM_DUE ({KIND_DREAM_DUE}); got {kind_vals:?}"
@@ -3903,8 +3906,7 @@ mod dream_subscription_tests {
         let filter_a = build_dream_req_filter(&pubkey_a);
         let filter_b = build_dream_req_filter(&pubkey_b);
         assert_ne!(
-            filter_a["#p"],
-            filter_b["#p"],
+            filter_a["#p"], filter_b["#p"],
             "filters for different pubkeys must not be equal"
         );
     }

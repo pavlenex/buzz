@@ -1341,8 +1341,7 @@ mod tests {
         let other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
         // No #p at all → rejected (could subscribe to all agents' dream signals).
-        let no_p = Filter::new()
-            .kind(nostr::Kind::Custom(buzz_core::kind::KIND_DREAM_DUE as u16));
+        let no_p = Filter::new().kind(nostr::Kind::Custom(buzz_core::kind::KIND_DREAM_DUE as u16));
         assert!(!p_gated_filters_authorized(&[no_p], authed));
 
         // #p targeting another agent → rejected (info leak: "agent X is over budget + idle").
