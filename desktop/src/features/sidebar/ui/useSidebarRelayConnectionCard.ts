@@ -89,7 +89,11 @@ export function useSidebarRelayConnectionCard(
   const canShow = isRelayConnectionActuallyDegraded || isRelayConnectionSuccess;
   const show = canShow && !isDismissed;
   const wasProblemCardVisibleRef = React.useRef(false);
-  const { isPending: isReconnectPending, reconnect } = useReconnectRelay();
+  const {
+    isPending: isReconnectPending,
+    isWaitingOnReconnectHook,
+    reconnect,
+  } = useReconnectRelay();
   const [connectivityAction, setConnectivityAction] = React.useState<
     "relay-connection" | null
   >(null);
@@ -212,6 +216,7 @@ export function useSidebarRelayConnectionCard(
     hasRelayUnreachableError,
     isRelayConnectionSuccess,
     isRelayReconnectPending,
+    isWaitingOnReconnectHook,
     onDismissRelayConnectionCard: () => {
       setRelayConnectivitySuccess(relayUrl, false);
       setIsDismissed(true);

@@ -30,7 +30,11 @@ function OnboardingRelayConnectionErrorCard({
   isSaving: boolean;
   message: string;
 }) {
-  const { isPending: isReconnectPending, reconnect } = useReconnectRelay();
+  const {
+    isPending: isReconnectPending,
+    isWaitingOnReconnectHook,
+    reconnect,
+  } = useReconnectRelay();
   const [dismissedErrorMessage, setDismissedErrorMessage] = React.useState<
     string | null
   >(null);
@@ -116,6 +120,7 @@ function OnboardingRelayConnectionErrorCard({
         isActionDisabled={isActionPending}
         isConnected={hasSuccess}
         isReconnectPending={isActionPending}
+        isWaitingOnReconnectHook={isWaitingOnReconnectHook}
         onDismiss={() => setDismissedErrorMessage(message)}
         onReconnect={handleReconnectRelay}
         surface="secondary"

@@ -7981,6 +7981,8 @@ export function maybeInstallE2eTauriMocks() {
         return handleUpdaterDownloadAndInstall(payload, activeConfig);
       case "relay_reconnect_hook":
         return null;
+      case "relay_reconnect_hook_configured":
+        return false;
       case "plugin:resources|close":
         return null;
       case "plugin:process|restart":

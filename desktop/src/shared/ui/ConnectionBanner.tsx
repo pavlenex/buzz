@@ -28,7 +28,8 @@ type ConnectionBannerProps = {
 
 export function ConnectionBanner({ errorMessage }: ConnectionBannerProps) {
   const state = useRelayConnection();
-  const { isPending, reconnect } = useReconnectRelay();
+  const { isPending, isWaitingOnReconnectHook, reconnect } =
+    useReconnectRelay();
   const { state: sidebarState } = useSidebar();
   const hasCollapsedRelayError =
     sidebarState === "collapsed" &&
@@ -41,6 +42,12 @@ export function ConnectionBanner({ errorMessage }: ConnectionBannerProps) {
   const message = hasCollapsedRelayError
     ? "Can't reach the relay."
     : (COPY[state] ?? "Connection issue detected.");
+
+  const buttonLabel = isWaitingOnReconnectHook
+    ? "Waiting to reconnect…"
+    : isPending
+      ? "Reconnecting…"
+      : "Reconnect";
 
   return (
     <div
@@ -57,7 +64,7 @@ export function ConnectionBanner({ errorMessage }: ConnectionBannerProps) {
         onClick={reconnect}
         type="button"
       >
-        {isPending ? "Reconnecting…" : "Reconnect"}
+        {buttonLabel}
       </button>
     </div>
   );
