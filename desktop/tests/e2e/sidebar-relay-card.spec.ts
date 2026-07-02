@@ -44,19 +44,17 @@ async function setRelayConnectionState(
     // first. Without this guard, the mock relay's async auth handshake (started
     // on page load) can race the override and set state back to "connected"
     // after we've driven it to a degraded value.
-    await page.waitForFunction(
-      () => {
-        const win = window as Window & {
-          __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => string;
-          __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
-        };
-        return (
-          typeof win.__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__ === "function" &&
-          typeof win.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__ === "function" &&
-          win.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__() === "connected"
-        );
-      },
-    );
+    await page.waitForFunction(() => {
+      const win = window as Window & {
+        __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => string;
+        __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
+      };
+      return (
+        typeof win.__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__ === "function" &&
+        typeof win.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__ === "function" &&
+        win.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__() === "connected"
+      );
+    });
   } else {
     // When driving to "connected", just wait for the seam to be installed —
     // no need to gate on the current state since we're overriding it directly.
