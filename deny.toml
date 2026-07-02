@@ -6,6 +6,12 @@ ignore = [
     # paste 1.0.15 — unmaintained. Transitive dep: mesh-llm → iroh → netlink-* → paste.
     # No safe upgrade available; tracked for upstream (iroh/netlink) replacement.
     { id = "RUSTSEC-2024-0436", reason = "transitive dep via mesh-llm → iroh → netlink; no upstream fix available" },
+    # quick-xml <0.41 — unbounded allocation / O(N^2) attribute checks (DoS on
+    # attacker-controlled XML). Transitive: mesh-llm → iroh → netwatch → netdev
+    # → plist (pins ^0.39) and buzz-media → rust-s3/aws-creds (pin ^0.38).
+    # No parent accepts 0.41 yet; revisit when plist/aws-creds bump.
+    { id = "RUSTSEC-2026-0194", reason = "transitive quick-xml <0.41 via plist and aws-creds; parents pin below fixed version" },
+    { id = "RUSTSEC-2026-0195", reason = "transitive quick-xml <0.41 via plist and aws-creds; parents pin below fixed version" },
 ]
 
 [licenses]
