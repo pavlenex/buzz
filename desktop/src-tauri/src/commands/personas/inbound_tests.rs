@@ -113,6 +113,31 @@ fn no_local_match_inserts_inbound_reusing_d_tag_as_id() {
     assert_eq!(personas.len(), 2, "re-receive of inserted record no-ops");
 }
 
+/// A relay echo of an older publish must not resurrect a persona the owner
+/// deactivated locally: `is_active` is deliberately NOT a projected field, so
+/// the inbound patch (whose parsed records always carry `is_active: true`)
+/// leaves the local flag untouched. This pins the safety argument that a
+/// deactivated saved template stays out of the New Agent catalog even while
+/// stale persona events keep echoing between devices.
+#[test]
+fn inbound_echo_preserves_local_deactivation() {
+    let mut local = local_in_app();
+    local.is_active = false;
+    let mut personas = vec![local];
+
+    let inbound = inbound_for(UUID, "Remote");
+    assert!(inbound.is_active, "inbound echoes always parse as active");
+    apply_inbound_persona(&mut personas, inbound);
+
+    assert_eq!(personas.len(), 1, "no duplicate row");
+    assert!(
+        !personas[0].is_active,
+        "inbound echo must not reactivate a locally deactivated persona"
+    );
+    // The projected fields still patch as usual.
+    assert_eq!(personas[0].display_name, "Remote");
+}
+
 // ── Managed-agent (30177) inbound ────────────────────────────────────────
 
 const AGENT_PUBKEY: &str = "agentpubkeyhex0000000000000000000000000000000000000000000000000000";
