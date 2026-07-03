@@ -1,5 +1,11 @@
 # Bridge `/query` Extension: Channel Window
 
+> **Normative spec:** [NIP-CW](nips/NIP-CW.md) is the canonical, standalone
+> specification of the channel window (kinds 39005/39006, filter extension,
+> cursor and trust semantics). This document remains as the ratified
+> engineering contract and internal design record; where wording differs,
+> NIP-CW governs.
+
 Status: frozen contract v2 (2026-07-03) — GUI read-model overhaul.
 Reviewed by: Mari (relay ground truth), Wren (client core), Quinn (spec
 guardian), Perci (NIP landscape). Ratified in
