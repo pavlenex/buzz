@@ -483,12 +483,178 @@ export function bulkChannel(opts: {
 }
 
 /**
+ * Dense same-second wall buried behind `fillerCount` NEWER top-level events, so
+ * the pre-overhaul client's bulk `since:0 limit:1000` head fetch cannot reach it
+ * and MUST fall onto the bare-`until` history pager — where the dense second
+ * strands its sub-page tail (the RED-on-main proof). Wren, 2026-07-03: the head
+ * fetch front-loads the newest ~1000, so `fillerCount` must exceed that ceiling.
+ *
+ * Timestamps stay inside the relay's ±120s ingest window: filler is spread over
+ * the seconds just before NOW, the wall sits one second below the oldest filler.
+ * Filler and wall share ONE barrier group (all independent top-levels).
+ *
+ * `expected` is the WALL only — the contract under test is "every event behind
+ * the front-load ceiling is still reachable". Filler is context, not asserted.
+ */
+export function denseWallBehindFiller(opts: {
+  channelId: string;
+  wallCount: number;
+  fillerCount: number;
+  /** Newest filler second; defaults to NOW. Wall sits `wallOffset`s below. */
+  now?: number;
+  /** Seconds the filler spans below `now`. Default 100 (well inside ±120s). */
+  fillerSpanSeconds?: number;
+}): Scenario {
+  const {
+    channelId,
+    wallCount,
+    fillerCount,
+    now = Math.floor(Date.now() / 1000),
+    fillerSpanSeconds = 100,
+  } = opts;
+
+  const events: NostrEvent[] = [];
+
+  // Filler: `fillerCount` rows spread across [now - fillerSpanSeconds, now].
+  // Oldest filler second is `now - fillerSpanSeconds`; the wall sits below it.
+  const oldestFillerSecond = now - fillerSpanSeconds;
+  for (let i = 0; i < fillerCount; i += 1) {
+    const signer = signerFor(AUTHORS[i % AUTHORS.length]);
+    // Deterministic spread: newest first index → newest second, wrapping the
+    // span. Exact distribution is irrelevant; only "all newer than wall" matters.
+    const second = now - (i % (fillerSpanSeconds + 1));
+    events.push(buildMessage(signer, channelId, `filler ${i}`, second));
+  }
+
+  // Wall: `wallCount` rows all at one second strictly below the oldest filler.
+  const wallSecond = oldestFillerSecond - 1;
+  const wall: NostrEvent[] = [];
+  for (let i = 0; i < wallCount; i += 1) {
+    const signer = signerFor(AUTHORS[i % AUTHORS.length]);
+    const event = buildMessage(signer, channelId, `wall ${i}`, wallSecond);
+    events.push(event);
+    wall.push(event);
+  }
+
+  return {
+    name: "dense-wall-behind-filler",
+    groups: [events],
+    expected: wall.map(toRow),
+  };
+}
+
+/**
+ * Ancestor-island cursor poisoning (Dawn's Jul-2 root cause + Wren's Jul-3
+ * proven repro `239cc161`): the disease the read-model overhaul deletes.
+ *
+ * On main, the cold channel load paints the newest `CHANNEL_HISTORY_LIMIT` (60)
+ * top-level rows. If one of those rows is a reply whose root/parent is OUTSIDE
+ * that window, `useLoadMissingAncestors` fetches that old root by id and merges
+ * it into the SAME channel cache — a non-contiguous "island". The older-history
+ * pager then anchors `oldestTimestamp = baseline[0].created_at` on the island
+ * (the injected old root), so every scroll-up pages backward FROM the island and
+ * permanently skips the real history between the island and the true frontier.
+ * CLI `/query` returns those `gap-*` rows; the GUI never requests them → RED.
+ *
+ * Shape (all inside the ±120s ingest window — the boundary here is ROW COUNT
+ * (60), not time, so timestamps stay tight around NOW):
+ *   - 1 old thread root at `now - oldRootOffset` (default 115s)
+ *   - `gapCount` `gap-*` top-levels between the old root and the newest window
+ *   - `newestCount` (> 60) `new-*` top-levels at the newest seconds, exactly ONE
+ *     of which is a reply whose root+parent point at the old root → the trigger
+ *
+ * Barrier ordering: the old root must land before the reply that references it
+ * (ingest rejects an unknown parent), so the reply is its own later group.
+ *
+ * `expected` is the `gap-*` set — the contract is "every gap row CLI returns
+ * must render". RED on main (0 reachable); GREEN on the windowed read model.
+ */
+export function ancestorIsland(opts: {
+  channelId: string;
+  gapCount: number;
+  newestCount: number;
+  now?: number;
+  /** Seconds below NOW for the old island root. Default 115 (inside ±120s). */
+  oldRootOffset?: number;
+  /**
+   * Per-run isolation tag. The suite seeds into shared `general`, so every run
+   * accumulates rows; without a unique marker, a prior run's `gap` rows inflate
+   * the reachable set and false-green the parity assertion (observed 2026-07-03:
+   * a contaminated relay "passed" in 3.3s while a clean channel is RED with
+   * `seen.size === 0`). Callers pass a unique nonce and assert only against this
+   * run's expected set. Default is time+random so ad-hoc calls are still safe.
+   */
+  nonce?: string;
+}): Scenario {
+  const {
+    channelId,
+    gapCount,
+    newestCount,
+    now = Math.floor(Date.now() / 1000),
+    oldRootOffset = 115,
+    nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+  } = opts;
+
+  const oldRootSecond = now - oldRootOffset;
+  const oldRoot = buildMessage(
+    signerFor("tyler"),
+    channelId,
+    `island root ${nonce}`,
+    oldRootSecond,
+  );
+
+  // Gap rows: strictly between the old root and the newest window. Spread them
+  // across the seconds just above the old root so none collide with it.
+  const gapTop = now - 10; // newest gap second, still below the newest window
+  const gapBottom = oldRootSecond + 1;
+  const gapSpan = Math.max(1, gapTop - gapBottom);
+  const gap: NostrEvent[] = [];
+  const gapExpected: SeededEvent[] = [];
+  for (let i = 0; i < gapCount; i += 1) {
+    const signer = signerFor(AUTHORS[i % AUTHORS.length]);
+    const second = gapBottom + (i % gapSpan);
+    const event = buildMessage(signer, channelId, `gap ${nonce} ${i}`, second);
+    gap.push(event);
+    gapExpected.push(toRow(event));
+  }
+
+  // Newest window: `newestCount` rows at the top seconds. One is a reply to the
+  // old root (the ancestor-fetch trigger); the rest are plain top-levels.
+  const newestBottom = now - 9;
+  const newest: NostrEvent[] = [];
+  const replyIndex = Math.floor(newestCount / 2);
+  for (let i = 0; i < newestCount; i += 1) {
+    const signer = signerFor(AUTHORS[i % AUTHORS.length]);
+    const second = newestBottom + (i % 10);
+    if (i === replyIndex) {
+      newest.push(
+        buildMessage(
+          signer,
+          channelId,
+          `new ${nonce} ${i} (reply to island root)`,
+          second,
+          nestedReplyTags(oldRoot.id, oldRoot.id),
+        ),
+      );
+    } else {
+      newest.push(buildMessage(signer, channelId, `new ${nonce} ${i}`, second));
+    }
+  }
+
+  const reply = newest[replyIndex];
+  const nonReplyNewest = newest.filter((_, i) => i !== replyIndex);
+
+  // Group 1: old root + gap + newest (except the cross-gap reply). Group 2: the
+  // reply (its parent/root is the old root, which must land first).
+  return {
+    name: "ancestor-island",
+    groups: [[oldRoot, ...gap, ...nonReplyNewest], [reply]],
+    expected: gapExpected,
+  };
+}
+
+/**
  * Exact-multiple final page (Eva 2026-07-03, `39006` window-bounds authority):
- * a channel with EXACTLY `pages * limitRows` top-level rows. The client must page
- * to the end without (a) a phantom extra page or (b) a terminal empty query —
- * `has_more` must go false on the page that returns the last full batch, driven by
- * the server `limit_rows+1` probe, not a "<limit means done" guess. This is the
- * boundary case that broke the first exhaustion ruling; it earns a permanent
  * regression. Deterministic distinct seconds so ordering is unambiguous.
  */
 export function exactMultiplePage(opts: {
