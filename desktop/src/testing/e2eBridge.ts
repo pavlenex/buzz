@@ -3709,6 +3709,63 @@ async function handleGetChannelMessagesBefore(
   return { events: page, next_cursor: nextCursor };
 }
 
+/**
+ * Mirror of the desktop `get_channel_window` command (channel_window.rs): fetch
+ * one server-assembled channel window over the `/query` bridge. Emits the flat
+ * event array the relay assembles — top-level rows (newest first), then the aux
+ * closure, then relay-signed `39005` summaries and exactly one `39006` bounds
+ * event carrying `has_more` + `next_cursor`. The client derives its cursor and
+ * exhaustion solely from `39006`, never from the rows, so this handler returns
+ * the raw array unchanged.
+ *
+ * This is the window read-model surface the overhaul introduced; without it the
+ * relay-mode bridge has no handler and the timeline renders empty.
+ */
+async function handleGetChannelWindow(
+  args: {
+    channelId: string;
+    limitRows?: number | null;
+    cursor?: { created_at: number; event_id: string } | null;
+  },
+  config: E2eConfig | undefined,
+): Promise<RelayEvent[]> {
+  const cap = Math.min(args.limitRows ?? 50, 200);
+  const identity = getIdentity(config);
+
+  if (!identity) {
+    // Mock store: top-level timeline rows in relay order. The mock store holds
+    // no relay-synthesized 39005/39006, so this is rows-only (parity suites run
+    // the relay path below, which returns the full assembled window).
+    return getMockMessageStore(args.channelId)
+      .filter(
+        (event) =>
+          TIMELINE_KINDS.has(event.kind) &&
+          getThreadReferenceFromTags(event.tags).rootEventId === null,
+      )
+      .sort(
+        (left, right) =>
+          right.created_at - left.created_at || left.id.localeCompare(right.id),
+      )
+      .slice(0, cap);
+  }
+
+  // Relay mode: mirror build_channel_window_filter exactly — top-level dispatch
+  // with summaries + aux, composite (until, before_id) cursor (both or neither).
+  const filter: Record<string, unknown> = {
+    "#h": [args.channelId],
+    kinds: [...TIMELINE_KINDS],
+    limit: cap,
+    top_level: true,
+    include_summaries: true,
+    include_aux: true,
+  };
+  if (args.cursor) {
+    filter.until = args.cursor.created_at;
+    filter.before_id = args.cursor.event_id;
+  }
+  return relayQuery(config, [filter]);
+}
+
 function getMockUserNotes(pubkey: string): RawUserNote[] {
   const now = Math.floor(Date.now() / 1000);
 
@@ -7960,6 +8017,11 @@ export function maybeInstallE2eTauriMocks() {
       case "get_channel_messages_before":
         return handleGetChannelMessagesBefore(
           payload as Parameters<typeof handleGetChannelMessagesBefore>[0],
+          activeConfig,
+        );
+      case "get_channel_window":
+        return handleGetChannelWindow(
+          payload as Parameters<typeof handleGetChannelWindow>[0],
           activeConfig,
         );
       case "send_channel_message":
