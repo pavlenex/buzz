@@ -85,6 +85,7 @@ export default defineConfig({
         "**/persona-env-vars.spec.ts",
         "**/persona-sync.spec.ts",
         "**/mesh-compute.spec.ts",
+        "**/parity-ancestor-island.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
