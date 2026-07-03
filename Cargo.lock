@@ -945,6 +945,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "hex",
+ "http",
  "image",
  "imagesize",
  "infer",

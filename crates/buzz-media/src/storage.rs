@@ -77,6 +77,32 @@ impl MediaStorage {
         Ok(())
     }
 
+    /// Store an object from a byte slice with `x-amz-meta-*` object metadata.
+    ///
+    /// `metadata` keys are bare names (e.g. `buzz-uploader-id`); the S3 client
+    /// adds the `x-amz-meta-` prefix. Used for media blobs that carry upload
+    /// attribution so out-of-band consumers can read it from a HEAD without
+    /// touching relay internals.
+    pub async fn put_with_metadata(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        content_type: &str,
+        metadata: &[(&str, &str)],
+    ) -> Result<(), MediaError> {
+        let mut builder = self
+            .bucket
+            .put_object_builder(key, bytes)
+            .with_content_type(content_type);
+        for (k, v) in metadata {
+            builder = builder
+                .with_metadata(k, v)
+                .map_err(|e| MediaError::StorageError(e.to_string()))?;
+        }
+        builder.execute().await?;
+        Ok(())
+    }
+
     /// Stream a file from disk into S3 without loading it into RAM.
     ///
     /// Uses rust-s3's `put_object_stream_with_content_type` which reads from
@@ -88,6 +114,24 @@ impl MediaStorage {
         path: &Path,
         content_type: &str,
     ) -> Result<(), MediaError> {
+        self.put_file_with_metadata(key, path, content_type, &[])
+            .await
+    }
+
+    /// Stream a file from disk into S3 with `x-amz-meta-*` object metadata.
+    ///
+    /// Metadata is attached via bucket-level `extra_headers` (not the stream
+    /// builder's `with_metadata`) because rust-s3's streaming multipart path
+    /// only forwards builder headers on the small-file (single PUT) branch;
+    /// bucket `extra_headers` are applied to `InitiateMultipartUpload` too, so
+    /// metadata survives files larger than the 8 MiB chunk threshold.
+    pub async fn put_file_with_metadata(
+        &self,
+        key: &str,
+        path: &Path,
+        content_type: &str,
+        metadata: &[(&str, &str)],
+    ) -> Result<(), MediaError> {
         const BUF: usize = 8 * 1024 * 1024; // 8 MiB read buffer
 
         let file = tokio::fs::File::open(path)
@@ -95,7 +139,19 @@ impl MediaStorage {
             .map_err(|e| MediaError::Io(e.to_string()))?;
         let mut reader = tokio::io::BufReader::with_capacity(BUF, file);
 
-        self.bucket
+        if metadata.is_empty() {
+            self.bucket
+                .put_object_stream_with_content_type(&mut reader, key, content_type)
+                .await?;
+            return Ok(());
+        }
+
+        let headers = build_amz_meta_headers(metadata)?;
+        let bucket = self
+            .bucket
+            .with_extra_headers(headers)
+            .map_err(|e| MediaError::StorageError(e.to_string()))?;
+        bucket
             .put_object_stream_with_content_type(&mut reader, key, content_type)
             .await?;
         Ok(())
@@ -336,6 +392,71 @@ mod tests {
             "video/mp4"
         );
     }
+
+    #[test]
+    fn amz_meta_headers_are_prefixed_and_validated() {
+        let headers = build_amz_meta_headers(&[
+            ("buzz-uploader-id", "aabbcc"),
+            ("buzz-community-id", "0000-1111"),
+        ])
+        .unwrap();
+        assert_eq!(
+            headers.get("x-amz-meta-buzz-uploader-id").unwrap(),
+            "aabbcc"
+        );
+        assert_eq!(
+            headers.get("x-amz-meta-buzz-community-id").unwrap(),
+            "0000-1111"
+        );
+
+        // Control characters in values are rejected, not silently mangled.
+        assert!(build_amz_meta_headers(&[("buzz-uploader-id", "bu\nzz")]).is_err());
+        // Invalid header-name characters in the key are rejected.
+        assert!(build_amz_meta_headers(&[("bad key", "v")]).is_err());
+    }
+
+    /// Old sidecars (written before upload attribution) must still parse, and
+    /// new fields must round-trip.
+    #[test]
+    fn sidecar_attribution_fields_are_backward_compatible() {
+        // Pre-attribution sidecar JSON — no uploader_id/community_id keys.
+        let old = r#"{"dim":"800x600","blurhash":"","thumb_url":"","ext":"jpg","mime_type":"image/jpeg","size":123,"uploaded_at":1700000000}"#;
+        let meta: BlobMeta = serde_json::from_str(old).unwrap();
+        assert_eq!(meta.uploader_id, None);
+        assert_eq!(meta.community_id, None);
+
+        // Absent attribution is omitted from serialized output (not null).
+        let json = serde_json::to_value(&meta).unwrap();
+        assert!(json.get("uploader_id").is_none());
+        assert!(json.get("community_id").is_none());
+
+        // Populated attribution round-trips.
+        let meta = BlobMeta {
+            uploader_id: Some("aa".repeat(32)),
+            community_id: Some("6b8e1c2a-0000-0000-0000-000000000000".to_string()),
+            ..meta
+        };
+        let round: BlobMeta = serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+        assert_eq!(round.uploader_id, meta.uploader_id);
+        assert_eq!(round.community_id, meta.community_id);
+    }
+}
+
+/// Build an `x-amz-meta-*` [`http::HeaderMap`] from bare metadata key/value
+/// pairs. Keys must be valid header-name characters; values must be valid
+/// header values (S3 object metadata is US-ASCII).
+fn build_amz_meta_headers(metadata: &[(&str, &str)]) -> Result<http::HeaderMap, MediaError> {
+    let mut headers = http::HeaderMap::new();
+    for (k, v) in metadata {
+        let name: http::HeaderName = format!("x-amz-meta-{k}")
+            .parse()
+            .map_err(|_| MediaError::StorageError(format!("invalid metadata key: {k}")))?;
+        let value: http::HeaderValue = v
+            .parse()
+            .map_err(|_| MediaError::StorageError(format!("invalid metadata value for {k}")))?;
+        headers.insert(name, value);
+    }
+    Ok(headers)
 }
 
 /// Metadata returned by HEAD — just enough for BUD-01 response headers.
@@ -364,4 +485,14 @@ pub struct BlobMeta {
     /// Video duration in seconds. `None` for non-video blobs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_secs: Option<f64>,
+    /// Authenticated uploader pubkey (hex). Upload attribution for
+    /// out-of-band consumers; `None` on sidecars written before attribution
+    /// existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploader_id: Option<String>,
+    /// Host-resolved community id (UUID string). Mirrors the community segment
+    /// of the sidecar key so attribution survives even if the object is copied
+    /// out of its keyed location; `None` on pre-attribution sidecars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub community_id: Option<String>,
 }

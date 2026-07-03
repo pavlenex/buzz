@@ -86,6 +86,17 @@ where
     // Compute uploaded_at once — single source of truth for sidecar and response.
     let uploaded_at = chrono::Utc::now().timestamp();
 
+    // Upload attribution: the authenticated uploader pubkey and the
+    // host-resolved community, stamped as S3 object metadata so out-of-band
+    // consumers can attribute a blob from a HEAD
+    // alone. The community comes from the server-resolved `TenantContext`,
+    // never from client input. Note the blob is shared CAS across communities:
+    // if the same bytes are later uploaded under another tenant, the re-put
+    // overwrites this metadata with the most recent uploader — the
+    // community-scoped sidecar remains the authoritative per-tenant record.
+    let uploader_id = auth_event.pubkey.to_hex();
+    let community_id = ctx.community().to_string();
+
     // Store blob first, then metadata.
     // On failure we intentionally do NOT delete the orphan blob — concurrent
     // uploads of the same hash could race and delete a blob that another
@@ -93,7 +104,17 @@ where
     // content-addressed and bounded by the upload size limit, so the storage
     // cost is negligible. A V2 background GC job can sweep blobs with no
     // matching sidecar after a grace period.
-    storage.put(&key, &body, &mime).await?;
+    storage
+        .put_with_metadata(
+            &key,
+            &body,
+            &mime,
+            &[
+                ("buzz-uploader-id", uploader_id.as_str()),
+                ("buzz-community-id", community_id.as_str()),
+            ],
+        )
+        .await?;
 
     let meta_result = store_metadata(MetadataInput {
         sha256: sha256.clone(),
@@ -101,6 +122,8 @@ where
         mime: mime.clone(),
         body: body.clone(),
         uploaded_at,
+        uploader_id,
+        community_id,
     })
     .await;
 
@@ -131,6 +154,10 @@ struct MetadataInput {
     mime: String,
     body: Bytes,
     uploaded_at: i64,
+    /// Authenticated uploader pubkey (hex), mirrored into the sidecar.
+    uploader_id: String,
+    /// Host-resolved community id, mirrored into the sidecar.
+    community_id: String,
 }
 
 /// Process an upload end-to-end: validate, store, thumbnail, return descriptor.
@@ -195,6 +222,8 @@ pub async fn process_file_upload(
                 mime_type: input.mime,
                 uploaded_at: input.uploaded_at,
                 duration_secs: None,
+                uploader_id: Some(input.uploader_id),
+                community_id: Some(input.community_id),
             };
             storage.put_sidecar(ctx, &input.sha256, &meta).await?;
             Ok(meta)
@@ -370,8 +399,23 @@ pub async fn process_video_upload(
 
     let uploaded_at = chrono::Utc::now().timestamp();
 
+    // Upload attribution — see process_buffered_upload for the rationale and
+    // the shared-CAS re-put caveat.
+    let uploader_id = auth_event.pubkey.to_hex();
+    let community_id = ctx.community().to_string();
+
     // --- 6. Stream blob from temp file to S3 ---
-    storage.put_file(&key, &tmp_path, &mime).await?;
+    storage
+        .put_file_with_metadata(
+            &key,
+            &tmp_path,
+            &mime,
+            &[
+                ("buzz-uploader-id", uploader_id.as_str()),
+                ("buzz-community-id", community_id.as_str()),
+            ],
+        )
+        .await?;
     drop(tmp); // Free temp file disk space immediately after S3 upload.
 
     // --- 7. Write sidecar (no thumbnail for video — desktop handles that) ---
@@ -384,6 +428,8 @@ pub async fn process_video_upload(
         size: file_size,
         uploaded_at,
         duration_secs: Some(video_meta.duration_secs),
+        uploader_id: Some(uploader_id),
+        community_id: Some(community_id),
     };
     storage.put_sidecar(ctx, &sha256_hex, &meta).await?;
 
@@ -418,10 +464,30 @@ async fn generate_and_store_metadata(
     .map_err(|_| MediaError::Internal)??;
 
     meta.uploaded_at = input.uploaded_at;
+    meta.uploader_id = Some(input.uploader_id);
+    meta.community_id = Some(input.community_id);
 
     if let Some(ref tb) = thumb_bytes {
+        // The thumbnail is a derived object with its own S3 key, so it carries
+        // the same attribution metadata as the source blob.
         let thumb_key = format!("{}.thumb.jpg", input.sha256);
-        storage.put(&thumb_key, tb, "image/jpeg").await?;
+        storage
+            .put_with_metadata(
+                &thumb_key,
+                tb,
+                "image/jpeg",
+                &[
+                    (
+                        "buzz-uploader-id",
+                        meta.uploader_id.as_deref().unwrap_or_default(),
+                    ),
+                    (
+                        "buzz-community-id",
+                        meta.community_id.as_deref().unwrap_or_default(),
+                    ),
+                ],
+            )
+            .await?;
     }
 
     storage.put_sidecar(ctx, &input.sha256, &meta).await?;
@@ -484,6 +550,8 @@ mod tests {
             size: 5_000_000,
             uploaded_at: 1700000000,
             duration_secs: Some(29.5),
+            uploader_id: None,
+            community_id: None,
         };
 
         let desc = build_descriptor(
@@ -542,6 +610,8 @@ mod tests {
             size: 100_000,
             uploaded_at: 1700000000,
             duration_secs: None,
+            uploader_id: None,
+            community_id: None,
         };
 
         let desc = build_descriptor(
