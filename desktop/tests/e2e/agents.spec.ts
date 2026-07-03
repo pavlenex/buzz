@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { installMockBridge } from "../helpers/bridge";
+import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
@@ -29,33 +29,8 @@ async function gotoApp(page: import("@playwright/test").Page) {
   throw lastError;
 }
 
-async function openPersonaCatalog(page: import("@playwright/test").Page) {
+async function openCreateAgentStart(page: import("@playwright/test").Page) {
   await page.getByTestId("new-agent-card").click();
-  await page.getByRole("menuitem", { name: "Choose from catalog" }).click();
-}
-
-async function getCatalogOrder(page: import("@playwright/test").Page) {
-  return page
-    .locator('[data-testid^="persona-catalog-list-item-"]')
-    .evaluateAll((elements) =>
-      elements.map((element) => element.getAttribute("data-testid") ?? ""),
-    );
-}
-
-async function selectCatalogPersona(
-  page: import("@playwright/test").Page,
-  personaId: string,
-) {
-  await page.getByTestId(`persona-catalog-list-item-${personaId}`).click();
-}
-
-async function useCatalogPersona(
-  page: import("@playwright/test").Page,
-  personaId: string,
-) {
-  await page
-    .getByTestId(`persona-catalog-use-agent-target-${personaId}`)
-    .click();
 }
 
 async function waitForInvokeBridge(page: import("@playwright/test").Page) {
@@ -153,177 +128,82 @@ async function invokeTauriExpectError(
   );
 }
 
-test("built-in personas are used from the catalog dialog", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 420 });
+test("create agent wizard offers blank, import, and template starting points", async ({
+  page,
+}) => {
   await gotoApp(page);
   await page.getByTestId("open-agents-view").click();
 
   await expect(page.getByTestId("agents-library-personas")).toBeVisible();
-  await openPersonaCatalog(page);
-  await expect(page.getByTestId("persona-catalog-dialog")).toContainText(
-    "Fizz",
-  );
-  const previewPersonas = [
-    ["builtin:product-strategist", "Product Strategist"],
-    ["builtin:implementation-partner", "Implementation Partner"],
-    ["builtin:qa-reviewer", "QA Reviewer"],
-    ["builtin:work-coordinator", "Work Coordinator"],
-    ["builtin:support-guide", "Support Guide"],
-    ["builtin:experiment-designer", "Experiment Designer"],
-  ] as const;
-  for (const [, personaName] of previewPersonas) {
-    await expect(page.getByTestId("persona-catalog-dialog")).toContainText(
-      personaName,
-    );
-  }
-  for (const [personaId, personaName] of previewPersonas) {
-    await expect(
-      page
-        .getByTestId(`persona-catalog-list-item-${personaId}`)
-        .getByRole("img", { name: `${personaName} avatar` }),
-    ).toHaveAttribute("src", /.+/);
-  }
-  await expect(page.getByTestId("persona-catalog-dialog-header")).toBeVisible();
-  await expect(
-    page.getByTestId("persona-catalog-dialog-scroll-area"),
-  ).toBeVisible();
-  await expect(
-    page.getByTestId("persona-catalog-dialog-scroll-area"),
-  ).toHaveCSS("overflow-y", "auto");
-  const catalogScrollAreaMetrics = await page
-    .getByTestId("persona-catalog-dialog-scroll-area")
-    .evaluate((element) => ({
-      clientHeight: element.clientHeight,
-      scrollHeight: element.scrollHeight,
-    }));
-  expect(catalogScrollAreaMetrics.clientHeight).toBeGreaterThan(0);
-  expect(catalogScrollAreaMetrics.scrollHeight).toBeGreaterThanOrEqual(
-    catalogScrollAreaMetrics.clientHeight,
-  );
-  await expect(page.getByTestId("persona-catalog-dialog-body")).toBeVisible();
-  await expect(page.getByTestId("persona-catalog-dialog")).not.toContainText(
-    "Done",
-  );
-  await expect(page.getByRole("tooltip")).toHaveCount(0);
-  const initialCatalogOrder = await getCatalogOrder(page);
+  await openCreateAgentStart(page);
 
-  await selectCatalogPersona(page, "builtin:fizz");
-  await useCatalogPersona(page, "builtin:fizz");
+  await expect(page.getByTestId("create-agent-start-blank")).toBeVisible();
+  await expect(page.getByTestId("create-agent-start-import")).toBeVisible();
   await expect(
-    page
-      .locator("[data-sonner-toast]")
-      .filter({ hasText: "Selected Fizz for My Agents." }),
-  ).toBeVisible();
-
-  await expect(page.getByTestId("agents-library-personas")).toContainText(
-    "Fizz",
-  );
+    page.getByTestId("create-agent-template-builtin:fizz"),
+  ).toContainText("Fizz");
   await expect(
-    page.getByTestId("persona-catalog-use-agent-target-builtin:fizz"),
-  ).toHaveText("Added to My Agents");
-  await expect(
-    page.getByTestId("persona-catalog-use-agent-target-builtin:fizz"),
-  ).toBeDisabled();
-  await expect(page.getByTestId("persona-catalog-dialog")).not.toContainText(
-    "Remove from My Agents",
-  );
-  await expect.poll(() => getCatalogOrder(page)).toEqual(initialCatalogOrder);
+    page.getByTestId("create-agent-template-builtin:product-strategist"),
+  ).toContainText("Product Strategist");
 });
 
-test("agent catalog can reopen from the populated library header", async ({
+test("selecting a template prefills the create agent form", async ({
   page,
 }) => {
   await gotoApp(page);
   await page.getByTestId("open-agents-view").click();
-  await openPersonaCatalog(page);
+  await openCreateAgentStart(page);
 
-  await selectCatalogPersona(page, "builtin:fizz");
-  await useCatalogPersona(page, "builtin:fizz");
-  await expect(page.getByTestId("agents-library-personas")).toContainText(
-    "Fizz",
-  );
+  await page.getByTestId("create-agent-template-builtin:fizz").click();
 
-  await page.keyboard.press("Escape");
-  await openPersonaCatalog(page);
-
-  await expect(page.getByTestId("persona-catalog-dialog")).toBeVisible();
-  await selectCatalogPersona(page, "builtin:fizz");
-  await expect(
-    page.getByTestId("persona-catalog-use-agent-target-builtin:fizz"),
-  ).toBeDisabled();
-});
-
-test("agent catalog chooser order stays stable when selection changes", async ({
-  page,
-}) => {
-  await gotoApp(page);
-  await page.getByTestId("open-agents-view").click();
-  await openPersonaCatalog(page);
-
-  const before = await getCatalogOrder(page);
-
-  await selectCatalogPersona(page, "builtin:fizz");
-  await useCatalogPersona(page, "builtin:fizz");
-  await expect(
-    page
-      .locator("[data-sonner-toast]")
-      .filter({ hasText: "Selected Fizz for My Agents." }),
-  ).toBeVisible();
-
-  expect(await getCatalogOrder(page)).toEqual(before);
-});
-
-test("catalog detail pane shows the full persona details", async ({ page }) => {
-  await gotoApp(page);
-  await page.getByTestId("open-agents-view").click();
-  await openPersonaCatalog(page);
-
-  await selectCatalogPersona(page, "builtin:fizz");
-  const useAgentTarget = page.getByTestId(
-    "persona-catalog-use-agent-target-builtin:fizz",
-  );
-
-  await expect(page.getByTestId("persona-catalog-detail-pane")).toContainText(
-    "Fizz",
-  );
-  await expect(
-    page.getByTestId("persona-catalog-detail-pane"),
-  ).not.toContainText("Added by You");
-  await expect(page.getByTestId("persona-catalog-detail-pane")).toContainText(
+  await expect(page.getByTestId("agent-name-input")).toHaveValue("Fizz");
+  await expect(page.getByTestId("agent-instructions-input")).toHaveValue(
     "You are Fizz.",
   );
-  await expect(page.getByTestId("persona-catalog-detail-pane")).toContainText(
-    "Built-in persona",
-  );
-  await expect(page.getByTestId("persona-catalog-detail-pane")).toContainText(
-    "Preferred model",
-  );
-  await expect(page.getByTestId("persona-catalog-detail-pane")).toContainText(
-    "Preferred runtime",
-  );
-  await expect(page.getByTestId("persona-catalog-detail-pane")).toContainText(
-    "Agent instruction",
-  );
-  await expect(useAgentTarget).toHaveAttribute(
-    "aria-label",
-    "Add Fizz from Agent Catalog",
-  );
-  await expect(useAgentTarget).toHaveText("Add agent");
+  await expect(page.getByTestId("create-agent-submit")).toBeVisible();
+});
 
-  await useAgentTarget.click();
+test("template submit creates an agent card in the grid", async ({ page }) => {
+  await gotoApp(page);
+  await page.getByTestId("open-agents-view").click();
+  await openCreateAgentStart(page);
+
+  await page.getByTestId("create-agent-template-builtin:fizz").click();
+  await expect(page.getByTestId("agent-name-input")).toHaveValue("Fizz");
+  await expect(page.getByTestId("create-agent-submit")).toBeEnabled();
+  await page.getByTestId("create-agent-submit").click();
+
+  // The secret-reveal dialog confirms the create round-trip; dismiss it.
+  await expect(page.getByText("Agent created")).toBeVisible();
+  await page.keyboard.press("Escape");
+
   await expect(page.getByTestId("agents-library-personas")).toContainText(
     "Fizz",
   );
 });
 
-test("custom personas can be shown in the agent catalog", async ({ page }) => {
-  const analystPersonaId = "custom:analyst";
+test("blank starting point opens an empty create agent form", async ({
+  page,
+}) => {
+  await gotoApp(page);
+  await page.getByTestId("open-agents-view").click();
+  await openCreateAgentStart(page);
+
+  await page.getByTestId("create-agent-start-blank").click();
+
+  await expect(page.getByTestId("agent-name-input")).toHaveValue("");
+  await expect(page.getByTestId("create-agent-submit")).toBeDisabled();
+});
+
+test("agent cards expose edit, duplicate, channel, export, and remove actions", async ({
+  page,
+}) => {
   await installMockBridge(page, {
-    personas: [
+    managedAgents: [
       {
-        id: analystPersonaId,
-        displayName: "Analyst",
-        systemPrompt: "You are Analyst.",
+        pubkey: TEST_IDENTITIES.alice.pubkey,
+        name: "Honey",
+        status: "stopped",
       },
     ],
   });
@@ -331,116 +211,70 @@ test("custom personas can be shown in the agent catalog", async ({ page }) => {
 
   await page.getByTestId("open-agents-view").click();
   await expect(page.getByTestId("agents-library-personas")).toContainText(
-    "Analyst",
+    "Honey",
   );
 
-  await page.getByLabel("Open actions for Analyst").click();
+  await page.getByLabel("Open actions for Honey").click();
   await expect(page.getByRole("menuitem")).toHaveText([
-    "Catalog options",
     "Edit",
     "Duplicate",
-    "Remove from My Agents",
+    "Add to channel",
+    "Export",
+    "Remove",
   ]);
-  await expect(
-    page.getByRole("menuitem", { name: "Catalog options" }),
-  ).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "Export" })).toHaveCount(0);
-  await page.getByRole("menuitem", { name: "Catalog options" }).click();
-
-  await expect(page.getByTestId("persona-share-dialog")).toBeVisible();
-  await expect(page.getByTestId("persona-share-dialog")).toContainText(
-    "Catalog options",
-  );
-  await expect(page.getByTestId("persona-share-dialog")).toContainText(
-    "Added by You",
-  );
-  await expect(page.getByTestId("persona-share-copy-link")).toHaveCount(0);
-  await expect(page.getByText("Show in my catalog")).toBeVisible();
-  await expect(page.getByTestId("persona-share-export")).toBeVisible();
-  await page.getByTestId("persona-share-show-in-catalog").click();
-  await page.keyboard.press("Escape");
-
-  await openPersonaCatalog(page);
-  await expect(
-    page.getByTestId(`persona-catalog-list-item-${analystPersonaId}`),
-  ).toContainText("Analyst");
-  await selectCatalogPersona(page, analystPersonaId);
-  await expect(page.getByTestId("persona-catalog-detail-pane")).toContainText(
-    "Custom persona",
-  );
-  await expect(
-    page.getByTestId(`persona-catalog-use-agent-target-${analystPersonaId}`),
-  ).toHaveText("Added to My Agents");
 });
 
-test("team-managed personas do not expose editable actions", async ({
+test("duplicate opens the create form prefilled from the agent", async ({
   page,
 }) => {
   await installMockBridge(page, {
-    personas: [
+    managedAgents: [
       {
-        id: "team:analyst",
-        displayName: "Team Analyst",
-        sourceTeam: "team-research-002",
-        systemPrompt: "You are Team Analyst.",
+        pubkey: TEST_IDENTITIES.alice.pubkey,
+        name: "Honey",
+        status: "stopped",
       },
     ],
   });
   await gotoApp(page);
 
   await page.getByTestId("open-agents-view").click();
-  await page.getByLabel("Open actions for Team Analyst").click();
+  await page.getByLabel("Open actions for Honey").click();
+  await page.getByRole("menuitem", { name: "Duplicate" }).click();
 
-  await expect(page.getByRole("menuitem")).toHaveText([
-    "Catalog options",
-    "Duplicate",
-    "Managed by team",
-  ]);
-  await expect(page.getByRole("menuitem", { name: "Edit" })).toHaveCount(0);
-  await expect(
-    page.getByRole("menuitem", { name: "Remove from My Agents" }),
-  ).toHaveCount(0);
+  await expect(page.getByText("Duplicate Honey")).toBeVisible();
+  await expect(page.getByTestId("agent-name-input")).toHaveValue("Honey copy");
 });
 
-test("inactive built-ins cannot be used to create teams", async ({ page }) => {
+test("teams can be created with agent members", async ({ page }) => {
+  await gotoApp(page);
+
+  const team = await invokeTauri<{
+    id: string;
+    agent_pubkeys: string[];
+  }>(page, "create_team", {
+    input: {
+      name: "Bee Squad",
+      personaIds: [],
+      agentPubkeys: [TEST_IDENTITIES.alice.pubkey],
+    },
+  });
+
+  expect(team.agent_pubkeys).toEqual([TEST_IDENTITIES.alice.pubkey]);
+});
+
+test("inactive personas cannot be used to create teams", async ({ page }) => {
   await gotoApp(page);
 
   const error = await invokeTauriExpectError(page, "create_team", {
     input: {
       name: "Fizzes",
-      personaIds: ["builtin:fizz"],
+      personaIds: ["builtin:product-strategist"],
+      agentPubkeys: [],
     },
   });
 
-  expect(error).toBe(
-    "Fizz is not in My Agents. Choose it from Agent Catalog first.",
-  );
-});
-
-test("built-in removal failures show up from My Agents", async ({ page }) => {
-  await gotoApp(page);
-
-  await page.getByTestId("open-agents-view").click();
-  await openPersonaCatalog(page);
-  await selectCatalogPersona(page, "builtin:fizz");
-  await useCatalogPersona(page, "builtin:fizz");
-
-  await invokeTauri(page, "create_team", {
-    input: {
-      name: "Fizzes",
-      personaIds: ["builtin:fizz"],
-    },
-  });
-
-  await page.keyboard.press("Escape");
-  await page.getByLabel("Open actions for Fizz").click();
-  await page.getByRole("menuitem", { name: "Remove from My Agents" }).click();
-
-  await expect(
-    page
-      .locator("[data-sonner-toast]")
-      .filter({ hasText: "Fizz is still referenced by a team." }),
-  ).toBeVisible();
+  expect(error).toBe("Product Strategist is not available for new agents.");
 });
 
 test("personas referenced by teams cannot be deleted", async ({ page }) => {
@@ -457,6 +291,7 @@ test("personas referenced by teams cannot be deleted", async ({ page }) => {
     input: {
       name: "Analysts",
       personaIds: [persona.id],
+      agentPubkeys: [],
     },
   });
 

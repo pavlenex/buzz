@@ -119,14 +119,14 @@ test("create agent supports parallelism and system prompt overrides", async ({
   await page.goto("/");
   await page.getByTestId("open-agents-view").click();
   await page.getByTestId("new-agent-card").click();
-  await page.getByText("Custom agent").click();
+  await page.getByTestId("create-agent-start-blank").click();
 
   await page.getByTestId("agent-name-input").fill(agentName);
+  await page
+    .getByTestId("agent-instructions-input")
+    .fill("You are concise and parallelize independent work.");
   await page.getByRole("button", { name: "Advanced setup" }).click();
   await page.getByTestId("agent-parallelism-input").fill("3");
-  await page
-    .getByTestId("agent-system-prompt-input")
-    .fill("You are concise and parallelize independent work.");
   await page.getByTestId("create-agent-submit").click();
 
   await expect(

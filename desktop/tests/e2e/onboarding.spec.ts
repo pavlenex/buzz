@@ -482,9 +482,7 @@ async function expectWelcomeGuideIntro(
           limit: 10,
         }),
       ]);
-      const fizz = agents.find(
-        (agent) => agent.name === "Fizz" && agent.persona_id === "builtin:fizz",
-      );
+      const fizz = agents.find((agent) => agent.name === "Fizz");
       const fizzMember = fizz
         ? members.members.find((member) => member.pubkey === fizz.pubkey)
         : null;
@@ -506,7 +504,6 @@ async function expectWelcomeGuideIntro(
 
       return {
         fizzIsBot: fizzMember?.role === "bot" && fizzMember.is_agent,
-        fizzPersonaId: fizz?.persona_id ?? null,
         introContent: intro?.content ?? null,
         introMatchesFizz: Boolean(fizz && intro?.pubkey === fizz.pubkey),
         fizzWelcomeHitCount: fizzWelcomeHits.length,
@@ -515,7 +512,6 @@ async function expectWelcomeGuideIntro(
     })
     .toEqual({
       fizzIsBot: true,
-      fizzPersonaId: "builtin:fizz",
       introContent:
         "Hi, I'm Fizz. Welcome to Buzz.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in Buzz, or just talk through what you want to build.",
       introMatchesFizz: true,

@@ -267,20 +267,15 @@ test("agent env_vars override persona env_vars on the agent record", async ({
   expect(updated.agent.env_vars).toEqual({ AGENT_ONLY: "2" });
 });
 
-test("env vars editor renders in PersonaDialog new-persona form", async ({
-  page,
-}) => {
+test("env vars editor renders in the create agent form", async ({ page }) => {
   await gotoApp(page);
 
-  // Open the Agents view, click New > New agent to open the persona dialog.
+  // Open the Agents view, then the create wizard with a blank start.
   await page.getByTestId("open-agents-view").click();
   await page.getByTestId("new-agent-card").click();
-  await page.getByRole("menuitem", { name: /^New agent$/ }).click();
+  await page.getByTestId("create-agent-start-blank").click();
 
-  await expect(page.getByTestId("env-vars-editor")).toHaveCount(0);
-  await page.getByRole("button", { name: "Advanced", exact: true }).click();
-
-  // The env vars editor should be present after opening Advanced.
+  // The env vars editor is part of the create form.
   await expect(page.getByTestId("env-vars-editor")).toBeVisible();
   // Initially empty (no rows).
   await expect(page.getByTestId("env-vars-key")).toHaveCount(0);
@@ -306,26 +301,26 @@ test("env vars editor renders in PersonaDialog new-persona form", async ({
   await waitForAnimations(page);
   await page
     .getByRole("dialog")
-    .screenshot({ path: "test-results/persona-env-dialog.png" });
+    .screenshot({ path: "test-results/agent-env-dialog.png" });
 
   // Remove the first row to verify per-row removal still works.
   await page.getByTestId("env-vars-remove").first().click();
   await expect(keys).toHaveCount(2);
 });
 
-test("persona model options follow the selected LLM provider", async ({
+test("agent model options follow the selected LLM provider", async ({
   page,
 }) => {
   await gotoApp(page);
 
   await page.getByTestId("open-agents-view").click();
   await page.getByTestId("new-agent-card").click();
-  await page.getByRole("menuitem", { name: /^New agent$/ }).click();
+  await page.getByTestId("create-agent-start-blank").click();
 
-  const provider = page.locator("#persona-runtime");
-  const llmProvider = page.locator("#persona-llm-provider");
+  const runtime = page.locator("#agent-runtime");
+  const llmProvider = page.locator("#agent-llm-provider");
   const model = page.locator("#persona-model");
-  await expect(provider).toContainText("Buzz Agent (default)");
+  await expect(runtime).toHaveValue("buzz-agent");
   await expect(llmProvider).toBeVisible();
   await expect(model).toBeVisible();
   // Without live discovery, the only static option is "Default model".
@@ -336,7 +331,6 @@ test("persona model options follow the selected LLM provider", async ({
   const providerApiKey = page.getByTestId("persona-provider-api-key");
   await expect(page.getByText("OpenAI API key")).toBeVisible();
   await expect(providerApiKey).toBeVisible();
-  await expect(page.getByTestId("env-vars-editor")).toHaveCount(0);
   await expect(model).toBeVisible();
   // OpenAI requires an explicit model, so "Default model" is filtered out.
   // The menu offers only "Custom model..." — verify it is present and selectable.
