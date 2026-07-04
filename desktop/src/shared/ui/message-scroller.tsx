@@ -19,8 +19,15 @@ function MessageScrollerProvider(
 function MessageScroller({
   className,
   children,
+  topFade = false,
   ...props
-}: React.ComponentProps<typeof MessageScrollerPrimitive.Root>) {
+}: React.ComponentProps<typeof MessageScrollerPrimitive.Root> & {
+  /**
+   * Fade content out as it scrolls under the header above the scroller —
+   * the same treatment the sidebar's pinned header applies to channels.
+   */
+  topFade?: boolean;
+}) {
   return (
     <MessageScrollerPrimitive.Root
       className={cn(
@@ -31,9 +38,15 @@ function MessageScroller({
       {...props}
     >
       {children}
-      {/* Bottom fade as an overlay instead of a mask-image on the scrolling
+      {/* Edge fades as overlays instead of a mask-image on the scrolling
           viewport — masks on scroll containers force per-frame repaints in
           WKWebView and make scrolling visibly choppy. */}
+      {topFade ? (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-background to-transparent"
+        />
+      ) : null}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-transparent to-background"

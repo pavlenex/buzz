@@ -468,7 +468,7 @@ export function ChatDetail({
         key={chat.id}
         scrollEdgeThreshold={48}
       >
-        <MessageScroller className="bg-background">
+        <MessageScroller className="bg-background" topFade>
           <MessageScrollerViewport aria-label="Chat messages">
             <MessageScrollerContent
               className={cn(CHAT_CONVERSATION_CLASS, "py-6")}
