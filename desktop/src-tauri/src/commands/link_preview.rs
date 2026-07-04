@@ -23,6 +23,8 @@ pub struct GithubPullRequestInfo {
     pub additions: i64,
     pub deletions: i64,
     pub changed_files: i64,
+    /// Source branch of the PR (`head.ref`).
+    pub head_ref: String,
 }
 
 /// Fetch live PR details from the GitHub REST API.
@@ -80,6 +82,7 @@ pub async fn fetch_github_pull_request(
         additions: body["additions"].as_i64().unwrap_or(0),
         deletions: body["deletions"].as_i64().unwrap_or(0),
         changed_files: body["changed_files"].as_i64().unwrap_or(0),
+        head_ref: body["head"]["ref"].as_str().unwrap_or_default().to_string(),
     }))
 }
 

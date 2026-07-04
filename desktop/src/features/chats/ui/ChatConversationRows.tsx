@@ -73,11 +73,12 @@ export function ChatMessageRow({
       <MessageContent
         className={cn(isOwn && "items-end", isAgent && "w-full max-w-full")}
       >
-        {!hideIdentity ? (
-          <MessageHeader className={isOwn ? "justify-end" : undefined}>
-            <span className="truncate font-medium">
-              {isOwn ? "You" : displayName}
-            </span>
+        {/* Own bubbles need no "You" header — the right-aligned bubble is
+            self-explanatory. Other authors keep their name (unless the solo
+            chat hides the lone agent's identity). */}
+        {!hideIdentity && !isOwn ? (
+          <MessageHeader>
+            <span className="truncate font-medium">{displayName}</span>
           </MessageHeader>
         ) : null}
         {isAgent ? (

@@ -26,6 +26,7 @@ import {
   NO_PROJECT_SELECTION_ID,
 } from "@/features/chats/lib/chatSetup";
 import { ChatActivityTranscript } from "@/features/chats/ui/ChatActivityTranscript";
+import { ChatWorkPanel } from "@/features/chats/ui/ChatWorkPanel";
 import { isHumanFacingAssistantText } from "@/features/chats/ui/chatActivityText";
 import { entranceClassForCreatedAt } from "@/features/chats/ui/messageEntrance";
 import {
@@ -46,6 +47,7 @@ import type {
 } from "@/shared/api/types";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
+import { extractSupportedLinkPreviews } from "@/shared/lib/linkPreview";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   MessageScroller,
@@ -246,6 +248,28 @@ export function ChatDetail({
     [chatActivity.hiddenAgentMessageIds, defaultAgent?.pubkey, messages],
   );
   const hasTranscriptActivity = chatActivity.totalBlockCount > 0;
+
+  // The latest PR link the agent posted in this chat drives the top-right
+  // work module (branch + live PR card).
+  const agentPullRequestHref = React.useMemo(() => {
+    if (!defaultAgent?.pubkey) {
+      return null;
+    }
+    const agentKey = normalizePubkey(defaultAgent.pubkey);
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index];
+      if (normalizePubkey(message.pubkey) !== agentKey) {
+        continue;
+      }
+      const preview = extractSupportedLinkPreviews(message.content).find(
+        (candidate) => candidate.kind === "github-pull-request",
+      );
+      if (preview) {
+        return preview.href;
+      }
+    }
+    return null;
+  }, [defaultAgent?.pubkey, messages]);
 
   // Solo chats (you + one agent) read as a plain stream: agent rows drop
   // their avatar and name. Identities come back as soon as another agent or
@@ -462,151 +486,164 @@ export function ChatDetail({
         transparentChrome
       />
 
-      <MessageScrollerProvider
-        autoScroll
-        defaultScrollPosition="end"
-        key={chat.id}
-        scrollEdgeThreshold={48}
-      >
-        <MessageScroller className="bg-background" topFade>
-          <MessageScrollerViewport aria-label="Chat messages">
-            <MessageScrollerContent
-              className={cn(CHAT_CONVERSATION_CLASS, "py-6")}
-            >
-              {isLoadingMessages ? (
-                <MessageScrollerItem messageId="chat:loading">
-                  <div className="flex items-center gap-2 px-5 py-1 text-sm text-muted-foreground">
-                    <Spinner className="h-4 w-4" />
-                    Loading messages
-                  </div>
-                </MessageScrollerItem>
-              ) : visibleMessages.length === 0 && !hasTranscriptActivity ? (
-                <MessageScrollerItem
-                  className="flex flex-1 items-center justify-center"
-                  messageId="chat:empty"
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <MessageScrollerProvider
+            autoScroll
+            defaultScrollPosition="end"
+            key={chat.id}
+            scrollEdgeThreshold={48}
+          >
+            <MessageScroller className="bg-background" topFade>
+              <MessageScrollerViewport aria-label="Chat messages">
+                <MessageScrollerContent
+                  className={cn(CHAT_CONVERSATION_CLASS, "py-6")}
                 >
-                  <div className="px-8 py-12 text-center">
-                    <MessageCircle className="mx-auto h-5 w-5 text-muted-foreground" />
-                    <p className="mt-3 text-sm font-medium">No messages yet</p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Send a message and Fizz will respond.
-                    </p>
-                  </div>
-                </MessageScrollerItem>
-              ) : (
-                <>
-                  {visibleMessages.map((message) => {
-                    const activityBlocks =
-                      chatActivity.blocksByMessageId.get(message.id) ?? [];
-                    const isContextMessage = eventHasTag(
-                      message,
-                      "chat_context",
-                      "source",
-                    );
-                    const isAgentMessage =
-                      defaultAgent?.pubkey != null &&
-                      normalizePubkey(message.pubkey) ===
-                        normalizePubkey(defaultAgent.pubkey);
-                    const isOwnMessage =
-                      identityPubkey != null &&
-                      normalizePubkey(message.pubkey) ===
-                        normalizePubkey(identityPubkey);
-
-                    return (
-                      <React.Fragment key={message.localKey ?? message.id}>
-                        <MessageScrollerItem
-                          className={entranceClassForCreatedAt(
-                            message.created_at,
-                          )}
-                          messageId={message.id}
-                        >
-                          {isContextMessage ? (
-                            <ChatContextRow event={message} />
-                          ) : (
-                            <ChatMessageRow
-                              event={message}
-                              isAgent={isAgentMessage}
-                              isOwn={isOwnMessage}
-                              profiles={profiles}
-                              showAgentIdentity={showAgentIdentity}
-                            />
-                          )}
-                        </MessageScrollerItem>
-                        {activityBlocks.length > 0 ? (
-                          <MessageScrollerItem
-                            messageId={`chat:activity:${message.id}`}
-                          >
-                            <ChatActivityTranscript
-                              agent={defaultAgent}
-                              blocks={activityBlocks}
-                              identityPubkey={identityPubkey}
-                              activeTurnIds={activeTurnIds}
-                              showAgentIdentity={showAgentIdentity}
-                              profiles={profiles}
-                            />
-                          </MessageScrollerItem>
-                        ) : null}
-                        {shouldShowAgentActivationCard &&
-                        latestVisibleMessage?.id === message.id ? (
-                          <MessageScrollerItem
-                            messageId={`chat:activate-agent:${message.id}`}
-                          >
-                            <AgentActivationCard
-                              agentName={defaultAgent?.name ?? "Fizz"}
-                              isActivating={isActivatingAgent}
-                              onActivate={onActivateAgent}
-                            />
-                          </MessageScrollerItem>
-                        ) : null}
-                      </React.Fragment>
-                    );
-                  })}
-                  {chatActivity.unplacedBlocks.length > 0 ? (
-                    <MessageScrollerItem messageId="chat:activity:unplaced">
-                      <ChatActivityTranscript
-                        agent={defaultAgent}
-                        blocks={chatActivity.unplacedBlocks}
-                        identityPubkey={identityPubkey}
-                        activeTurnIds={activeTurnIds}
-                        profiles={profiles}
-                        showAgentIdentity={showAgentIdentity}
-                      />
+                  {isLoadingMessages ? (
+                    <MessageScrollerItem messageId="chat:loading">
+                      <div className="flex items-center gap-2 px-5 py-1 text-sm text-muted-foreground">
+                        <Spinner className="h-4 w-4" />
+                        Loading messages
+                      </div>
                     </MessageScrollerItem>
-                  ) : null}
-                </>
-              )}
-            </MessageScrollerContent>
-          </MessageScrollerViewport>
-          <MessageScrollerButton />
-          <ChatScrollAnchor forceSignature={forceScrollSignature} />
-        </MessageScroller>
-      </MessageScrollerProvider>
+                  ) : visibleMessages.length === 0 && !hasTranscriptActivity ? (
+                    <MessageScrollerItem
+                      className="flex flex-1 items-center justify-center"
+                      messageId="chat:empty"
+                    >
+                      <div className="px-8 py-12 text-center">
+                        <MessageCircle className="mx-auto h-5 w-5 text-muted-foreground" />
+                        <p className="mt-3 text-sm font-medium">
+                          No messages yet
+                        </p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Send a message and Fizz will respond.
+                        </p>
+                      </div>
+                    </MessageScrollerItem>
+                  ) : (
+                    <>
+                      {visibleMessages.map((message) => {
+                        const activityBlocks =
+                          chatActivity.blocksByMessageId.get(message.id) ?? [];
+                        const isContextMessage = eventHasTag(
+                          message,
+                          "chat_context",
+                          "source",
+                        );
+                        const isAgentMessage =
+                          defaultAgent?.pubkey != null &&
+                          normalizePubkey(message.pubkey) ===
+                            normalizePubkey(defaultAgent.pubkey);
+                        const isOwnMessage =
+                          identityPubkey != null &&
+                          normalizePubkey(message.pubkey) ===
+                            normalizePubkey(identityPubkey);
 
-      <div className="shrink-0 bg-background">
-        <MessageComposer
-          autoInviteNonMemberMentions
-          channelId={chat.id}
-          channelName={chat.name}
-          channelType="chat"
-          containerClassName={cn(CHAT_CONVERSATION_CLASS, "pb-3")}
-          disabled={isSending}
-          draftKey={`chat:${chat.id}`}
-          isSending={isSending}
-          onSend={onSend}
-          placeholder="Message Fizz..."
-          profiles={profiles}
-          toolbarControls={{ emoji: false, formatting: false, spoiler: false }}
-          toolbarExtraActions={
-            <ProjectPicker
-              isNoProjectSelected={!selectedProject && metadata !== null}
-              onCreateProject={onProjectCreated}
-              onSelectProject={handleSelectProject}
-              projects={projects}
-              selectedProject={selectedProject}
-              templates={templates}
+                        return (
+                          <React.Fragment key={message.localKey ?? message.id}>
+                            <MessageScrollerItem
+                              className={entranceClassForCreatedAt(
+                                message.created_at,
+                              )}
+                              messageId={message.id}
+                            >
+                              {isContextMessage ? (
+                                <ChatContextRow event={message} />
+                              ) : (
+                                <ChatMessageRow
+                                  event={message}
+                                  isAgent={isAgentMessage}
+                                  isOwn={isOwnMessage}
+                                  profiles={profiles}
+                                  showAgentIdentity={showAgentIdentity}
+                                />
+                              )}
+                            </MessageScrollerItem>
+                            {activityBlocks.length > 0 ? (
+                              <MessageScrollerItem
+                                messageId={`chat:activity:${message.id}`}
+                              >
+                                <ChatActivityTranscript
+                                  agent={defaultAgent}
+                                  blocks={activityBlocks}
+                                  identityPubkey={identityPubkey}
+                                  activeTurnIds={activeTurnIds}
+                                  showAgentIdentity={showAgentIdentity}
+                                  profiles={profiles}
+                                />
+                              </MessageScrollerItem>
+                            ) : null}
+                            {shouldShowAgentActivationCard &&
+                            latestVisibleMessage?.id === message.id ? (
+                              <MessageScrollerItem
+                                messageId={`chat:activate-agent:${message.id}`}
+                              >
+                                <AgentActivationCard
+                                  agentName={defaultAgent?.name ?? "Fizz"}
+                                  isActivating={isActivatingAgent}
+                                  onActivate={onActivateAgent}
+                                />
+                              </MessageScrollerItem>
+                            ) : null}
+                          </React.Fragment>
+                        );
+                      })}
+                      {chatActivity.unplacedBlocks.length > 0 ? (
+                        <MessageScrollerItem messageId="chat:activity:unplaced">
+                          <ChatActivityTranscript
+                            agent={defaultAgent}
+                            blocks={chatActivity.unplacedBlocks}
+                            identityPubkey={identityPubkey}
+                            activeTurnIds={activeTurnIds}
+                            profiles={profiles}
+                            showAgentIdentity={showAgentIdentity}
+                          />
+                        </MessageScrollerItem>
+                      ) : null}
+                    </>
+                  )}
+                </MessageScrollerContent>
+              </MessageScrollerViewport>
+              <MessageScrollerButton />
+              <ChatScrollAnchor forceSignature={forceScrollSignature} />
+            </MessageScroller>
+          </MessageScrollerProvider>
+
+          <div className="shrink-0 bg-background">
+            <MessageComposer
+              autoInviteNonMemberMentions
+              channelId={chat.id}
+              channelName={chat.name}
+              channelType="chat"
+              containerClassName={cn(CHAT_CONVERSATION_CLASS, "pb-3")}
+              disabled={isSending}
+              draftKey={`chat:${chat.id}`}
+              isSending={isSending}
+              onSend={onSend}
+              placeholder="Message Fizz..."
+              profiles={profiles}
+              toolbarControls={{
+                emoji: false,
+                formatting: false,
+                spoiler: false,
+              }}
+              toolbarExtraActions={
+                <ProjectPicker
+                  isNoProjectSelected={!selectedProject && metadata !== null}
+                  onCreateProject={onProjectCreated}
+                  onSelectProject={handleSelectProject}
+                  projects={projects}
+                  selectedProject={selectedProject}
+                  templates={templates}
+                />
+              }
             />
-          }
-        />
+          </div>
+        </div>
+        {agentPullRequestHref ? (
+          <ChatWorkPanel prHref={agentPullRequestHref} />
+        ) : null}
       </div>
     </>
   );

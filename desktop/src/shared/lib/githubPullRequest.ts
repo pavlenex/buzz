@@ -11,6 +11,8 @@ export type GithubPullRequestInfo = {
   additions: number;
   deletions: number;
   changedFiles: number;
+  /** Source branch of the PR (`head.ref`). */
+  headRef: string;
 };
 
 export type GithubPullRequestRef = {

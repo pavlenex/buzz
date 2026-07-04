@@ -480,11 +480,9 @@ function ChatTranscriptMessageRow({
         </MessageAvatar>
       ) : null}
       <MessageContent className={isUser ? "items-end" : "w-full max-w-full"}>
-        {!hideIdentity ? (
-          <MessageHeader className={isUser ? "justify-end" : undefined}>
-            <span className="truncate font-medium">
-              {isUser ? "You" : label}
-            </span>
+        {!hideIdentity && !isUser ? (
+          <MessageHeader>
+            <span className="truncate font-medium">{label}</span>
           </MessageHeader>
         ) : null}
         {isUser ? (

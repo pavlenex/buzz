@@ -8899,6 +8899,7 @@ export function maybeInstallE2eTauriMocks() {
           additions: 1248,
           deletions: 96,
           changedFiles: 24,
+          headRef: "kennylopez-chatmode",
           number: prPayload.number ?? 0,
         };
       }

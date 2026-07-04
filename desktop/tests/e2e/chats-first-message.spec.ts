@@ -142,9 +142,14 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
     .toBeGreaterThanOrEqual(-1);
 
   // Agent-authored PR links render the prominent agent-work card variant
-  // (banner layout with status pill), not the compact link chip.
+  // twice: inline in the message and in the top-right work panel (which
+  // also shows the PR's source branch).
   await expect(
     page.locator("[data-link-preview='github-pull-request-agent']"),
-  ).toBeVisible({ timeout: 10_000 });
+  ).toHaveCount(2, { timeout: 10_000 });
+  await expect(page.getByTestId("chat-work-panel")).toBeVisible();
+  await expect(page.getByTestId("chat-work-panel")).toContainText(
+    "kennylopez-chatmode",
+  );
   await page.screenshot({ path: "test-results/agent-pr-card.png" });
 });

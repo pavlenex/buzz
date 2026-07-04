@@ -36,7 +36,7 @@ export function ActivityMarkerRow({
       className={cn("py-1.5", entrance && "buzz-message-entrance")}
       side="left"
     >
-      <MessageContent className="max-w-[min(42rem,78%)]">
+      <MessageContent className="w-full max-w-full">
         {details ? (
           <details className="group/activity-marker" title={title}>
             <summary className="list-none">
