@@ -41,7 +41,7 @@ export function ChatWorkPanel({
     >
       {/* Fixed-width inner wrapper so content never reflows mid-slide. */}
       <div className="w-80 overflow-y-auto py-4 pl-1 pr-4">
-        <div className="flex flex-col gap-3 rounded-2xl bg-secondary p-3">
+        <div className="flex flex-col gap-3 rounded-2xl bg-muted/40 p-3">
           {branch ? (
             <div className="flex items-center gap-1.5 rounded-lg bg-background/60 px-3 py-2 text-xs">
               <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
