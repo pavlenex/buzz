@@ -96,17 +96,24 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
         __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
           channelName: string;
           content: string;
+          createdAt?: number;
           pubkey?: string;
         }) => unknown;
       };
+      // Explicit ascending timestamps: same-second events sort unstably and
+      // can flip which agent reply the run-collapse keeps visible.
+      const base = Math.floor(Date.now() / 1000);
       win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "Hello Fizz, first message",
         content: "Sure — that first message says hello.",
+        createdAt: base,
         pubkey: pubkey ?? undefined,
       });
       win.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "Hello Fizz, first message",
-        content: "Anything else you want to check while we're here?",
+        content:
+          "Done! I've opened https://github.com/block/buzz/pull/1460 with the changes.",
+        createdAt: base + 2,
         pubkey: pubkey ?? undefined,
       });
     },
@@ -133,4 +140,11 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
       }),
     )
     .toBeGreaterThanOrEqual(-1);
+
+  // Agent-authored PR links render the prominent agent-work card variant
+  // (banner layout with status pill), not the compact link chip.
+  await expect(
+    page.locator("[data-link-preview='github-pull-request-agent']"),
+  ).toBeVisible({ timeout: 10_000 });
+  await page.screenshot({ path: "test-results/agent-pr-card.png" });
 });

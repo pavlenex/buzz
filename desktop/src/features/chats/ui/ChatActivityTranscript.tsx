@@ -88,16 +88,17 @@ function isSetupLifecycleItem(item: TranscriptItem) {
 }
 
 export function ChatActivityTranscript({
+  activeTurnIds,
   agent,
   blocks,
   identityPubkey,
-  isTurnActive = false,
   profiles,
 }: {
+  /** Turn ids currently live in this channel — drives per-turn rendering. */
+  activeTurnIds?: ReadonlySet<string>;
   agent: ManagedAgent | null;
   blocks: ChatActivityRenderBlock[];
   identityPubkey?: string;
-  isTurnActive?: boolean;
   profiles?: UserProfileLookup;
 }) {
   if (blocks.length === 0) {
@@ -111,7 +112,10 @@ export function ChatActivityTranscript({
           agent={agent}
           block={renderBlock.block}
           identityPubkey={identityPubkey}
-          isTurnActive={isTurnActive}
+          isTurnActive={
+            renderBlock.block.kind === "turn" &&
+            (activeTurnIds?.has(renderBlock.block.turnId) ?? false)
+          }
           key={renderBlock.id}
           profiles={profiles}
           suppressPromptMessage={renderBlock.suppressPromptMessage}
@@ -132,6 +136,7 @@ function ChatActivityBlockView({
   agent: ManagedAgent | null;
   block: TranscriptDisplayBlock;
   identityPubkey?: string;
+  /** Whether THIS block's turn is live (per-turn, never channel-wide). */
   isTurnActive: boolean;
   profiles?: UserProfileLookup;
   suppressPromptMessage: boolean;
@@ -172,7 +177,7 @@ function ChatActivityBlockView({
           suppressPromptMessage={suppressPromptMessage}
         />
       ))}
-      {!hasLiveActivityItem(block) ? (
+      {isTurnActive && !hasLiveActivityItem(block) ? (
         <LiveTurnMarker
           agentPubkey={agent?.pubkey}
           icon={liveTurnMarkerIcon(block)}
@@ -466,6 +471,7 @@ function ChatTranscriptMessageRow({
           </Bubble>
         ) : (
           <Markdown
+            agentAuthored
             className="w-full max-w-none text-sm leading-6"
             content={displayText || text || " "}
           />

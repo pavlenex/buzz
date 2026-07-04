@@ -37,6 +37,7 @@ import remarkMessageLinks from "@/features/messages/lib/remarkMessageLinks";
 import { AttachmentGroup } from "@/shared/ui/attachment";
 import { ConfigNudgeCard } from "@/shared/ui/config-nudge-attachment";
 import {
+  AgentPullRequestCard,
   GithubPullRequestCard,
   LinkPreviewAttachment,
 } from "@/shared/ui/link-preview-attachment";
@@ -1918,6 +1919,7 @@ function createMarkdownComponents(
 }
 
 function MarkdownInner({
+  agentAuthored = false,
   channelNames,
   className,
   configNudgeAuthorPubkey,
@@ -2077,7 +2079,11 @@ function MarkdownInner({
           >
             {resolvedLinkPreviews.map((preview) =>
               preview.kind === "github-pull-request" ? (
-                <GithubPullRequestCard key={preview.href} preview={preview} />
+                agentAuthored ? (
+                  <AgentPullRequestCard key={preview.href} preview={preview} />
+                ) : (
+                  <GithubPullRequestCard key={preview.href} preview={preview} />
+                )
               ) : (
                 <LinkPreviewAttachment key={preview.href} preview={preview} />
               ),
@@ -2093,6 +2099,7 @@ export const Markdown = React.memo(
   MarkdownInner,
   (prev, next) =>
     prev.content === next.content &&
+    prev.agentAuthored === next.agentAuthored &&
     prev.className === next.className &&
     prev.customEmoji === next.customEmoji &&
     prev.interactive === next.interactive &&

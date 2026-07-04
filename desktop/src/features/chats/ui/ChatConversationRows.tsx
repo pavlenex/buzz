@@ -73,6 +73,7 @@ export function ChatMessageRow({
         </MessageHeader>
         {isAgent ? (
           <Markdown
+            agentAuthored
             className="w-full max-w-none text-sm leading-6"
             content={content || " "}
           />

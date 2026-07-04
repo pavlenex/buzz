@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   ChevronDown,
@@ -12,7 +13,10 @@ import { toast } from "sonner";
 import { useChannelTemplatesQuery } from "@/features/channel-templates/hooks";
 import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
-import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import {
+  managedAgentsQueryKey,
+  useManagedAgentsQuery,
+} from "@/features/agents/hooks";
 import {
   useCreateChatMutation,
   useSendChatContextMessageMutation,
@@ -88,6 +92,7 @@ export function QuickStartChat({
     string | null
   >(() => initialProjectSelection(initialProjectId, projects));
   const [isCreating, setIsCreating] = React.useState(false);
+  const queryClient = useQueryClient();
   const identityQuery = useIdentityQuery();
   const createChatMutation = useCreateChatMutation();
   const updateMetadataMutation = useUpdateChatMetadataMutation();
@@ -168,6 +173,13 @@ export function QuickStartChat({
         void applyAgents(templateId, chat.id);
 
         const agent = await ensureWelcomeGuideAgentInChannel(chat.id, relayUrl);
+        // The agent may have just been created/started outside the mutation
+        // hooks — refresh the managed-agents cache so the new chat resolves
+        // its default agent immediately (agent replies render as agent rows,
+        // not member bubbles).
+        await queryClient.invalidateQueries({
+          queryKey: managedAgentsQueryKey,
+        });
         const setupContext = buildProjectSetupContext({
           agent,
           project: selectedProject,
@@ -260,6 +272,7 @@ export function QuickStartChat({
       identityQuery.data?.pubkey,
       isCreating,
       managedAgentsQuery.data,
+      queryClient,
       onCreated,
       onProjectCreated,
       relayUrl,

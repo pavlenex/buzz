@@ -43,6 +43,11 @@ export type MarkdownRuntime = {
 };
 
 export type MarkdownProps = {
+  /**
+   * Message author is an agent — link previews it authored (e.g. PR links)
+   * render their richer agent-work variants.
+   */
+  agentAuthored?: boolean;
   channelNames?: string[];
   className?: string;
   content: string;

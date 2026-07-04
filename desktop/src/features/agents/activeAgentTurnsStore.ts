@@ -42,6 +42,8 @@ type ActiveTurn = {
 export type ActiveTurnSummary = {
   channelId: string;
   anchorAt: number;
+  /** Ids of the live turns collapsed into this channel summary. */
+  turnIds: string[];
 };
 
 /** One channel with active agent work, aggregated across agents. */
@@ -420,17 +422,22 @@ export function getActiveTurnsForAgent(
   // should count from when the channel's oldest live turn began. Anchors are
   // derived here (startedAt + offset) so the latest skew estimate applies.
   const earliestByChannel = new Map<string, number>();
-  for (const turn of agentTurns.values()) {
+  const turnIdsByChannel = new Map<string, string[]>();
+  for (const [turnId, turn] of agentTurns.entries()) {
     const prior = earliestByChannel.get(turn.channelId);
     if (prior === undefined || turn.startedAt < prior) {
       earliestByChannel.set(turn.channelId, turn.startedAt);
     }
+    const ids = turnIdsByChannel.get(turn.channelId) ?? [];
+    ids.push(turnId);
+    turnIdsByChannel.set(turn.channelId, ids);
   }
 
   const result = [...earliestByChannel.entries()]
     .map(([channelId, startedAt]) => ({
       channelId,
       anchorAt: startedAt + offset,
+      turnIds: turnIdsByChannel.get(channelId) ?? [],
     }))
     .sort((a, b) => a.channelId.localeCompare(b.channelId));
   cachedTurnSummaries.set(key, result);

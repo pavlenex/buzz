@@ -110,10 +110,19 @@ export function ChatDetail({
   const updateMetadataMutation = useUpdateChatMetadataMutation();
   const hasObserver = defaultAgent ? isManagedAgentActive(defaultAgent) : false;
   const activeAgentTurns = useActiveAgentTurns(defaultAgent?.pubkey);
-  const isChatTurnActive = React.useMemo(
-    () => activeAgentTurns.some((turn) => turn.channelId === chat.id),
+  // Per-turn ids, not a channel-wide boolean: while a new turn runs, older
+  // turn blocks must still render as completed (and never show their own
+  // "Working" marker).
+  const activeTurnIds = React.useMemo(
+    () =>
+      new Set(
+        activeAgentTurns
+          .filter((turn) => turn.channelId === chat.id)
+          .flatMap((turn) => turn.turnIds),
+      ),
     [activeAgentTurns, chat.id],
   );
+  const isChatTurnActive = activeTurnIds.size > 0;
   const transcript = useAgentTranscript(hasObserver, defaultAgent?.pubkey);
   const scopedTranscript = React.useMemo(
     () => scopeByChannel(transcript, chat.id),
@@ -509,7 +518,7 @@ export function ChatDetail({
                               agent={defaultAgent}
                               blocks={activityBlocks}
                               identityPubkey={identityPubkey}
-                              isTurnActive={isChatTurnActive}
+                              activeTurnIds={activeTurnIds}
                               profiles={profiles}
                             />
                           </MessageScrollerItem>
@@ -535,7 +544,7 @@ export function ChatDetail({
                         agent={defaultAgent}
                         blocks={chatActivity.unplacedBlocks}
                         identityPubkey={identityPubkey}
-                        isTurnActive={isChatTurnActive}
+                        activeTurnIds={activeTurnIds}
                         profiles={profiles}
                       />
                     </MessageScrollerItem>
