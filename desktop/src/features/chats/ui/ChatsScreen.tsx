@@ -310,42 +310,21 @@ export function ChatsScreen({
   );
   const archiveChatMutation = useArchiveChatMutation();
 
-  // Latest PR link ANY agent in the chat posted — drives the header toggle
-  // and the top-right work module. Matching only the default agent missed
-  // PRs from additional agents added to the chat.
+  // Latest PR link posted in the chat by ANY participant — drives the header
+  // toggle and the top-right work module. Author-scoping this proved too
+  // brittle (agents added to the chat aren't necessarily in the viewer's
+  // managed list), and a PR link dropped by a human is the chat's work too.
   const agentPullRequestHref = React.useMemo(() => {
-    const agentKeys = new Set(
-      (managedAgentsQuery.data ?? []).map((agent) =>
-        normalizePubkey(agent.pubkey),
-      ),
-    );
-    const configuredAgent =
-      metadata?.defaultAgentPubkey ?? defaultAgent?.pubkey;
-    if (configuredAgent) {
-      agentKeys.add(normalizePubkey(configuredAgent));
-    }
-    if (agentKeys.size === 0) {
-      return null;
-    }
     for (let index = messages.length - 1; index >= 0; index--) {
-      const message = messages[index];
-      if (!agentKeys.has(normalizePubkey(message.pubkey))) {
-        continue;
-      }
-      const preview = extractSupportedLinkPreviews(message.content).find(
-        (candidate) => candidate.kind === "github-pull-request",
-      );
+      const preview = extractSupportedLinkPreviews(
+        messages[index].content,
+      ).find((candidate) => candidate.kind === "github-pull-request");
       if (preview) {
         return preview.href;
       }
     }
     return null;
-  }, [
-    defaultAgent?.pubkey,
-    managedAgentsQuery.data,
-    messages,
-    metadata?.defaultAgentPubkey,
-  ]);
+  }, [messages]);
   // null = auto: open once the agent has produced a PR, closed otherwise.
   // A click stores an explicit preference for the current chat.
   const [workPanelPreference, setWorkPanelPreference] = React.useState<
