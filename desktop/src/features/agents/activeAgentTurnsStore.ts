@@ -53,6 +53,8 @@ export type ActiveChannelTurnSummary = {
   agentCount: number;
   agentPubkeys: string[];
   agentNames?: string[];
+  /** Live turn ids in this channel, across all tracked agents. */
+  turnIds: string[];
 };
 
 // Module-level state: agentPubkey → turnId → ActiveTurn
@@ -468,25 +470,27 @@ export function getActiveTurnsByChannel(): ActiveChannelTurnSummary[] {
 
   const summaries = new Map<
     string,
-    { anchorAt: number; agentPubkeys: Set<string> }
+    { anchorAt: number; agentPubkeys: Set<string>; turnIds: string[] }
   >();
 
   for (const [agentKey, agentTurns] of activeTurnsByAgent) {
     if (agentTurns.size === 0) continue;
     const offset = clockOffsetByAgent.get(agentKey) ?? 0;
 
-    for (const turn of agentTurns.values()) {
+    for (const [turnId, turn] of agentTurns.entries()) {
       const anchorAt = turn.startedAt + offset;
       const summary = summaries.get(turn.channelId);
       if (!summary) {
         summaries.set(turn.channelId, {
           anchorAt,
           agentPubkeys: new Set([agentKey]),
+          turnIds: [turnId],
         });
         continue;
       }
 
       summary.agentPubkeys.add(agentKey);
+      summary.turnIds.push(turnId);
       if (anchorAt < summary.anchorAt) {
         summary.anchorAt = anchorAt;
       }
@@ -499,6 +503,7 @@ export function getActiveTurnsByChannel(): ActiveChannelTurnSummary[] {
       anchorAt: summary.anchorAt,
       agentCount: summary.agentPubkeys.size,
       agentPubkeys: [...summary.agentPubkeys].sort(),
+      turnIds: summary.turnIds.sort(),
     }))
     .sort((a, b) => a.channelId.localeCompare(b.channelId));
   cachedChannelTurnSummaries = result;

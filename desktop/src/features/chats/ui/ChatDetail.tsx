@@ -3,12 +3,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 
-import { useActiveAgentTurns } from "@/features/agents/activeAgentTurnsStore";
+import { useActiveAgentTurnsByChannel } from "@/features/agents/activeAgentTurnsStore";
+import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
 import { scopeByChannel } from "@/features/agents/ui/agentSessionPanelLayout";
 import {
   useAgentChatTitle,
-  useAgentTranscript,
+  useAgentsTranscript,
 } from "@/features/agents/ui/useObserverEvents";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useUpdateChatMetadataMutation } from "@/features/chats/hooks";
@@ -120,22 +121,34 @@ export function ChatDetail({
 }: ChatDetailProps) {
   const queryClient = useQueryClient();
   const updateMetadataMutation = useUpdateChatMetadataMutation();
-  const hasObserver = defaultAgent ? isManagedAgentActive(defaultAgent) : false;
-  const activeAgentTurns = useActiveAgentTurns(defaultAgent?.pubkey);
+  // Every active managed agent, not just the default: a chat can have
+  // several agents working and all of their activity must render.
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const activeAgentPubkeys = React.useMemo(() => {
+    const pubkeys = (managedAgentsQuery.data ?? [])
+      .filter(isManagedAgentActive)
+      .map((agent) => normalizePubkey(agent.pubkey));
+    if (defaultAgent && isManagedAgentActive(defaultAgent)) {
+      pubkeys.push(normalizePubkey(defaultAgent.pubkey));
+    }
+    return [...new Set(pubkeys)].sort();
+  }, [defaultAgent, managedAgentsQuery.data]);
+  const hasObserver = activeAgentPubkeys.length > 0;
+  const activeChannelTurns = useActiveAgentTurnsByChannel();
   // Per-turn ids, not a channel-wide boolean: while a new turn runs, older
   // turn blocks must still render as completed (and never show their own
   // "Working" marker).
   const activeTurnIds = React.useMemo(
     () =>
       new Set(
-        activeAgentTurns
+        activeChannelTurns
           .filter((turn) => turn.channelId === chat.id)
           .flatMap((turn) => turn.turnIds),
       ),
-    [activeAgentTurns, chat.id],
+    [activeChannelTurns, chat.id],
   );
   const isChatTurnActive = activeTurnIds.size > 0;
-  const transcript = useAgentTranscript(hasObserver, defaultAgent?.pubkey);
+  const transcript = useAgentsTranscript(hasObserver, activeAgentPubkeys);
   const scopedTranscript = React.useMemo(
     () => scopeByChannel(transcript, chat.id),
     [chat.id, transcript],
@@ -161,16 +174,24 @@ export function ChatDetail({
     [defaultAgent?.pubkey, messages, scopedTranscript],
   );
   const handleStopAgent = React.useCallback(() => {
-    if (!defaultAgent?.pubkey) {
-      return;
-    }
-    cancelManagedAgentTurn(defaultAgent.pubkey, chat.id).catch(
-      (error: unknown) => {
+    // Cancel every agent with a live turn in this chat; fall back to the
+    // default agent when the turn store hasn't caught up yet.
+    const workingPubkeys =
+      activeChannelTurns.find((turn) => turn.channelId === chat.id)
+        ?.agentPubkeys ?? [];
+    const targets =
+      workingPubkeys.length > 0
+        ? workingPubkeys
+        : defaultAgent?.pubkey
+          ? [defaultAgent.pubkey]
+          : [];
+    for (const pubkey of targets) {
+      cancelManagedAgentTurn(pubkey, chat.id).catch((error: unknown) => {
         console.error("Failed to stop agent turn", error);
         toast.error("Could not stop the agent");
-      },
-    );
-  }, [chat.id, defaultAgent?.pubkey]);
+      });
+    }
+  }, [activeChannelTurns, chat.id, defaultAgent?.pubkey]);
   const selectedProject = React.useMemo(
     () => chatProjectForMetadata(metadata),
     [metadata],

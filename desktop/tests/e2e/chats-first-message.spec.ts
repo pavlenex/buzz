@@ -196,6 +196,38 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
   await page.screenshot({ path: "test-results/agent-pr-card.png" });
 });
 
+test("new chat screen shows agent, directory, and invite preset cards", async ({
+  page,
+}) => {
+  await installMockBridge(page);
+  await page.goto("/#/chats");
+
+  const agentCard = page.getByTestId("chat-preset-agent");
+  const directoryCard = page.getByTestId("chat-preset-directory");
+  const inviteCard = page.getByTestId("chat-preset-invite");
+  await expect(agentCard).toBeVisible();
+  await expect(agentCard).toContainText("Fizz");
+  await expect(directoryCard).toBeVisible();
+  await expect(inviteCard).toBeVisible();
+  await expect(inviteCard).toContainText("Invite");
+
+  // Agent picker lists the default agent option.
+  await agentCard.click();
+  await expect(
+    page.getByRole("dialog").getByText("Default agent"),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // Invite picker searches the user directory and stores a selection.
+  await inviteCard.click();
+  await page.getByPlaceholder("Search people").fill("alice");
+  await page.getByRole("dialog").getByText("alice").click();
+  await page.keyboard.press("Escape");
+  await expect(inviteCard).toContainText("1 invited");
+
+  await page.screenshot({ path: "test-results/chat-start-presets.png" });
+});
+
 test("sidebar chat title shimmers while the agent has an active turn", async ({
   page,
 }) => {

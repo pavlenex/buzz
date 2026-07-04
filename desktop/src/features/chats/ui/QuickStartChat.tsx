@@ -15,8 +15,28 @@ import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate"
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import {
   managedAgentsQueryKey,
+  useAvailableAcpRuntimes,
   useManagedAgentsQuery,
+  usePersonasQuery,
+  useTeamsQuery,
 } from "@/features/agents/hooks";
+import {
+  attachManagedAgentToChannel,
+  createChannelManagedAgents,
+  type CreateChannelManagedAgentInput,
+} from "@/features/agents/channelAgents";
+import { resolvePersonaRuntime } from "@/features/agents/lib/resolvePersonaRuntime";
+import {
+  getUsableTeams,
+  resolveTeamPersonas,
+} from "@/features/agents/lib/teamPersonas";
+import { useLastRuntime } from "@/features/agents/lib/useLastRuntime";
+import {
+  type ChatAgentPreset,
+  type ChatInvitee,
+  ChatStartPresets,
+  ProjectPresetCard,
+} from "@/features/chats/ui/ChatStartPresets";
 import {
   useCreateChatMutation,
   useSendChatContextMessageMutation,
@@ -32,10 +52,18 @@ import {
 import { ChatProjectDialog } from "@/features/chats/ui/ChatProjectDialog";
 import { splitOutgoingTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
-import { ensureWelcomeGuideAgentInChannel } from "@/features/onboarding/welcomeGuide";
+import {
+  ensureWelcomeGuideAgentInChannel,
+  WELCOME_GUIDE_AGENT_NAME,
+} from "@/features/onboarding/welcomeGuide";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { addChannelMembers, sendChannelMessage } from "@/shared/api/tauri";
-import type { Channel, ChannelTemplate } from "@/shared/api/types";
+import type {
+  AgentTeam,
+  Channel,
+  ChannelTemplate,
+  ManagedAgent,
+} from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
@@ -92,6 +120,10 @@ export function QuickStartChat({
     string | null
   >(() => initialProjectSelection(initialProjectId, projects));
   const [isCreating, setIsCreating] = React.useState(false);
+  const [agentPreset, setAgentPreset] = React.useState<ChatAgentPreset>({
+    kind: "default",
+  });
+  const [invited, setInvited] = React.useState<ChatInvitee[]>([]);
   const queryClient = useQueryClient();
   const identityQuery = useIdentityQuery();
   const createChatMutation = useCreateChatMutation();
@@ -100,6 +132,14 @@ export function QuickStartChat({
   const templatesQuery = useChannelTemplatesQuery();
   const managedAgentsQuery = useManagedAgentsQuery();
   const { applyAgents, applyCanvas } = useApplyTemplate();
+  const personasQuery = usePersonasQuery();
+  const teamsQuery = useTeamsQuery();
+  const acpRuntimesQuery = useAvailableAcpRuntimes();
+  const { lastRuntimeId } = useLastRuntime();
+  const usableTeams = React.useMemo(
+    () => getUsableTeams(teamsQuery.data ?? [], personasQuery.data ?? []),
+    [personasQuery.data, teamsQuery.data],
+  );
   const templates = templatesQuery.data ?? [];
   const allProjects = projects;
   const selectedProject =
@@ -138,6 +178,58 @@ export function QuickStartChat({
     [onProjectCreated],
   );
 
+  // Create the team's persona agents in the new chat (mirrors the template
+  // agent flow) and return the first as the chat's default agent.
+  const createTeamAgents = React.useCallback(
+    async (team: AgentTeam, channelId: string): Promise<ManagedAgent> => {
+      const runtimes = acpRuntimesQuery.data ?? [];
+      const defaultProvider =
+        runtimes.find((runtime) => runtime.id === lastRuntimeId) ??
+        runtimes[0] ??
+        null;
+      if (!defaultProvider) {
+        throw new Error("No agent runtimes available for the team");
+      }
+      const { resolvedPersonas } = resolveTeamPersonas(
+        team,
+        personasQuery.data ?? [],
+      );
+      const inputs: CreateChannelManagedAgentInput[] = resolvedPersonas.map(
+        (persona) => ({
+          runtime:
+            resolvePersonaRuntime(persona.runtime, runtimes, defaultProvider)
+              .runtime ?? defaultProvider,
+          name: persona.displayName,
+          personaId: persona.id,
+          systemPrompt: persona.systemPrompt,
+          avatarUrl: persona.avatarUrl ?? undefined,
+          model: persona.model ?? undefined,
+          role: "bot",
+          ensureRunning: true,
+        }),
+      );
+      if (inputs.length === 0) {
+        throw new Error("The team has no usable agents");
+      }
+      const result = await createChannelManagedAgents(channelId, inputs);
+      const first = result.successes[0]?.agent;
+      if (!first) {
+        throw new Error(
+          result.failures[0]?.error ?? "Could not create the team's agents",
+        );
+      }
+      if (result.failures.length > 0) {
+        toast.warning(
+          result.failures.length === 1
+            ? "1 team agent could not be created"
+            : `${result.failures.length} team agents could not be created`,
+        );
+      }
+      return first;
+    },
+    [acpRuntimesQuery.data, lastRuntimeId, personasQuery.data],
+  );
+
   const handleCreate = React.useCallback(
     async (
       content: string,
@@ -172,7 +264,21 @@ export function QuickStartChat({
         await applyCanvas(templateId, chat.id, title, projectCanvasContext);
         void applyAgents(templateId, chat.id);
 
-        const agent = await ensureWelcomeGuideAgentInChannel(chat.id, relayUrl);
+        // The preset picked on the start screen decides which agent(s) the
+        // chat opens with; the welcome guide remains the default.
+        let agent: ManagedAgent;
+        if (agentPreset.kind === "agent") {
+          const attached = await attachManagedAgentToChannel(chat.id, {
+            agent: agentPreset.agent,
+            ensureRunning: true,
+            role: "bot",
+          });
+          agent = attached.agent;
+        } else if (agentPreset.kind === "team") {
+          agent = await createTeamAgents(agentPreset.team, chat.id);
+        } else {
+          agent = await ensureWelcomeGuideAgentInChannel(chat.id, relayUrl);
+        }
         // The agent may have just been created/started outside the mutation
         // hooks — refresh the managed-agents cache so the new chat resolves
         // its default agent immediately (agent replies render as agent rows,
@@ -204,15 +310,21 @@ export function QuickStartChat({
           });
         }
 
-        const memberMentionPubkeys = nonAgentMentionPubkeys({
-          defaultAgentPubkey: agent.pubkey,
-          identityPubkey: identityQuery.data?.pubkey,
-          managedAgentPubkeys:
-            managedAgentsQuery.data?.map(
-              (managedAgent) => managedAgent.pubkey,
-            ) ?? [],
-          mentionPubkeys,
-        });
+        const memberMentionPubkeys = [
+          ...new Set([
+            ...nonAgentMentionPubkeys({
+              defaultAgentPubkey: agent.pubkey,
+              identityPubkey: identityQuery.data?.pubkey,
+              managedAgentPubkeys:
+                managedAgentsQuery.data?.map(
+                  (managedAgent) => managedAgent.pubkey,
+                ) ?? [],
+              mentionPubkeys,
+            }),
+            // People picked in the invite preset card.
+            ...invited.map((person) => normalizePubkey(person.pubkey)),
+          ]),
+        ];
         if (memberMentionPubkeys.length > 0) {
           const result = await addChannelMembers({
             channelId: chat.id,
@@ -266,9 +378,12 @@ export function QuickStartChat({
       }
     },
     [
+      agentPreset,
       applyAgents,
       applyCanvas,
       createChatMutation,
+      createTeamAgents,
+      invited,
       identityQuery.data?.pubkey,
       isCreating,
       managedAgentsQuery.data,
@@ -303,12 +418,45 @@ export function QuickStartChat({
         transparentChrome
       />
 
-      <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 items-center px-4 py-6 sm:px-6 lg:px-8">
-        <div className="w-full text-center">
-          <h2 className="text-xl font-semibold tracking-tight">Start a chat</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Describe a task or ask a question.
-          </p>
+      <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 items-center overflow-y-auto px-4 py-6 sm:px-6 lg:px-8">
+        <div className="w-full">
+          <div className="text-center">
+            <h2 className="text-xl font-semibold tracking-tight">
+              Start a chat
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Describe a task or ask a question.
+            </p>
+          </div>
+          <ChatStartPresets
+            agentPreset={agentPreset}
+            agents={managedAgentsQuery.data ?? []}
+            defaultAgentName={WELCOME_GUIDE_AGENT_NAME}
+            invited={invited}
+            onAgentPresetChange={setAgentPreset}
+            onInvitedChange={setInvited}
+            projectCard={
+              <ProjectPicker
+                onCreateProject={handleCreateProject}
+                onSelectProject={setSelectedProjectId}
+                isNoProjectSelected={
+                  selectedProjectId === NO_PROJECT_SELECTION_ID
+                }
+                projects={allProjects}
+                selectedProject={selectedProject}
+                templates={templates}
+                trigger={
+                  <ProjectPresetCard
+                    isNoProjectSelected={
+                      selectedProjectId === NO_PROJECT_SELECTION_ID
+                    }
+                    selectedProject={selectedProject}
+                  />
+                }
+              />
+            }
+            teams={usableTeams}
+          />
         </div>
       </div>
 
@@ -364,6 +512,7 @@ export function ProjectPicker({
   projects,
   selectedProject,
   templates,
+  trigger,
 }: {
   isNoProjectSelected: boolean;
   onCreateProject: (project: ChatProject) => void;
@@ -371,6 +520,8 @@ export function ProjectPicker({
   projects: ChatProject[];
   selectedProject: ChatProject | null;
   templates: ChannelTemplate[];
+  /** Custom popover trigger; defaults to the composer's setup pill. */
+  trigger?: React.ReactNode;
 }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -392,13 +543,15 @@ export function ProjectPicker({
     <>
       <Popover onOpenChange={setOpen} open={open}>
         <PopoverTrigger asChild>
-          <SetupPill className="max-w-64" testId="chat-project-picker">
-            <Notebook className="h-4 w-4 shrink-0" />
-            <span className="truncate">
-              {selectedProject?.name ||
-                (isNoProjectSelected ? "No project" : "Project")}
-            </span>
-          </SetupPill>
+          {trigger ?? (
+            <SetupPill className="max-w-64" testId="chat-project-picker">
+              <Notebook className="h-4 w-4 shrink-0" />
+              <span className="truncate">
+                {selectedProject?.name ||
+                  (isNoProjectSelected ? "No project" : "Project")}
+              </span>
+            </SetupPill>
+          )}
         </PopoverTrigger>
         <PopoverContent align="start" className="w-80 p-2">
           <div className="relative mb-2">
