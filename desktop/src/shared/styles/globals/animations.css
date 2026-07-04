@@ -211,9 +211,22 @@
 
 /* Accent variant: keeps the text at its normal color and sweeps a
    primary-colored band across it, for places (sidebar titles) where the
-   default dimmed-base treatment reads as a de-emphasized row. */
+   default dimmed-base treatment reads as a de-emphasized row.
+
+   The band must contrast with the TEXT it sweeps (full foreground — this
+   variant never dims), so the primary hue is pulled toward the background:
+   lighter in light mode (against near-black text), darker in dark mode
+   (against near-white text). Raw hsl(var(--primary)) sat too close to the
+   text's lightness in both themes and the sweep barely read. The narrower
+   band (300% vs 400%) also makes the highlight cover more of the visible
+   text per pass. */
 .buzz-shimmer-accent {
-  --buzz-shimmer-highlight: hsl(var(--primary));
+  --buzz-shimmer-highlight: color-mix(
+    in oklab,
+    hsl(var(--primary)) 55%,
+    hsl(var(--background))
+  );
+  --buzz-shimmer-band: 300%;
   color: inherit;
 }
 

@@ -354,12 +354,23 @@ function processEvent(agentPubkey: string, event: ObserverEvent) {
       return;
     case "acp_read":
     case "acp_write":
+    case "turn_liveness":
+    // Any other frame carrying a turn context (tool calls, assistant text,
+    // …) is equally hard evidence the turn is alive. Observer frames are
+    // ephemeral — an app that subscribes mid-turn missed `turn_started`
+    // entirely — so every in-turn frame must be able to establish the turn,
+    // not just refresh it. Without this, a chat can stream visible activity
+    // while the working indicators (sidebar shimmer, badges) stay dark
+    // until the next liveness ping happens to land.
+    //
     // turn_liveness keeps a quiet-but-alive turn from being pruned; same
-    // refresh-only path as stream activity — no surfaced summary change on its
-    // own, so it only notifies when the offset above actually moved. If the
-    // turn was pruned out from under a still-running host (a transient drop
-    // raced the pause, or the lone-crash residual self-healed), resurrect it.
-    case "turn_liveness": {
+    // refresh-only path as stream activity — no surfaced summary change on
+    // its own, so it only notifies when the offset above actually moved. If
+    // the turn was pruned out from under a still-running host (a transient
+    // drop raced the pause, or the lone-crash residual self-healed), or was
+    // never seen to start, resurrect it. The terminal tombstone still keeps
+    // frames from a completed turn (or stale replays) from reviving it.
+    default: {
       const refreshed = recordActivity(agentPubkey, event.turnId ?? null);
       if (!refreshed && resurrectTurn(agentPubkey, event)) {
         notifyListeners();

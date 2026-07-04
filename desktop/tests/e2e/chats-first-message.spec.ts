@@ -174,3 +174,58 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
   await waitForAnimations(page);
   await page.screenshot({ path: "test-results/agent-pr-card.png" });
 });
+
+test("sidebar chat title shimmers while the agent has an active turn", async ({
+  page,
+}) => {
+  await installMockBridge(page);
+  await page.goto("/#/chats");
+
+  const composer = page.locator("[contenteditable='true'], textarea").first();
+  await expect(composer).toBeVisible();
+  await composer.click();
+  await composer.fill("Spin up a new worktree to look at the panel");
+  await composer.press("Enter");
+  await expect(page).toHaveURL(/\/chats\/.+/);
+  const chatId = decodeURIComponent(
+    new URL(page.url().replace("/#/", "/")).pathname.split("/").at(-1) ?? "",
+  );
+  expect(chatId.length).toBeGreaterThan(0);
+
+  // Quiet agent: no shimmer on the sidebar title.
+  const shimmerTitle = page.locator(
+    "[data-shimmer-text*='Spin up a new worktree']",
+  );
+  await expect(shimmerTitle).toHaveCount(0);
+
+  // Seed an active turn for this chat — the row title must pick up the
+  // accent shimmer (class + animated overlay), same store the working row
+  // reads.
+  await page.evaluate(
+    ({ channelId }) => {
+      (
+        window as Window & {
+          __BUZZ_E2E_SEED_ACTIVE_TURNS__?: (input: {
+            agentPubkey: string;
+            channelId: string;
+            turnId: string;
+          }) => void;
+        }
+      ).__BUZZ_E2E_SEED_ACTIVE_TURNS__?.({
+        agentPubkey: "ab".repeat(32),
+        channelId,
+        turnId: "turn-shimmer-1",
+      });
+    },
+    { channelId: chatId },
+  );
+
+  await expect(shimmerTitle).toHaveCount(1);
+  await expect(shimmerTitle).toHaveClass(/buzz-shimmer/);
+  await expect(shimmerTitle).toHaveClass(/buzz-shimmer-accent/);
+  expect(
+    await shimmerTitle.evaluate(
+      (element) => window.getComputedStyle(element, "::before").animationName,
+    ),
+  ).toBe("buzz-shimmer");
+});
