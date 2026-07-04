@@ -461,6 +461,7 @@ pub fn run() {
             fetch_link_preview_title,
             fetch_github_pull_request,
             fetch_github_check_summary,
+            fetch_github_pr_comment_state,
             discover_acp_providers,
             install_acp_runtime,
             discover_managed_agent_prereqs,

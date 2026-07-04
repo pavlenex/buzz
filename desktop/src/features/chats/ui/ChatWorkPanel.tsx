@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  ChevronDown,
   CircleCheck,
   CircleDashed,
   CircleX,
@@ -13,8 +14,10 @@ import {
   useChatWorkAutomation,
 } from "@/features/chats/lib/chatWorkAutomation";
 import {
+  type GithubCheckSummary,
   parseGithubPullRequestRef,
   useGithubCheckSummaryQuery,
+  useGithubCommentStateQuery,
   useGithubPullRequestQuery,
 } from "@/shared/lib/githubPullRequest";
 import { parseSupportedLinkPreview } from "@/shared/lib/linkPreview";
@@ -26,11 +29,11 @@ const CHIP_CLASS =
   "flex items-center gap-1.5 rounded-2xl border border-border/70 bg-muted/30 px-3 py-2.5 text-xs";
 
 /**
- * Right-hand work drawer for a chat: branch, live PR card, CI monitor, and
- * automation toggles once the agent has produced a pull request; an empty
- * state before that. When automation is armed, CI failures and new comments
- * prompt the chat's agent automatically (deduped per head sha / comment
- * count).
+ * Right-hand work drawer for a chat: branch, live PR card, and a CI monitor
+ * once the agent has produced a pull request; an empty state before that.
+ * The monitor expands to the individual check runs and the automation
+ * toggles — when armed, CI failures and newly-open review threads prompt the
+ * chat's agent automatically (deduped per head sha / open-thread watermark).
  */
 export function ChatWorkPanel({
   chatId,
@@ -49,11 +52,14 @@ export function ChatWorkPanel({
   const pr = prQuery.data ?? null;
   const checksQuery = useGithubCheckSummaryQuery(ref, pr?.headSha);
   const checks = checksQuery.data ?? null;
+  const commentStateQuery = useGithubCommentStateQuery(ref);
+  const openThreads = commentStateQuery.data?.openThreads ?? 0;
   const automation = useChatWorkAutomation(chatId);
-  const commentTotal = pr ? pr.comments + pr.reviewComments : 0;
 
-  // Automation: prompt the agent on CI failure / new comments. Watermarks in
-  // storage keep this to one nudge per failing sha and per comment increase.
+  // Automation: prompt the agent on CI failure / newly-open review threads.
+  // Watermarks in storage keep this to one nudge per failing sha and per
+  // rise in open threads; the thread watermark re-arms once everything has
+  // been replied to (count back at zero).
   React.useEffect(() => {
     if (!onAutomationPrompt || !prHref || !pr) {
       return;
@@ -70,25 +76,16 @@ export function ChatWorkPanel({
         `CI is failing on ${prHref} (${checks.failed} of ${checks.total} checks). Investigate the failures and push fixes until the checks pass.`,
       );
     }
-    if (
-      automation.addressComments &&
-      commentTotal > 0 &&
-      (automation.lastCommentNudgeCount ?? 0) < commentTotal
-    ) {
-      updateChatWorkAutomation(chatId, { lastCommentNudgeCount: commentTotal });
+    const threadWatermark = automation.lastCommentNudgeCount ?? 0;
+    if (openThreads === 0 && threadWatermark !== 0) {
+      updateChatWorkAutomation(chatId, { lastCommentNudgeCount: 0 });
+    } else if (automation.addressComments && openThreads > threadWatermark) {
+      updateChatWorkAutomation(chatId, { lastCommentNudgeCount: openThreads });
       onAutomationPrompt(
-        `There are review comments on ${prHref}. Address each comment and its replies, push any needed changes, reply to the threads, and resolve every conversation that has been addressed.`,
+        `There are unanswered review comments on ${prHref}. Address each comment and its replies, push any needed changes, reply to the threads, and resolve every conversation that has been addressed.`,
       );
     }
-  }, [
-    automation,
-    chatId,
-    checks,
-    commentTotal,
-    onAutomationPrompt,
-    pr,
-    prHref,
-  ]);
+  }, [automation, chatId, checks, onAutomationPrompt, openThreads, pr, prHref]);
 
   return (
     <aside
@@ -116,55 +113,76 @@ export function ChatWorkPanel({
             <GithubPullRequestCard className="w-full" preview={preview} />
           ) : null}
           {preview ? (
-            <div className={CHIP_CLASS} data-testid="chat-ci-monitor">
-              <CiStatus checks={checks} />
-              <span
-                aria-hidden="true"
-                className="mx-0.5 text-muted-foreground/50"
-              >
-                ·
-              </span>
-              <MessageSquareText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="text-muted-foreground">
-                {commentTotal} comment{commentTotal === 1 ? "" : "s"}
-              </span>
-            </div>
-          ) : null}
-          {preview ? (
-            <div className={cn(CHIP_CLASS, "flex-col items-stretch gap-2.5")}>
-              <label
-                className="flex cursor-pointer items-center gap-2"
-                htmlFor="automation-auto-fix-ci"
-              >
-                <Checkbox
-                  checked={automation.autoFixCi}
-                  data-testid="automation-auto-fix-ci"
-                  id="automation-auto-fix-ci"
-                  onCheckedChange={(checked) =>
-                    updateChatWorkAutomation(chatId, {
-                      autoFixCi: checked === true,
-                    })
-                  }
-                />
-                <span>Auto-fix CI failures</span>
-              </label>
-              <label
-                className="flex cursor-pointer items-center gap-2"
-                htmlFor="automation-address-comments"
-              >
-                <Checkbox
-                  checked={automation.addressComments}
-                  data-testid="automation-address-comments"
-                  id="automation-address-comments"
-                  onCheckedChange={(checked) =>
-                    updateChatWorkAutomation(chatId, {
-                      addressComments: checked === true,
-                    })
-                  }
-                />
-                <span>Address comments & resolve</span>
-              </label>
-            </div>
+            <details
+              className={cn(CHIP_CLASS, "group/ci block p-0")}
+              data-testid="chat-ci-monitor"
+            >
+              <summary className="flex cursor-pointer select-none list-none items-center gap-1.5 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
+                <CiStatus checks={checks} />
+                <span
+                  aria-hidden="true"
+                  className="mx-0.5 text-muted-foreground/50"
+                >
+                  ·
+                </span>
+                <MessageSquareText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 truncate text-muted-foreground">
+                  {openThreads} open comment{openThreads === 1 ? "" : "s"}
+                </span>
+                <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-open/ci:rotate-180" />
+              </summary>
+              <div className="flex flex-col gap-2.5 border-t border-border/40 px-3 py-2.5">
+                {checks && checks.runs.length > 0 ? (
+                  <ul className="flex flex-col gap-1.5">
+                    {dedupeRunKeys(checks.runs).map(({ key, run }) => (
+                      <li className="flex items-center gap-1.5" key={key}>
+                        <CheckRunIcon state={run.state} />
+                        <span className="min-w-0 truncate text-muted-foreground">
+                          {run.name}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span className="text-muted-foreground">
+                    No checks reported yet.
+                  </span>
+                )}
+                <div aria-hidden="true" className="h-px bg-border/40" />
+                <label
+                  className="flex cursor-pointer items-center gap-2"
+                  htmlFor="automation-auto-fix-ci"
+                >
+                  <Checkbox
+                    checked={automation.autoFixCi}
+                    data-testid="automation-auto-fix-ci"
+                    id="automation-auto-fix-ci"
+                    onCheckedChange={(checked) =>
+                      updateChatWorkAutomation(chatId, {
+                        autoFixCi: checked === true,
+                      })
+                    }
+                  />
+                  <span>Auto-fix CI failures</span>
+                </label>
+                <label
+                  className="flex cursor-pointer items-center gap-2"
+                  htmlFor="automation-address-comments"
+                >
+                  <Checkbox
+                    checked={automation.addressComments}
+                    data-testid="automation-address-comments"
+                    id="automation-address-comments"
+                    onCheckedChange={(checked) =>
+                      updateChatWorkAutomation(chatId, {
+                        addressComments: checked === true,
+                      })
+                    }
+                  />
+                  <span>Address comments & resolve</span>
+                </label>
+              </div>
+            </details>
           ) : null}
         </div>
       </div>
@@ -172,16 +190,33 @@ export function ChatWorkPanel({
   );
 }
 
-function CiStatus({
-  checks,
-}: {
-  checks: {
-    total: number;
-    pending: number;
-    failed: number;
-    succeeded: number;
-  } | null;
-}) {
+/** Matrix jobs can repeat a check name; suffix repeats for stable keys. */
+function dedupeRunKeys(runs: GithubCheckSummary["runs"]) {
+  const seen = new Map<string, number>();
+  return runs.map((run) => {
+    const count = seen.get(run.name) ?? 0;
+    seen.set(run.name, count + 1);
+    return { key: count === 0 ? run.name : `${run.name} (${count})`, run };
+  });
+}
+
+function CheckRunIcon({ state }: { state: "pending" | "success" | "failure" }) {
+  if (state === "pending") {
+    return (
+      <LoaderCircle className="sprout-arc-spinner h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+    );
+  }
+  if (state === "failure") {
+    return (
+      <CircleX className="h-3.5 w-3.5 shrink-0 text-[color:var(--status-deleted)]" />
+    );
+  }
+  return (
+    <CircleCheck className="h-3.5 w-3.5 shrink-0 text-[color:var(--status-added)]" />
+  );
+}
+
+function CiStatus({ checks }: { checks: GithubCheckSummary | null }) {
   if (!checks || checks.total === 0) {
     return (
       <>

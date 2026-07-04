@@ -42,6 +42,27 @@ pub struct GithubCheckSummary {
     pub pending: i64,
     pub failed: i64,
     pub succeeded: i64,
+    /// Individual runs for the expanded view (name + coarse state).
+    pub runs: Vec<GithubCheckRun>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubCheckRun {
+    pub name: String,
+    /// `pending` | `success` | `failure`.
+    pub state: String,
+}
+
+/// Review-thread attention state for a PR: how many threads still await a
+/// reply from the PR author. REST cannot see GitHub's "resolved" bit (that
+/// is GraphQL-only), so a thread counts as open while its latest comment is
+/// from someone other than the PR author — replying clears it, which
+/// matches the agent workflow the chat panel automates.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubCommentState {
+    pub open_threads: i64,
 }
 
 /// Fetch live PR details from the GitHub REST API.
@@ -155,26 +176,121 @@ pub async fn fetch_github_check_summary(
         .await
         .map_err(|error| format!("github response parse failed: {error}"))?;
 
-    let runs = body["check_runs"].as_array().cloned().unwrap_or_default();
+    let raw_runs = body["check_runs"].as_array().cloned().unwrap_or_default();
     let mut pending = 0;
     let mut failed = 0;
     let mut succeeded = 0;
-    for run in &runs {
-        match run["status"].as_str().unwrap_or_default() {
+    let mut runs = Vec::with_capacity(raw_runs.len());
+    for run in &raw_runs {
+        let state = match run["status"].as_str().unwrap_or_default() {
             "completed" => match run["conclusion"].as_str().unwrap_or_default() {
-                "success" | "neutral" | "skipped" => succeeded += 1,
-                _ => failed += 1,
+                "success" | "neutral" | "skipped" => {
+                    succeeded += 1;
+                    "success"
+                }
+                _ => {
+                    failed += 1;
+                    "failure"
+                }
             },
-            _ => pending += 1,
-        }
+            _ => {
+                pending += 1;
+                "pending"
+            }
+        };
+        runs.push(GithubCheckRun {
+            name: run["name"].as_str().unwrap_or("check").to_string(),
+            state: state.to_string(),
+        });
     }
 
     Ok(Some(GithubCheckSummary {
-        total: runs.len() as i64,
+        total: raw_runs.len() as i64,
         pending,
         failed,
         succeeded,
+        runs,
     }))
+}
+
+/// Count review threads still awaiting the PR author's reply. See
+/// [`GithubCommentState`] for semantics and the REST limitation.
+#[tauri::command]
+pub async fn fetch_github_pr_comment_state(
+    owner: String,
+    repo: String,
+    number: u64,
+) -> Result<Option<GithubCommentState>, String> {
+    if !is_valid_github_name(&owner) || !is_valid_github_name(&repo) {
+        return Err("invalid GitHub repository reference".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .pool_idle_timeout(Duration::from_secs(10))
+        .pool_max_idle_per_host(1)
+        .build()
+        .map_err(|error| format!("github client failed: {error}"))?;
+
+    let base = format!("https://api.github.com/repos/{owner}/{repo}");
+    let build = |url: String| {
+        let mut request = client
+            .get(url)
+            .timeout(GITHUB_API_TIMEOUT)
+            .header(ACCEPT, "application/vnd.github+json")
+            .header(USER_AGENT, "Buzz Desktop link preview")
+            .header("X-GitHub-Api-Version", "2022-11-28");
+        if let Some(token) = ambient_github_token() {
+            request = request.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+        request
+    };
+
+    let pr_response = build(format!("{base}/pulls/{number}"))
+        .send()
+        .await
+        .map_err(|error| format!("github request failed: {error}"))?;
+    if !pr_response.status().is_success() {
+        return Ok(None);
+    }
+    let pr: serde_json::Value = pr_response
+        .json()
+        .await
+        .map_err(|error| format!("github response parse failed: {error}"))?;
+    let author = pr["user"]["login"].as_str().unwrap_or_default().to_string();
+
+    let comments_response = build(format!(
+        "{base}/pulls/{number}/comments?per_page=100&sort=created&direction=asc"
+    ))
+    .send()
+    .await
+    .map_err(|error| format!("github request failed: {error}"))?;
+    if !comments_response.status().is_success() {
+        return Ok(None);
+    }
+    let comments: serde_json::Value = comments_response
+        .json()
+        .await
+        .map_err(|error| format!("github response parse failed: {error}"))?;
+
+    // Group into threads by root comment id; the latest comment (list is
+    // created-ascending) decides whether the thread still needs the author.
+    let mut last_author_by_thread: std::collections::HashMap<i64, String> =
+        std::collections::HashMap::new();
+    for comment in comments.as_array().cloned().unwrap_or_default() {
+        let id = comment["id"].as_i64().unwrap_or_default();
+        let root = comment["in_reply_to_id"].as_i64().unwrap_or(id);
+        let login = comment["user"]["login"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        last_author_by_thread.insert(root, login);
+    }
+    let open_threads = last_author_by_thread
+        .values()
+        .filter(|login| !author.is_empty() && **login != author)
+        .count() as i64;
+
+    Ok(Some(GithubCommentState { open_threads }))
 }
 
 fn ambient_github_token() -> Option<String> {

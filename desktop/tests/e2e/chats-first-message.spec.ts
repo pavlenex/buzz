@@ -155,9 +155,14 @@ test("first message in a new chat is sent and rendered", async ({ page }) => {
     workPanel.locator("[data-link-preview='github-pull-request']"),
   ).toBeVisible();
 
-  // CI monitor and automation toggles render alongside the card.
-  await expect(page.getByTestId("chat-ci-monitor")).toContainText("CI passing");
-  await expect(page.getByTestId("chat-ci-monitor")).toContainText("3 comments");
+  // CI monitor summary shows check state plus unreplied review threads.
+  const ciMonitor = page.getByTestId("chat-ci-monitor");
+  await expect(ciMonitor).toContainText("CI passing");
+  await expect(ciMonitor).toContainText("2 open comments");
+  // Collapsed by default; expanding reveals the runs + automation toggles.
+  await expect(page.getByTestId("automation-auto-fix-ci")).not.toBeVisible();
+  await ciMonitor.locator("summary").click();
+  await expect(ciMonitor).toContainText("ci / unit-tests");
   await expect(page.getByTestId("automation-auto-fix-ci")).toBeVisible();
   await expect(page.getByTestId("automation-address-comments")).toBeVisible();
 

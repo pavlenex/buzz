@@ -26,6 +26,16 @@ export type GithubCheckSummary = {
   pending: number;
   failed: number;
   succeeded: number;
+  /** Individual check runs for the expanded monitor view. */
+  runs: Array<{ name: string; state: "pending" | "success" | "failure" }>;
+};
+
+export type GithubCommentState = {
+  /**
+   * Review threads still awaiting the PR author's reply. REST can't see the
+   * "resolved" bit, so replying is what clears a thread from this count.
+   */
+  openThreads: number;
 };
 
 export type GithubPullRequestRef = {
@@ -113,6 +123,30 @@ export function useGithubCheckSummaryQuery(
     staleTime: 30_000,
     // CI flips fast while runs execute; poll while the panel is mounted.
     refetchInterval: 45_000,
+    retry: 1,
+  });
+}
+
+export function useGithubCommentStateQuery(ref: GithubPullRequestRef | null) {
+  return useQuery({
+    enabled: ref !== null,
+    queryKey: [
+      "github-pr-comment-state",
+      ref?.owner ?? "",
+      ref?.repo ?? "",
+      ref?.number ?? 0,
+    ],
+    queryFn: async () =>
+      (await invokeTauri<GithubCommentState | null>(
+        "fetch_github_pr_comment_state",
+        {
+          owner: ref?.owner ?? "",
+          repo: ref?.repo ?? "",
+          number: ref?.number ?? 0,
+        },
+      )) ?? null,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
     retry: 1,
   });
 }
