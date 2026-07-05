@@ -233,17 +233,16 @@
    saturated instead of graying toward the background) — a rich mid-purple
    band over near-white text. */
 .buzz-shimmer-accent {
+  /* The band hugs the BACKGROUND color (a whisper of primary keeps the
+     hue): glyphs visibly wash out toward the background as it passes,
+     which is the strongest possible contrast against full-color text. */
   --buzz-shimmer-highlight: color-mix(
     in oklab,
-    hsl(var(--primary)) 40%,
+    hsl(var(--primary)) 18%,
     hsl(var(--background))
   );
   --buzz-shimmer-band: 300%;
   color: inherit;
-}
-
-.dark .buzz-shimmer-accent {
-  --buzz-shimmer-highlight: color-mix(in oklch, hsl(var(--primary)) 60%, black);
 }
 
 /* Glyph recoloring alone is too subtle at sidebar sizes — sweep a
@@ -256,7 +255,7 @@
     90deg,
     transparent 0%,
     transparent 40%,
-    hsl(var(--primary) / 0.28) 50%,
+    hsl(var(--primary) / 0.16) 50%,
     transparent 60%,
     transparent 100%
   );

@@ -55,6 +55,8 @@ import { normalizePubkey } from "@/shared/lib/pubkey";
 import { getMentionTagPubkey } from "@/shared/lib/resolveMentionNames";
 import { Button } from "@/shared/ui/button";
 
+const WORK_PANEL_OPEN_KEY = "buzz:chats:work-panel-open:v1";
+
 type ChatsScreenProps = {
   initialProjectId?: string | null;
   selectedChatId?: string | null;
@@ -335,16 +337,27 @@ export function ChatsScreen({
     }
     return null;
   }, [messages]);
-  // null = auto: open once the agent has produced a PR, closed otherwise.
-  // A click stores an explicit preference for the current chat.
+  // The drawer's open state is a single persisted preference — switching
+  // chats must NOT reset it (the panel used to re-animate open on every
+  // switch). null = never toggled: auto-open when the chat has a PR.
   const [workPanelPreference, setWorkPanelPreference] = React.useState<
     boolean | null
-  >(null);
-  const workPanelChatRef = React.useRef(selectedChatId);
-  if (workPanelChatRef.current !== selectedChatId) {
-    workPanelChatRef.current = selectedChatId;
-    setWorkPanelPreference(null);
-  }
+  >(() => {
+    try {
+      const raw = window.localStorage.getItem(WORK_PANEL_OPEN_KEY);
+      return raw === null ? null : raw === "true";
+    } catch {
+      return null;
+    }
+  });
+  const handleWorkPanelPreference = React.useCallback((next: boolean) => {
+    setWorkPanelPreference(next);
+    try {
+      window.localStorage.setItem(WORK_PANEL_OPEN_KEY, String(next));
+    } catch {
+      // Best-effort persistence.
+    }
+  }, []);
   const isWorkPanelOpen = workPanelPreference ?? agentPullRequestHref !== null;
   const startManagedAgentMutation = useStartManagedAgentMutation();
   const [isEnsuringDefaultAgent, setIsEnsuringDefaultAgent] =
@@ -638,7 +651,7 @@ export function ChatsScreen({
                     }
                     aria-pressed={isWorkPanelOpen}
                     data-testid="toggle-work-panel"
-                    onClick={() => setWorkPanelPreference(!isWorkPanelOpen)}
+                    onClick={() => handleWorkPanelPreference(!isWorkPanelOpen)}
                     size="icon"
                     type="button"
                     variant="ghost"
