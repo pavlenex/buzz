@@ -288,6 +288,37 @@ test("new chat screen shows agent, directory, and invite preset cards", async ({
   await page.screenshot({ path: "test-results/chat-start-presets.png" });
 });
 
+test("a PR can be pinned to the work panel manually", async ({ page }) => {
+  await installMockBridge(page);
+  await page.goto("/#/chats");
+  const composer = page.locator("[contenteditable='true'], textarea").first();
+  await expect(composer).toBeVisible();
+  await composer.click();
+  await composer.fill("pin a pr here");
+  await composer.press("Enter");
+  await expect(page).toHaveURL(/\/chats\/.+/);
+
+  await page.getByTestId("toggle-work-panel").click();
+  const workPanel = page.getByTestId("chat-work-panel");
+  await expect(workPanel).toBeVisible();
+
+  await page.getByTestId("chat-work-pin-pr").click();
+  await page
+    .getByTestId("chat-work-pin-input")
+    .fill("https://github.com/block/buzz/pull/1460");
+  await page.getByRole("button", { name: "Pin", exact: true }).click();
+  await expect(
+    workPanel.locator("[data-link-preview='github-pull-request']"),
+  ).toBeVisible({ timeout: 10_000 });
+
+  // Unlink clears it back to the empty state.
+  await page.getByTestId("chat-work-unlink-pr").click();
+  await expect(
+    workPanel.locator("[data-link-preview='github-pull-request']"),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("chat-work-pin-pr")).toBeVisible();
+});
+
 test("sidebar chat title shimmers while the agent has an active turn", async ({
   page,
 }) => {

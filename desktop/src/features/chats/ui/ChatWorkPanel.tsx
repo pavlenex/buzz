@@ -8,10 +8,12 @@ import {
   GitBranch,
   LoaderCircle,
   MessageSquareText,
+  Pin,
 } from "lucide-react";
 
 import {
   CHAT_PR_UNPINNED,
+  type ChatPinnedPr,
   readChatPinnedPr,
   updateChatWorkAutomation,
   useChatWorkAutomation,
@@ -28,6 +30,8 @@ import {
 import { parseSupportedLinkPreview } from "@/shared/lib/linkPreview";
 import { cn } from "@/shared/lib/cn";
 import { AnimatedTitleText } from "@/shared/ui/animated-title-text";
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
 import { Checkbox } from "@/shared/ui/checkbox";
 import { GithubPullRequestCard } from "@/shared/ui/link-preview-attachment";
 
@@ -86,35 +90,58 @@ export function ChatWorkPanel({
   // hidden panel stops polling entirely.
   const monitorActive =
     open || automation.autoFixCi || automation.addressComments;
-  // Pin resolution order: a link posted in THIS chat wins, then the chat's
-  // previously pinned PR, then branch discovery — discovery alone is
-  // ambiguous when agents reuse a worktree across chats in one project.
-  const [pinnedHref, setPinnedHref] = React.useState<string | null>(() =>
+  // Pin resolution order: a MANUAL pin outranks everything (the user said
+  // "this is the PR"), then a link posted in THIS chat, then the remembered
+  // auto pin, then branch discovery — discovery alone is ambiguous when
+  // agents reuse a worktree across chats in one project.
+  const [pinned, setPinned] = React.useState<ChatPinnedPr | null>(() =>
     readChatPinnedPr(chatId),
   );
   React.useEffect(() => {
-    setPinnedHref(readChatPinnedPr(chatId));
+    setPinned(readChatPinnedPr(chatId));
   }, [chatId]);
   // The empty-string sentinel means "user unlinked — no PR for this chat":
   // discovery stays off, posted links still win.
-  const isUnpinned = pinnedHref === CHAT_PR_UNPINNED;
+  const isUnpinned = pinned?.href === CHAT_PR_UNPINNED && pinned.manual;
   const discoveredPrQuery = useGithubPrForBranchQuery(
-    monitorActive && !prHref && pinnedHref === null ? projectPath : null,
+    monitorActive && !prHref && pinned === null ? projectPath : null,
     branch,
   );
+  const manualHref = pinned?.manual && pinned.href ? pinned.href : null;
   const effectiveHref =
+    manualHref ??
     prHref ??
-    (isUnpinned ? null : (pinnedHref ?? discoveredPrQuery.data ?? null));
+    (isUnpinned
+      ? null
+      : ((pinned?.href || null) ?? discoveredPrQuery.data ?? null));
   React.useEffect(() => {
-    if (effectiveHref && effectiveHref !== readChatPinnedPr(chatId)) {
+    // Remember what the chat resolved to — but never downgrade a manual pin.
+    const current = readChatPinnedPr(chatId);
+    if (current?.manual) {
+      return;
+    }
+    if (effectiveHref && effectiveHref !== current?.href) {
       writeChatPinnedPr(chatId, effectiveHref);
-      setPinnedHref(effectiveHref);
+      setPinned({ href: effectiveHref, manual: false });
     }
   }, [chatId, effectiveHref]);
   const handleUnlinkPr = React.useCallback(() => {
-    writeChatPinnedPr(chatId, CHAT_PR_UNPINNED);
-    setPinnedHref(CHAT_PR_UNPINNED);
+    writeChatPinnedPr(chatId, CHAT_PR_UNPINNED, true);
+    setPinned({ href: CHAT_PR_UNPINNED, manual: true });
   }, [chatId]);
+  const [isPinEditorOpen, setIsPinEditorOpen] = React.useState(false);
+  const [pinInput, setPinInput] = React.useState("");
+  const handlePinSubmit = React.useCallback(() => {
+    const trimmed = pinInput.trim();
+    if (!parseGithubPullRequestRef(trimmed)) {
+      toast.error("Enter a full GitHub pull request URL");
+      return;
+    }
+    writeChatPinnedPr(chatId, trimmed, true);
+    setPinned({ href: trimmed, manual: true });
+    setIsPinEditorOpen(false);
+    setPinInput("");
+  }, [chatId, pinInput]);
   const preview = effectiveHref
     ? parseSupportedLinkPreview(effectiveHref)
     : null;
@@ -275,15 +302,26 @@ export function ChatWorkPanel({
               key={preview.href}
             >
               <GithubPullRequestCard className="w-full" preview={preview} />
-              {!prHref ? (
-                <button
-                  className="self-end text-2xs text-muted-foreground/70 hover:text-foreground hover:underline"
-                  data-testid="chat-work-unlink-pr"
-                  onClick={handleUnlinkPr}
-                  type="button"
-                >
-                  Not this chat's PR? Unlink
-                </button>
+              {manualHref || !prHref ? (
+                <div className="flex items-center justify-end gap-2 text-2xs text-muted-foreground/70">
+                  <button
+                    className="hover:text-foreground hover:underline"
+                    data-testid="chat-work-change-pr"
+                    onClick={() => setIsPinEditorOpen(true)}
+                    type="button"
+                  >
+                    Not this chat's PR? Change
+                  </button>
+                  <span aria-hidden="true">·</span>
+                  <button
+                    className="hover:text-foreground hover:underline"
+                    data-testid="chat-work-unlink-pr"
+                    onClick={handleUnlinkPr}
+                    type="button"
+                  >
+                    Unlink
+                  </button>
+                </div>
               ) : null}
               <details
                 className={cn(CHIP_CLASS, "group/ci block p-0")}
@@ -380,6 +418,46 @@ export function ChatWorkPanel({
                 </div>
               </details>
             </div>
+          ) : null}
+          {isPinEditorOpen ? (
+            <form
+              className="flex items-center gap-1.5"
+              onSubmit={(event) => {
+                event.preventDefault();
+                handlePinSubmit();
+              }}
+            >
+              <Input
+                autoFocus
+                className="h-8 flex-1 text-xs"
+                data-testid="chat-work-pin-input"
+                onChange={(event) => setPinInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setIsPinEditorOpen(false);
+                    setPinInput("");
+                  }
+                }}
+                placeholder="https://github.com/owner/repo/pull/123"
+                value={pinInput}
+              />
+              <Button size="sm" type="submit" variant="secondary">
+                Pin
+              </Button>
+            </form>
+          ) : !preview ? (
+            <button
+              className={cn(
+                CHIP_CLASS,
+                "cursor-pointer text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground",
+              )}
+              data-testid="chat-work-pin-pr"
+              onClick={() => setIsPinEditorOpen(true)}
+              type="button"
+            >
+              <Pin className="h-3.5 w-3.5 shrink-0" />
+              Pin a pull request…
+            </button>
           ) : null}
         </div>
       </div>

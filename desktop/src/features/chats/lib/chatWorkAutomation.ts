@@ -151,12 +151,23 @@ const PR_STORAGE_PREFIX = "buzz:chat-work-pr:v1";
  * worktree to the same PR — the pin keeps each chat on the PR it actually
  * resolved first, with posted links always overriding.
  */
-export function readChatPinnedPr(chatId: string): string | null {
+export function readChatPinnedPr(chatId: string): ChatPinnedPr | null {
   if (typeof window === "undefined") {
     return null;
   }
   try {
-    return window.localStorage.getItem(`${PR_STORAGE_PREFIX}:${chatId}`);
+    const raw = window.localStorage.getItem(`${PR_STORAGE_PREFIX}:${chatId}`);
+    if (raw === null) {
+      return null;
+    }
+    // Older entries stored the bare href string.
+    if (!raw.startsWith("{")) {
+      return { href: raw, manual: raw === CHAT_PR_UNPINNED };
+    }
+    const parsed = JSON.parse(raw) as Partial<ChatPinnedPr>;
+    return typeof parsed.href === "string"
+      ? { href: parsed.href, manual: Boolean(parsed.manual) }
+      : null;
   } catch {
     return null;
   }
@@ -168,12 +179,28 @@ export function readChatPinnedPr(chatId: string): string | null {
  */
 export const CHAT_PR_UNPINNED = "";
 
-export function writeChatPinnedPr(chatId: string, href: string) {
+export type ChatPinnedPr = {
+  href: string;
+  /**
+   * True when the user pinned (or unlinked) explicitly — a manual pin
+   * outranks every automatic source, including links posted in the chat.
+   */
+  manual: boolean;
+};
+
+export function writeChatPinnedPr(
+  chatId: string,
+  href: string,
+  manual = false,
+) {
   if (typeof window === "undefined") {
     return;
   }
   try {
-    window.localStorage.setItem(`${PR_STORAGE_PREFIX}:${chatId}`, href);
+    window.localStorage.setItem(
+      `${PR_STORAGE_PREFIX}:${chatId}`,
+      JSON.stringify({ href, manual }),
+    );
   } catch {
     // Best-effort.
   }
