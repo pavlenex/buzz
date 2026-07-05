@@ -111,7 +111,7 @@ export function ChatMessageRow({
           <Markdown
             agentAuthored
             agentMentionPubkeysByName={agentMentionPubkeysByName}
-            className="w-full max-w-none text-sm leading-6"
+            className="w-full max-w-none text-sm font-medium leading-6"
             content={content || " "}
             mentionNames={mentionNames}
             mentionPubkeysByName={mentionPubkeysByName}
@@ -124,7 +124,7 @@ export function ChatMessageRow({
             <Markdown
               agentMentionPubkeysByName={agentMentionPubkeysByName}
               className={cn(
-                "min-w-0",
+                "min-w-0 font-medium",
                 isOwn &&
                   "[&_*]:text-primary-foreground [&_a]:text-primary-foreground [&_code]:bg-primary-foreground/15 [&_code]:text-primary-foreground",
               )}
