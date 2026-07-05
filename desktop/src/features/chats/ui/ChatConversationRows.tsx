@@ -232,11 +232,14 @@ export function AgentActivationCard({
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-medium">
-                  Activate {agentName} to get a response
+                  {isActivating
+                    ? `Starting ${agentName}…`
+                    : `Activate ${agentName} to get a response`}
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Your message was sent, but this agent is not active in this
-                  chat yet.
+                  {isActivating
+                    ? "It will pick up your message as soon as it connects."
+                    : "Your message was sent, but this agent is not active in this chat yet."}
                 </p>
               </div>
             </div>

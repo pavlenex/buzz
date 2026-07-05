@@ -516,10 +516,10 @@ export function ChatsScreen({
           defaultAgent.status !== "running" &&
           defaultAgent.status !== "deployed"
         ) {
-          const updatedAgent = await startManagedAgentMutation.mutateAsync(
-            defaultAgent.pubkey,
-          );
-          toast.success(`${updatedAgent.name || defaultAgent.name} activated`);
+          // No success toast: the process starting is not the same as the
+          // agent responding — the activation card holds its loading state
+          // until the agent's turn actually begins.
+          await startManagedAgentMutation.mutateAsync(defaultAgent.pubkey);
         } else {
           await managedAgentsQuery.refetch();
           toast.success(`${defaultAgent.name} activated`);

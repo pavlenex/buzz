@@ -470,6 +470,30 @@ export function ChatDetail({
   // message, and start its turn. Without this grace window the card re-shows
   // ~1s after activation and reads as "activation didn't work".
   const AGENT_ACTIVATION_GRACE_MS = 20_000;
+  // "Activated" isn't done until the agent responds: the card's button holds
+  // its loading state from click until this chat has a live turn (the card
+  // unmounts then) or the give-up window expires — the start API returning
+  // only means the process launched, not that it's connected and replaying
+  // the pending message.
+  const ACTIVATION_PENDING_MS = 60_000;
+  const [isActivationPending, setIsActivationPending] = React.useState(false);
+  const handleActivateAgent = React.useCallback(() => {
+    setIsActivationPending(true);
+    onActivateAgent();
+  }, [onActivateAgent]);
+  React.useEffect(() => {
+    if (!isActivationPending) {
+      return;
+    }
+    if (isChatTurnActive) {
+      setIsActivationPending(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setIsActivationPending(false);
+    }, ACTIVATION_PENDING_MS);
+    return () => window.clearTimeout(timeout);
+  }, [isActivationPending, isChatTurnActive]);
   const [activationGraceUntil, setActivationGraceUntil] = React.useState(0);
   const wasActivatingRef = React.useRef(false);
   React.useEffect(() => {
@@ -620,8 +644,10 @@ export function ChatDetail({
                               >
                                 <AgentActivationCard
                                   agentName={defaultAgent?.name ?? "Fizz"}
-                                  isActivating={isActivatingAgent}
-                                  onActivate={onActivateAgent}
+                                  isActivating={
+                                    isActivatingAgent || isActivationPending
+                                  }
+                                  onActivate={handleActivateAgent}
                                 />
                               </MessageScrollerItem>
                             ) : null}
