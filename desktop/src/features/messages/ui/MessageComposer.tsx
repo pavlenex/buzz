@@ -275,6 +275,7 @@ function MessageComposerImpl({
     setComposerContent,
     setEditorContentRef,
     submitMessageRef,
+    draftKey: effectiveDraftKey,
   });
   const composerScrollRef = React.useRef<HTMLDivElement>(null);
   // Set after `useLinkEditor` exists below; the editor's link-click handler
@@ -1047,5 +1048,4 @@ function MessageComposerImpl({
     </>
   );
 }
-
 export const MessageComposer = React.memo(MessageComposerImpl);
