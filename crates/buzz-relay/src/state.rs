@@ -374,16 +374,6 @@ pub struct AppState {
     /// generate fresh Nostr keys.
     pub invite_claim_rate_limiter:
         Arc<moka::sync::Cache<ScopedPubkeyKey, Arc<std::sync::atomic::AtomicU32>>>,
-    /// Per-requester sliding-window rate limiter for transcription session
-    /// minting. Key: (community_id, requester pubkey bytes). Value: (count,
-    /// window_start). Bounds the cost of OpenAI Realtime sessions minted on the
-    /// operator's bill.
-    pub transcribe_rate_limiter: Arc<ScopedRateLimiter>,
-    /// Short-lived cache of minted transcription session secrets.
-    /// Key: opaque session ID (UUID). Value: (client_secret, created_at).
-    /// Secrets are kept server-side so the desktop client never sees the raw
-    /// OpenAI bearer token — the relay proxies the SDP exchange instead.
-    pub transcribe_sessions: Arc<DashMap<String, (String, Instant)>>,
     /// Current in-flight media uploads per (community, uploader pubkey).
     pub media_uploads_in_flight: Arc<DashMap<ScopedPubkeyKey, u32>>,
     /// Cache for observer agent-owner authorization (kind 24200).
@@ -531,7 +521,6 @@ impl AppState {
                     .time_to_live(crate::api::invites::CLAIM_RATE_WINDOW)
                     .build(),
             ),
-            transcribe_rate_limiter: Arc::new(DashMap::new()),
             media_uploads_in_flight: Arc::new(DashMap::new()),
             observer_owner_cache: Arc::new(
                 moka::sync::Cache::builder()

@@ -556,6 +556,11 @@ export function AppShell() {
       return;
     }
 
+    // Track whether ⌘D keydown was dispatched so keyup only fires when
+    // a dictation session was actually started (avoids spurious events on
+    // normal 'd' typing).
+    let dictationKeyHeld = false;
+
     function handleKeyDown(event: KeyboardEvent) {
       if (!hasPrimaryShortcutModifier(event) || event.altKey || event.repeat) {
         return;
@@ -597,6 +602,7 @@ export function AppShell() {
 
       if (key === "d" && !event.shiftKey) {
         event.preventDefault();
+        dictationKeyHeld = true;
         window.dispatchEvent(new CustomEvent("buzz:dictation-key-down"));
         return;
       }
@@ -609,7 +615,8 @@ export function AppShell() {
     }
 
     function handleKeyUp(event: KeyboardEvent) {
-      if (event.key.toLowerCase() === "d") {
+      if (event.key.toLowerCase() === "d" && dictationKeyHeld) {
+        dictationKeyHeld = false;
         window.dispatchEvent(new CustomEvent("buzz:dictation-key-up"));
       }
     }

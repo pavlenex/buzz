@@ -25,7 +25,7 @@ use super::{api_error, internal_error, not_found};
 ///
 /// Returns the authenticated public key and an event ID for replay detection.
 /// For X-Pubkey dev mode, the event ID is a zero hash (no replay concern).
-pub(crate) fn verify_bridge_auth(
+fn verify_bridge_auth(
     headers: &HeaderMap,
     method: &str,
     url: &str,
