@@ -2504,13 +2504,20 @@ fn try_native_steer(
     // steering (which is to inject only what's new).
     let (header, closing) = queue::native_steer_framing();
     let event_id_hex = event.id.to_hex();
+    // Reply anchor for the steered event: without this, the agent's only
+    // in-context reply instruction is the (stale) anchor from its original
+    // prompt, so it replies into the old thread even when the new message is
+    // top-level or in a different thread. See `native_steer_reply_instruction`.
+    let reply_instruction = queue::native_steer_reply_instruction(&event);
     let be = queue::BatchEvent {
         event,
         prompt_tag: prompt_tag.clone(),
         received_at: std::time::Instant::now(),
     };
     let event_block = queue::format_event_block(channel_id, None, &be, None);
-    let body = format!("{header}\n\n[Buzz event: {prompt_tag}]\n{event_block}\n\n{closing}");
+    let body = format!(
+        "{header}\n\n[Buzz event: {prompt_tag}]\n{event_block}\n{reply_instruction}\n\n{closing}"
+    );
 
     let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<pool::SteerAck>();
     let request = pool::SteerRequest {

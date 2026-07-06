@@ -1545,6 +1545,47 @@ pub(crate) fn native_steer_framing() -> (&'static str, &'static str) {
     (framing.new_header_single, framing.closing_note)
 }
 
+/// Build the reply-anchor instruction for a natively-steered event.
+///
+/// A native steer injects a *new* event into a live turn, but the only reply
+/// instruction in the agent's context is the (now possibly stale) anchor from
+/// the original prompt. Without a fresh anchor the agent replies into the old
+/// thread even when the steered message is top-level or belongs to a different
+/// thread — the exact confusion this section prevents.
+///
+/// Anchor derivation mirrors [`resolve_reply_anchor`]:
+///   - steered event in a thread → that thread's ROOT
+///   - steered event top-level   → the event itself (it becomes the new root)
+///
+/// Unlike the batch path we have no profile lookup here (the steer body is
+/// built synchronously in the main loop), so no agent↔agent exemption is
+/// applied. That matches the documented fail-open policy in
+/// [`turn_is_human_facing`]: unknown identity is treated as human, because
+/// humans must not lose thread visibility to a misclassification. The
+/// instruction text is scoped to "replies to this new message", so an agent
+/// weaving the steer into unrelated in-progress work keeps its original
+/// anchor for that work.
+pub(crate) fn native_steer_reply_instruction(event: &Event) -> String {
+    let tags = parse_thread_tags(event);
+    let event_id = event.id.to_hex();
+    let mut s = String::new();
+    match tags.root_event_id {
+        Some(root) => s.push_str(&format!(
+            "\nIMPORTANT: For replies to this new message, use `--reply-to {root}` \
+             on `buzz messages send` — it belongs to that thread, which may differ \
+             from the thread you were working in. Do not reuse the reply anchor \
+             from your original prompt for replies to this message."
+        )),
+        None => s.push_str(&format!(
+            "\nIMPORTANT: This new message is top-level (not in your current \
+             thread). For replies to it, use `--reply-to {event_id}` on \
+             `buzz messages send` — it becomes the root of a new thread. Do NOT \
+             reply to it inside the thread you were working in."
+        )),
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3391,6 +3432,49 @@ mod tests {
         assert!(
             prompt.contains("Tags:"),
             "tags should always be included, even for stream messages"
+        );
+    }
+
+    #[test]
+    fn test_native_steer_reply_instruction_top_level_anchors_to_event() {
+        // A steered event with no thread tags is top-level: replies to it must
+        // anchor to the event itself (the new thread root), not the stale
+        // anchor from the original prompt.
+        let event = make_event("give me a status report");
+        let event_id = event.id.to_hex();
+        let instruction = native_steer_reply_instruction(&event);
+        assert!(
+            instruction.contains(&format!("--reply-to {event_id}")),
+            "top-level steer must anchor replies to the steered event: {instruction}"
+        );
+        assert!(
+            instruction.contains("top-level"),
+            "instruction should flag the message as top-level: {instruction}"
+        );
+    }
+
+    #[test]
+    fn test_native_steer_reply_instruction_threaded_anchors_to_root() {
+        // A steered event carrying thread tags anchors replies to ITS root —
+        // which may differ from the thread the in-flight turn was working in.
+        let root = "a".repeat(64);
+        let parent = "b".repeat(64);
+        let event = make_event_with_tags(
+            "steer into another thread",
+            vec![
+                vec!["e".into(), root.clone(), "".into(), "root".into()],
+                vec!["e".into(), parent, "".into(), "reply".into()],
+            ],
+        );
+        let event_id = event.id.to_hex();
+        let instruction = native_steer_reply_instruction(&event);
+        assert!(
+            instruction.contains(&format!("--reply-to {root}")),
+            "threaded steer must anchor replies to the steered event's thread root: {instruction}"
+        );
+        assert!(
+            !instruction.contains(&format!("--reply-to {event_id}")),
+            "threaded steer must not anchor to the event itself: {instruction}"
         );
     }
 
