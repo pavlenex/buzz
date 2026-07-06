@@ -616,7 +616,10 @@ export function ProjectsView() {
     () => (filter === "all" ? uniqueRepositories(projects) : []),
     [filter, projects],
   );
-  const repoSnapshotsQuery = useProjectsRepoSnapshotsQuery(snapshotProjects);
+  const repoSnapshotsQuery = useProjectsRepoSnapshotsQuery(
+    snapshotProjects,
+    activeWorkspace?.reposDir,
+  );
   const [storedViewMode, setStoredViewMode] =
     React.useState<ProjectsViewMode | null>(() => readStoredViewMode());
   const [sort, setSort] = React.useState<ProjectsSort>(() => readStoredSort());
