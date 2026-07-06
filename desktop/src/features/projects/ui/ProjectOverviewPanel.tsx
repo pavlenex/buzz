@@ -114,9 +114,7 @@ export function OverviewRailSection({
 }) {
   return (
     <section className="space-y-2 border-border/50 border-b pb-4 last:border-b-0 last:pb-0">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {title}
-      </h3>
+      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
       {children}
     </section>
   );

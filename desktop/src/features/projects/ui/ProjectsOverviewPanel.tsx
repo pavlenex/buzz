@@ -278,14 +278,9 @@ export function ProjectsOverviewPanel({
           </div>
         </div>
         <div className="overflow-hidden rounded-2xl border border-border/50 bg-muted/20 p-4">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-foreground">
-              Contribution activity
-            </h3>
-            <span className="text-xs text-muted-foreground">
-              Commits, PRs & issues across all projects
-            </span>
-          </div>
+          <h3 className="text-sm font-semibold text-foreground">
+            Contribution activity
+          </h3>
           <ProjectsContributionGraph
             activityByDay={activityByDay}
             className="mt-3"
