@@ -120,9 +120,11 @@ export function ToolItem({
           <CompactToolSummaryRow
             action={compactSummary.action}
             duration={duration}
+            failed={compactSummary.failed}
             fileEditSummary={compactSummary.fileEditSummary}
             kind={compactSummary.kind}
             preview={compactSummary.preview}
+            summaryTitle={compactSummary.summaryTitle}
             thumbnailSrc={compactSummary.thumbnailSrc}
             label={compactSummary.label}
           />

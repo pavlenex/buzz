@@ -42,6 +42,14 @@ export type CompactToolSummary = {
   action: AgentActivityAction | null;
   kind: CompactToolKind;
   label: string;
+  /**
+   * Agent-provided friendly phrase (Buzz ACP tool summary) when it won the
+   * row label. Null for failed rows — failure labels always win. The render
+   * layer must prefer this over the structured `action` descriptor.
+   */
+  summaryTitle: string | null;
+  /** True when the tool failed; the render layer must keep failure visible. */
+  failed: boolean;
   preview: string | null;
   fileEditSummary: FileEditDiffSummary | null;
   fileEditDiff: FileEditDiff | null;
@@ -81,12 +89,14 @@ export function buildCompactToolSummary(item: ToolItem): CompactToolSummary {
   const statusLabel = labelForStatus(descriptor, item.status, failed, running);
   // Prefer the agent-provided friendly phrase (Buzz ACP tool summary) as the
   // row label — but failure labels always win so errors stay unmistakable.
-  const summaryTitle = item.summaryTitle?.trim();
-  const label = !failed && summaryTitle ? summaryTitle : statusLabel;
+  const summaryTitle = (!failed && item.summaryTitle?.trim()) || null;
+  const label = summaryTitle ?? statusLabel;
   return {
     action: descriptor.action ?? null,
     kind: descriptor.renderClass,
     label,
+    summaryTitle,
+    failed,
     preview: fileEditSummary?.filename ?? descriptor.preview,
     fileEditSummary,
     fileEditDiff,
