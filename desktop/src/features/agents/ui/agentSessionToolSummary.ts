@@ -78,10 +78,15 @@ export function buildCompactToolSummary(item: ToolItem): CompactToolSummary {
   const thumbnailSrc = imageContent?.src ?? null;
   const failed = item.isError || item.status === "failed";
   const running = item.status === "executing" || item.status === "pending";
+  const statusLabel = labelForStatus(descriptor, item.status, failed, running);
+  // Prefer the agent-provided friendly phrase (Buzz ACP tool summary) as the
+  // row label — but failure labels always win so errors stay unmistakable.
+  const summaryTitle = item.summaryTitle?.trim();
+  const label = !failed && summaryTitle ? summaryTitle : statusLabel;
   return {
     action: descriptor.action ?? null,
     kind: descriptor.renderClass,
-    label: labelForStatus(descriptor, item.status, failed, running),
+    label,
     preview: fileEditSummary?.filename ?? descriptor.preview,
     fileEditSummary,
     fileEditDiff,

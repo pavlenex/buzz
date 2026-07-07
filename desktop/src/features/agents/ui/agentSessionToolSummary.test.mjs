@@ -386,3 +386,41 @@ test("buildCompactToolSummary trims only trailing blank diff lines", () => {
     { kind: "add", text: "+const after = true;" },
   ]);
 });
+
+test("buildCompactToolSummary prefers the ACP summaryTitle over the classifier label", () => {
+  const summary = buildCompactToolSummary(
+    makeTool({
+      toolName: "developer__shell",
+      args: { command: "git status" },
+      summaryTitle: "checking repository state",
+    }),
+  );
+
+  assert.equal(summary.label, "checking repository state");
+});
+
+test("buildCompactToolSummary lets failure labels win over the ACP summaryTitle", () => {
+  const summary = buildCompactToolSummary(
+    makeTool({
+      toolName: "developer__shell",
+      args: { command: "false" },
+      status: "failed",
+      isError: true,
+      summaryTitle: "running a quick command",
+    }),
+  );
+
+  assert.match(summary.label, /failed$/);
+});
+
+test("buildCompactToolSummary falls back to the classifier when summaryTitle is blank", () => {
+  const summary = buildCompactToolSummary(
+    makeTool({
+      toolName: "shell",
+      args: { command: "echo hi" },
+      summaryTitle: "   ",
+    }),
+  );
+
+  assert.equal(summary.label, "Ran command");
+});

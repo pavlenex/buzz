@@ -217,7 +217,12 @@ const overrides = new Map([
   // config_option_update) + replaceLifecycleItem helper for usage coalescing +
   // system-prompt ordering fix (turnId: null for per-channel items).
   // Load-bearing feature growth; queued to split in next transcript refactor.
-  ["src/features/agents/ui/agentSessionTranscript.ts", 1167],
+  // +24: Buzz ACP per-tool friendly titles — toolSummary-tagged
+  // tool_call_update ingestion (applyToolSummaryTitle) that must not route
+  // through upsertTool's status merge. Queued to split with the rest.
+  // +1: rebase auto-merge of main's steer-context bundling alongside the
+  // toolSummary ingestion — combined growth, same queued split.
+  ["src/features/agents/ui/agentSessionTranscript.ts", 1192],
   // catalog module; agent_models.rs retains the thin wrapper (~50 lines).
   // File still exceeds 1000 due to OpenAI/Anthropic discovery + subprocess
   // fallback. Queued to split into dedicated discovery modules.
