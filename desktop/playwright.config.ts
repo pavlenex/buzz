@@ -68,6 +68,7 @@ export default defineConfig({
         "**/human-edit-agent-content.spec.ts",
         "**/reaction-order.spec.ts",
         "**/send-channel-binding.spec.ts",
+        "**/project-commit-detail.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
