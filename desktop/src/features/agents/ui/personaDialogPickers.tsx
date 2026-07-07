@@ -30,6 +30,12 @@ export type PersonaModelOption = {
 
 export type PersonaDropdownOption = {
   disabled?: boolean;
+  /**
+   * Marks an "auto"/default option that stands in for "no explicit choice".
+   * The trigger renders it faded, like placeholder text, so it reads as
+   * helper copy rather than an actively selected value.
+   */
+  isPlaceholder?: boolean;
   label: string;
   value: string;
 };

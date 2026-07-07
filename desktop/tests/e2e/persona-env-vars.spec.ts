@@ -320,7 +320,7 @@ test("agent model options follow the selected LLM provider", async ({
   const runtime = page.locator("#agent-runtime");
   const llmProvider = page.locator("#agent-llm-provider");
   const model = page.locator("#persona-model");
-  await expect(runtime).toHaveValue("buzz-agent");
+  await expect(runtime).toContainText("Buzz Agent");
   await expect(llmProvider).toBeVisible();
   await expect(model).toBeVisible();
   // Without live discovery, the only static option is "Default model".

@@ -2,6 +2,7 @@ import type { AcpRuntime, ManagedAgentPrereqs } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
 import { describeResolvedCommand } from "./agentUi";
+import { PersonaDropdownField } from "./PersonaDropdownField";
 
 export function CreateAgentBasicsFields({
   name,
@@ -55,19 +56,19 @@ export function CreateAgentRuntimeField({
       <label className="text-sm font-medium" htmlFor="agent-runtime">
         Agent runtime
       </label>
-      <select
-        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
+      <PersonaDropdownField
         id="agent-runtime"
-        onChange={(event) => onRuntimeChange(event.target.value)}
+        onValueChange={onRuntimeChange}
+        options={[
+          ...runtimes.map((runtime) => ({
+            label: runtime.label,
+            value: runtime.id,
+          })),
+          { label: "Custom command", value: "custom" },
+        ]}
+        placeholder="Choose a runtime"
         value={selectedRuntimeId}
-      >
-        {runtimes.map((runtime) => (
-          <option key={runtime.id} value={runtime.id}>
-            {runtime.label}
-          </option>
-        ))}
-        <option value="custom">Custom command</option>
-      </select>
+      />
       {selectedRuntime ? (
         <p className="text-xs text-muted-foreground">
           Detected via{" "}

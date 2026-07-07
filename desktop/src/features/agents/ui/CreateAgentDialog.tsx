@@ -40,6 +40,7 @@ import {
   ProviderConfigFields,
 } from "./ProviderConfigFields";
 import { CreateAgentRespondToField } from "./RespondToField";
+import { PersonaDropdownField } from "./PersonaDropdownField";
 import { RelayMeshAgentSection } from "@/features/mesh-compute/ui/RelayMeshAgentSection";
 import { meshPrepareRelayMeshClient } from "@/shared/api/tauriMesh";
 import type { MeshServeTarget } from "@/shared/api/tauriMesh";
@@ -501,8 +502,12 @@ export function CreateAgentDialog({
         <div className="flex max-h-[85vh] flex-col">
           <DialogHeader className="shrink-0 border-b border-border/60 px-6 py-5 pr-14">
             <DialogTitle>{draft?.title ?? "Create agent"}</DialogTitle>
-            <DialogDescription>
-              {draft?.description ??
+            {/* A draft with intentionally-blank description keeps the line
+                for screen readers only. */}
+            <DialogDescription
+              className={draft && !draft.description ? "sr-only" : undefined}
+            >
+              {draft?.description ||
                 "Set up a new agent and start it in this workspace."}
             </DialogDescription>
           </DialogHeader>
@@ -588,19 +593,19 @@ export function CreateAgentDialog({
                     >
                       Run on
                     </label>
-                    <select
-                      className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
+                    <PersonaDropdownField
                       id="agent-run-on"
-                      onChange={(e) => handleRunOnChange(e.target.value)}
+                      onValueChange={handleRunOnChange}
+                      options={[
+                        { label: "This computer", value: "local" },
+                        ...backendProviders.map((p) => ({
+                          label: p.id,
+                          value: p.id,
+                        })),
+                      ]}
+                      placeholder="Choose where this agent runs"
                       value={runOn}
-                    >
-                      <option value="local">This computer</option>
-                      {backendProviders.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.id}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </div>
                 ) : null}
 

@@ -12,6 +12,7 @@ import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
+import { PersonaDropdownField } from "./PersonaDropdownField";
 
 /**
  * Inbound author gate UI for create/edit agent dialogs.
@@ -29,6 +30,12 @@ import { UserAvatar } from "@/shared/ui/UserAvatar";
  * authoritative validator is `validate_respond_to_allowlist` in
  * `desktop/src-tauri/src/managed_agents/types.rs`.
  */
+
+const RESPOND_TO_OPTIONS = [
+  { label: "Owner only (default)", value: "owner-only" },
+  { label: "Anyone", value: "anyone" },
+  { label: "Allowlist", value: "allowlist" },
+] as const;
 
 function formatSearchUserName(user: UserSearchResult) {
   return (
@@ -118,18 +125,14 @@ export function CreateAgentRespondToField({
       <label className="text-sm font-medium" htmlFor="agent-respond-to">
         Who can talk to this agent
       </label>
-      <select
-        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
-        data-testid="agent-respond-to-select"
+      <PersonaDropdownField
         disabled={disabled}
         id="agent-respond-to"
-        onChange={(e) => onModeChange(e.target.value as RespondToMode)}
+        onValueChange={(value) => onModeChange(value as RespondToMode)}
+        options={RESPOND_TO_OPTIONS}
+        placeholder="Choose who can talk to this agent"
         value={mode}
-      >
-        <option value="owner-only">Owner only (default)</option>
-        <option value="anyone">Anyone</option>
-        <option value="allowlist">Allowlist</option>
-      </select>
+      />
       <p className="text-xs text-muted-foreground">
         Controls which Nostr authors the agent listens to (@mentions, DMs,
         thread replies). The agent&apos;s owner can always shut it down with

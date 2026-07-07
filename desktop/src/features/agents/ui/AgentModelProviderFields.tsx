@@ -124,6 +124,9 @@ export function AgentModelProviderFields({
     : trimmedProvider || AUTO_PROVIDER_DROPDOWN_VALUE;
   const providerDropdownOptions: PersonaDropdownOption[] = [
     ...providerOptions.map((option) => ({
+      // The "Default" option means "no explicit provider" — render it faded
+      // in the trigger, like placeholder text.
+      isPlaceholder: option.id === "",
       label: option.label,
       value: option.id || AUTO_PROVIDER_DROPDOWN_VALUE,
     })),
@@ -131,6 +134,8 @@ export function AgentModelProviderFields({
   ];
   const modelDropdownOptions: PersonaDropdownOption[] = [
     ...modelOptions.map((option) => ({
+      // Same treatment for "Default model" — it's the absence of a choice.
+      isPlaceholder: option.id === "",
       label: option.label,
       value: option.id || AUTO_MODEL_DROPDOWN_VALUE,
     })),

@@ -34,6 +34,7 @@ export function PersonaDropdownField({
 }) {
   const [open, setOpen] = React.useState(false);
   const selectedOption = options.find((option) => option.value === value);
+  const showAsPlaceholder = !selectedOption || selectedOption.isPlaceholder;
 
   return (
     <div className={PERSONA_FIELD_SHELL_CLASS}>
@@ -52,7 +53,7 @@ export function PersonaDropdownField({
             <span
               className={cn(
                 "min-w-0 flex-1 truncate",
-                !selectedOption && "text-muted-foreground/55",
+                showAsPlaceholder && "text-muted-foreground/55",
               )}
             >
               {selectedOption?.label ?? placeholder}
