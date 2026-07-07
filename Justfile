@@ -6,9 +6,10 @@ desktop_dir := "desktop"
 desktop_tauri_manifest := "desktop/src-tauri/Cargo.toml"
 web_dir := "web"
 
-# Opt-in mesh-llm. Off by default so `just dev`/`just staging` skip ~420 extra
-# crates + the llama.cpp native runtime build and stay fast to iterate on.
-# Turn on to test mesh compute features: `just mesh=1 dev` / `just mesh=1 staging`.
+# Opt-in mesh-llm UI + node management (`just mesh=1 dev`). The mesh node is
+# no longer compiled in — it is downloaded on first use as the official
+# release binary — so this feature only adds a few KB of client code. Kept
+# opt-in for now; candidate for default-on.
 mesh := ""
 
 # List all available tasks
