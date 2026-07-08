@@ -704,9 +704,10 @@ export function useAnchoredScroll({
       });
       if (target !== null) {
         container.scrollTo({ top: target, behavior: "auto" });
-        // Re-baseline after the correction so the next RO batch measures shift
-        // from where we just pinned, not the pre-correction position.
-        readingAnchorRef.current = snapshotReadingAnchor(container);
+        // No re-baseline here: the rAF loop is the single writer of
+        // `readingAnchorRef` and re-snapshots from live geometry next frame
+        // (~16ms), which already reflects this correction. Writing it here too
+        // would make the "single writer" invariant a lie for no gain.
       }
     });
     // Observe every timeline row (not the content wrapper): a
