@@ -1620,7 +1620,7 @@ pub fn spawn_agent_child(
     //
     // The JSON format mirrors `setup_mode::SetupPayload` in buzz-acp:
     //   { "agent_name": "...", "agent_pubkey": "...", "requirements": [{ "surface": "...", ... }] }
-    {
+    let in_setup_mode = {
         use crate::managed_agents::{
             agent_readiness, resolve_effective_agent_env, AgentReadiness, Requirement,
         };
@@ -1682,6 +1682,7 @@ pub fn spawn_agent_child(
         command.env_remove("BUZZ_ACP_SETUP_PAYLOAD");
 
         // Set the payload only when desktop computed NotReady.
+        let in_setup_mode = setup_payload_json.is_some();
         if let Some(json) = setup_payload_json {
             command.env("BUZZ_ACP_SETUP_PAYLOAD", json);
             eprintln!(
@@ -1689,7 +1690,8 @@ pub fn spawn_agent_child(
                 record.name
             );
         }
-    }
+        in_setup_mode
+    };
     // Only emit BUZZ_ACP_IDLE_TIMEOUT when the user has explicitly set an
     // override. When unset, the buzz-acp harness applies its own default
     // (see `DEFAULT_IDLE_TIMEOUT_SECS` in crates/buzz-acp/src/config.rs),
@@ -1890,6 +1892,7 @@ pub fn spawn_agent_child(
         child,
         log_path,
         spawn_config_hash,
+        in_setup_mode,
         &record.name,
     ));
     #[cfg(not(windows))]
@@ -1897,7 +1900,41 @@ pub fn spawn_agent_child(
         child,
         log_path,
         spawn_config_hash,
+        in_setup_mode,
     })
+}
+
+/// Returns `true` when a process spawned in setup mode would now pass the
+/// readiness check under the record's current configuration — i.e. an edit
+/// has satisfied the missing requirements and only a respawn will get the
+/// agent out of the nudge-only setup listener (a setup-mode harness never
+/// re-evaluates its config; readiness is only computed at spawn, see
+/// `spawn_agent_child`).
+///
+/// `was_spawned_in_setup_mode` is the flag stamped on
+/// [`ManagedAgentProcess::in_setup_mode`] at spawn time. Passing the flag
+/// (rather than the process) keeps this unit-testable without a live child.
+pub fn setup_mode_now_ready(
+    record: &ManagedAgentRecord,
+    personas: &[crate::managed_agents::types::PersonaRecord],
+    was_spawned_in_setup_mode: bool,
+) -> bool {
+    use crate::managed_agents::{agent_readiness, resolve_effective_agent_env, AgentReadiness};
+
+    if !was_spawned_in_setup_mode {
+        return false;
+    }
+    // Mirror the spawn-time readiness computation exactly: resolve the
+    // effective harness (persona wins unless explicitly pinned), then build
+    // the effective env the child would receive.
+    let effective_command = crate::managed_agents::effective_agent_command(
+        record.persona_id.as_deref(),
+        personas,
+        record.agent_command_override.as_deref(),
+    );
+    let runtime_meta = known_acp_runtime(&effective_command);
+    let effective = resolve_effective_agent_env(record, personas, runtime_meta);
+    matches!(agent_readiness(&effective), AgentReadiness::Ready)
 }
 
 fn child_rust_log_filter() -> String {

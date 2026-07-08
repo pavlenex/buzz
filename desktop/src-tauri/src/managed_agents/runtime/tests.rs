@@ -608,3 +608,60 @@ fn grandchild_inherits_pgid_of_process_group_leader() {
     unsafe { libc::kill(-harness_pid, libc::SIGTERM) };
     let _ = harness.wait();
 }
+
+// ── setup_mode_now_ready tests ───────────────────────────────────────
+//
+// The auto-restart gate in `update_managed_agent`: a live process spawned in
+// setup mode should be respawned exactly when the edited record now passes
+// readiness. These drive the pure seam (`setup_mode_now_ready`) with the
+// spawn-time flag injected, so no live child process is needed.
+
+use super::setup_mode_now_ready;
+
+/// Record that passes buzz-agent readiness: provider + model + matching
+/// credential. No persona and no override, so the effective command resolves
+/// to the `buzz-agent` default.
+fn ready_record() -> ManagedAgentRecord {
+    let mut record = fixture(RespondTo::Anyone, vec![], Some("tag".into()));
+    record.model = Some("claude-opus-4-5".into());
+    record.provider = Some("anthropic".into());
+    record
+        .env_vars
+        .insert("ANTHROPIC_API_KEY".into(), "sk-test".into());
+    record
+}
+
+#[test]
+fn setup_mode_now_ready_true_when_config_fixed() {
+    // The Fizz bug: spawned in setup mode (model missing), then the user set
+    // model/provider in Edit Agent → the edit must trigger a respawn.
+    let record = ready_record();
+    assert!(setup_mode_now_ready(&record, &[], true));
+}
+
+#[test]
+fn setup_mode_now_ready_false_when_still_not_ready() {
+    // Model still missing → stay in setup mode; a respawn would just land
+    // back in the setup listener.
+    let mut record = ready_record();
+    record.model = None;
+    assert!(!setup_mode_now_ready(&record, &[], true));
+}
+
+#[test]
+fn setup_mode_now_ready_false_when_credential_still_missing() {
+    // Provider/model present but the provider credential is absent — the
+    // same NotReady the spawn path would compute.
+    let mut record = ready_record();
+    record.env_vars.remove("ANTHROPIC_API_KEY");
+    assert!(!setup_mode_now_ready(&record, &[], true));
+}
+
+#[test]
+fn setup_mode_now_ready_false_for_normal_process() {
+    // A process NOT spawned in setup mode must never be auto-restarted by an
+    // edit — edits to healthy agents keep the existing "takes effect on next
+    // spawn" contract (the needs_restart badge covers drift).
+    let record = ready_record();
+    assert!(!setup_mode_now_ready(&record, &[], false));
+}

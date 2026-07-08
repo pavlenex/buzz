@@ -13,7 +13,8 @@ use crate::{
         build_managed_agent_summary, current_instance_id, default_agent_workdir,
         discovery_env_with_baked_floor, find_managed_agent_mut, known_acp_runtime,
         load_managed_agents, load_personas, managed_agent_avatar_url, missing_command_message,
-        normalize_agent_args, resolve_command, save_managed_agents, sync_managed_agent_processes,
+        normalize_agent_args, resolve_command, save_managed_agents, setup_mode_now_ready,
+        start_managed_agent_process, stop_managed_agent_process, sync_managed_agent_processes,
         try_regenerate_nest, AgentModelInfo, AgentModelsResponse, UpdateManagedAgentRequest,
         UpdateManagedAgentResponse, DEFAULT_ACP_COMMAND,
     },
@@ -786,9 +787,17 @@ async fn run_agent_models_command(
 
 /// Update mutable fields on an existing managed agent record.
 ///
-/// Does NOT auto-restart the agent. Runtime config changes (system prompt,
-/// parallelism, commands, toolsets) take effect on the next agent spawn.
-/// Name changes are synced to the relay immediately via a kind:0 re-publish.
+/// Does NOT auto-restart a healthy agent. Runtime config changes (system
+/// prompt, parallelism, commands, toolsets) take effect on the next agent
+/// spawn. Name changes are synced to the relay immediately via a kind:0
+/// re-publish.
+///
+/// ONE exception: a live process that was spawned in setup mode (readiness
+/// failed at spawn, so buzz-acp is a nudge-only setup listener) is stopped
+/// and respawned when this edit makes the record pass readiness — a
+/// setup-mode harness never re-evaluates its config, so without the respawn
+/// the agent would nudge "needs configuration" forever after the user fixed
+/// it. See `setup_mode_now_ready`.
 #[tauri::command]
 pub async fn update_managed_agent(
     input: UpdateManagedAgentRequest,
@@ -909,6 +918,53 @@ pub async fn update_managed_agent(
         }
 
         record.updated_at = now_iso();
+
+        // ── Auto-restart out of setup mode ──────────────────────────────────
+        //
+        // A harness spawned with BUZZ_ACP_SETUP_PAYLOAD runs as a nudge-only
+        // setup listener and NEVER re-evaluates its config — readiness is only
+        // computed at spawn (see `spawn_agent_child`). Without this, a user
+        // who fixes the missing model/provider in Edit Agent keeps getting
+        // "needs configuration" nudges forever because the stale setup-mode
+        // process is still the one connected to the relay.
+        //
+        // So: when this edit makes a live setup-mode process ready, stop it
+        // and respawn in place. Best-effort — a respawn failure must not fail
+        // the save itself (the edit already landed); it is surfaced via
+        // `last_error` on the record like other spawn failures.
+        let was_setup_mode = runtimes
+            .get(&record.pubkey)
+            .is_some_and(|rt| rt.in_setup_mode);
+        if was_setup_mode {
+            let personas = load_personas(&app).unwrap_or_default();
+            if setup_mode_now_ready(record, &personas, true) {
+                // Same owner-hex read as `commands::agents::workspace_owner_hex`;
+                // `state.keys` is acquired inside the store lock elsewhere too
+                // (see `retain_managed_agent_pending`), so ordering is safe.
+                let owner_hex = {
+                    let keys = state.keys.lock().map_err(|e| e.to_string())?;
+                    keys.public_key().to_hex()
+                };
+                let restart =
+                    stop_managed_agent_process(&app, record, &mut runtimes).and_then(|()| {
+                        start_managed_agent_process(&app, record, &mut runtimes, Some(&owner_hex))
+                    });
+                match restart {
+                    Ok(()) => eprintln!(
+                        "buzz-desktop: agent {} config now satisfies readiness — \
+                         auto-restarted out of setup mode",
+                        record.name
+                    ),
+                    Err(e) => {
+                        eprintln!(
+                            "buzz-desktop: auto-restart of agent {} out of setup mode failed: {e}",
+                            record.name
+                        );
+                        record.last_error = Some(format!("auto-restart failed: {e}"));
+                    }
+                }
+            }
+        }
 
         save_managed_agents(&app, &records)?;
 

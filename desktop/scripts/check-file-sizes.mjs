@@ -233,7 +233,11 @@ const overrides = new Map([
   // (if let Some(provider_update) = input.provider { record.provider = provider_update; }).
   // +8: harness_override thread-through in update_managed_agent so a deliberate
   // Custom pin routes to update_time_agent_command_override (comment + call).
-  ["src-tauri/src/commands/agent_models.rs", 1079],
+  // +54: setup-mode auto-restart in update_managed_agent (stop + respawn a
+  // live setup-listener process when the edit satisfies readiness) + the
+  // expanded doc contract. Load-bearing fix for the "needs configuration"
+  // forever-loop; queued to split with the discovery modules above.
+  ["src-tauri/src/commands/agent_models.rs", 1133],
   // draft-persistence predicate: submit-time `loadDraft` check + inline comment
   // + deps-array entry in submitMessage closes the never-persisted-boundary
   // defect (Thufir Pass-3 finding). Load-bearing correctness fix; queued to
