@@ -34,6 +34,26 @@ export const BUZZ_DARK_THEME_NAME = "buzz-dark";
 /** The Shiki bundle Buzz borrows its base palette from. */
 export const BUZZ_BASE_THEME: SyntaxThemeName = "github-light";
 
+/** The Shiki bundle Buzz Dark borrows its base palette from. */
+export const BUZZ_DARK_BASE_THEME: SyntaxThemeName = "github-dark";
+
+/**
+ * Resolve a theme name to the real Shiki bundled theme it maps to.
+ *
+ * Most themes map to themselves, but the Buzz aliases (`buzz` / `buzz-dark`)
+ * are not bundled Shiki themes — they reuse the GitHub Light / GitHub Dark
+ * palettes. The Shiki highlighter engine (used for fenced code blocks in
+ * `CodeBlock.tsx`) only understands bundled names, so callers that hand a
+ * theme name to `loadTheme` / `codeToTokens` must resolve it through here
+ * first; passing a raw Buzz alias makes Shiki throw and code blocks fall
+ * back to unhighlighted plain text.
+ */
+export function resolveShikiThemeName(name: string): SyntaxThemeName {
+  if (name === BUZZ_THEME_NAME) return BUZZ_BASE_THEME;
+  if (name === BUZZ_DARK_THEME_NAME) return BUZZ_DARK_BASE_THEME;
+  return name as SyntaxThemeName;
+}
+
 // Available themes. "buzz" is a Buzz-branded theme that reuses the
 // github-light palette plus a sidebar gradient; the rest are the Shiki
 // bundled syntax themes, alphabetically sorted.
