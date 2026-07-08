@@ -32,6 +32,13 @@ pub struct MeshMembership {
     peers: Arc<RwLock<HashMap<RuntimeId, PeerState>>>,
     draining: Arc<AtomicBool>,
     stale_generation_rejections: Arc<AtomicU64>,
+    foreign_relay_rejections: Arc<AtomicU64>,
+    /// The relay identity ready records must be attested by. All pods in one
+    /// deployment share the relay signing key, so a valid seed is one signed
+    /// by *our* key — "signed by some relay key" is possession, not
+    /// authorization. `None` (never set) rejects every ready record: the
+    /// unanchored state is fail-closed, not accept-any.
+    expected_relay_pubkey: Option<String>,
     phi_suspect_threshold: f64,
 }
 
@@ -43,8 +50,17 @@ impl MeshMembership {
             peers: Arc::new(RwLock::new(HashMap::new())),
             draining: Arc::new(AtomicBool::new(false)),
             stale_generation_rejections: Arc::new(AtomicU64::new(0)),
+            foreign_relay_rejections: Arc::new(AtomicU64::new(0)),
+            expected_relay_pubkey: None,
             phi_suspect_threshold: DEFAULT_PHI_SUSPECT_THRESHOLD,
         }
+    }
+
+    /// Anchor ready-record acceptance to this relay identity (hex pubkey).
+    /// Without an anchor, [`Self::apply_ready_records`] admits nothing.
+    pub fn with_expected_relay_pubkey(mut self, pubkey_hex: String) -> Self {
+        self.expected_relay_pubkey = Some(pubkey_hex);
+        self
     }
 
     pub fn with_phi_suspect_threshold(mut self, threshold: f64) -> Self {
@@ -61,10 +77,29 @@ impl MeshMembership {
 
     /// Apply Redis bootstrap records. Existing gossip records win when they are
     /// newer; ready-registry records enter as version 1 hints.
+    ///
+    /// A record is admitted only when its `relay_pubkey` matches the expected
+    /// relay identity AND its attestation signature verifies. Matching first
+    /// makes the authorization question explicit: a record signed by a key we
+    /// don't recognize is foreign no matter how valid its signature is.
     pub fn apply_ready_records(&self, records: impl IntoIterator<Item = ReadyRecord>) {
         for ready in records {
             if ready.runtime_id == self.local_runtime_id {
                 continue;
+            }
+            match self.expected_relay_pubkey.as_deref() {
+                Some(expected) if ready.relay_pubkey == expected => {}
+                anchor => {
+                    self.foreign_relay_rejections
+                        .fetch_add(1, Ordering::Relaxed);
+                    tracing::warn!(
+                        runtime_id = %ready.runtime_id,
+                        record_relay_pubkey = %ready.relay_pubkey,
+                        anchored = anchor.is_some(),
+                        "mesh membership rejected ready seed not attested by expected relay identity"
+                    );
+                    continue;
+                }
             }
             if let Err(err) = ready.verify_attestation() {
                 tracing::warn!(
@@ -264,6 +299,7 @@ impl MeshMembership {
         peers.sort_by(|a, b| a.runtime_id.cmp(&b.runtime_id));
         let counters = MeshCounters {
             stale_generation_rejections: self.stale_generation_rejections.load(Ordering::Relaxed),
+            foreign_relay_rejections: self.foreign_relay_rejections.load(Ordering::Relaxed),
             peers: peers.iter().map(|peer| peer.counters.clone()).collect(),
         };
         MeshStatus {
@@ -381,20 +417,19 @@ mod tests {
         nostr::Keys::generate()
     }
 
-    fn ready_record(byte: u8, endpoint_addr: &str) -> ReadyRecord {
-        ReadyRecord::new(
-            rid(byte),
-            &relay_keys(),
-            vec![endpoint_addr.into()],
-            1,
-            vec![],
-        )
+    fn ready_record_signed(byte: u8, endpoint_addr: &str, keys: &nostr::Keys) -> ReadyRecord {
+        ReadyRecord::new(rid(byte), keys, vec![endpoint_addr.into()], 1, vec![])
     }
 
     #[test]
     fn ready_records_seed_peers_but_skip_self() {
-        let membership = MeshMembership::new(record(1, 1, 1));
-        membership.apply_ready_records([ready_record(1, "self"), ready_record(2, "peer")]);
+        let keys = relay_keys();
+        let membership = MeshMembership::new(record(1, 1, 1))
+            .with_expected_relay_pubkey(keys.public_key().to_hex());
+        membership.apply_ready_records([
+            ready_record_signed(1, "self", &keys),
+            ready_record_signed(2, "peer", &keys),
+        ]);
         let peers = membership.peers();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].runtime_id, rid(2));
@@ -402,13 +437,37 @@ mod tests {
 
     #[test]
     fn ready_records_must_have_valid_attestation() {
-        let membership = MeshMembership::new(record(1, 1, 1));
-        let mut tampered = ready_record(2, "peer");
+        let keys = relay_keys();
+        let membership = MeshMembership::new(record(1, 1, 1))
+            .with_expected_relay_pubkey(keys.public_key().to_hex());
+        let mut tampered = ready_record_signed(2, "peer", &keys);
         tampered.runtime_id = rid(3);
         tampered.runtime_pubkey = rid(3).to_hex();
 
         membership.apply_ready_records([tampered]);
         assert!(membership.peers().is_empty());
+    }
+
+    #[test]
+    fn ready_records_from_foreign_relay_identity_are_rejected() {
+        let ours = relay_keys();
+        let theirs = relay_keys();
+        let membership = MeshMembership::new(record(1, 1, 1))
+            .with_expected_relay_pubkey(ours.public_key().to_hex());
+
+        // Validly signed, but by a key that isn't our deployment's identity.
+        membership.apply_ready_records([ready_record_signed(2, "peer", &theirs)]);
+        assert!(membership.peers().is_empty());
+        assert_eq!(membership.status().counters.foreign_relay_rejections, 1);
+    }
+
+    #[test]
+    fn unanchored_membership_rejects_all_ready_records() {
+        let keys = relay_keys();
+        let membership = MeshMembership::new(record(1, 1, 1));
+        membership.apply_ready_records([ready_record_signed(2, "peer", &keys)]);
+        assert!(membership.peers().is_empty());
+        assert_eq!(membership.status().counters.foreign_relay_rejections, 1);
     }
 
     #[test]

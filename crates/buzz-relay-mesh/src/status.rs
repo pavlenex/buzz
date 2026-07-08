@@ -41,6 +41,9 @@ pub enum ConnectionState {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct MeshCounters {
     pub stale_generation_rejections: u64,
+    /// Ready-registry seeds rejected because their `relay_pubkey` did not
+    /// match this deployment's relay identity (or no anchor was configured).
+    pub foreign_relay_rejections: u64,
     pub peers: Vec<MeshPeerCounters>,
 }
 
