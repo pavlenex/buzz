@@ -93,6 +93,13 @@ pub struct Config {
     /// service lands.
     pub huddle_audio_available: bool,
 
+    /// Inter-relay mesh configuration (`BUZZ_MESH`, `BUZZ_MESH_BIND_ADDR`).
+    /// `mesh.enabled=false` (`BUZZ_MESH=off`) is the incident kill switch: the
+    /// relay must behave exactly like a single-instance deployment. Even when
+    /// enabled, the mesh only forms once peer registry records exist, so
+    /// N=1 deployments carry no mesh at runtime.
+    pub mesh: buzz_relay_mesh::MeshConfig,
+
     /// Optional hex-encoded pubkey of the relay owner.
     /// When set, this pubkey is automatically bootstrapped into `relay_members`
     /// with the `owner` role on first startup.
@@ -235,6 +242,25 @@ impl Config {
         let huddle_audio_available = std::env::var("BUZZ_HUDDLE_AUDIO_AVAILABLE")
             .map(|v| !(v == "false" || v == "0"))
             .unwrap_or(true);
+
+        // Mesh kill switch: default enabled — the mesh is inert until peer
+        // registry records exist, so N=1 deployments pay nothing. `off`
+        // hard-disables for incidents (single-instance behavior guaranteed).
+        let mesh_enabled = std::env::var("BUZZ_MESH")
+            .map(|v| !(v.eq_ignore_ascii_case("off") || v == "false" || v == "0"))
+            .unwrap_or(true);
+        let mesh_bind_addr = std::env::var("BUZZ_MESH_BIND_ADDR")
+            .map(|raw| {
+                raw.parse::<SocketAddr>().map_err(|e| {
+                    ConfigError::InvalidValue(format!("invalid BUZZ_MESH_BIND_ADDR: {e}"))
+                })
+            })
+            .unwrap_or_else(|_| Ok("0.0.0.0:3478".parse().expect("static default parses")))?;
+        let mesh = buzz_relay_mesh::MeshConfig {
+            enabled: mesh_enabled,
+            bind_addr: mesh_bind_addr,
+            registry_refresh: std::time::Duration::from_secs(15),
+        };
 
         let allow_nip_oa_auth = std::env::var("BUZZ_ALLOW_NIP_OA_AUTH")
             .map(|v| v == "true" || v == "1")
@@ -427,6 +453,7 @@ impl Config {
             pubkey_allowlist_enabled,
             require_relay_membership,
             huddle_audio_available,
+            mesh,
             relay_owner_pubkey,
             allow_nip_oa_auth,
             media,
