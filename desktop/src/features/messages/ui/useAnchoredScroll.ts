@@ -649,27 +649,38 @@ export function useAnchoredScroll({
         container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
         return;
       }
-      // Mid-history: a batch of rows realized/reflowed this frame. The
-      // reading anchor — the first row a safe margin below the fold,
-      // snapshotted by the per-rAF baseline sampler — has shifted by the net
-      // height change of everything above it. Re-pin it to its saved offset: a
-      // single measured correction (the layout engine already summed the
-      // above-anchor deltas into the row's top, and rows resizing below the
-      // anchor don't move it, so they're excluded for free). This is the single
-      // scroll writer for realization; `overflow-anchor: none` (and WKWebView's
-      // absence of it) mean nothing else competes. We use the RO batch only as
-      // the TRIGGER — we detect that a row's laid-out height actually changed
-      // (seeded from the reserve so a first-realization delivery counts, not
-      // swallowed as a first sighting), then correct from the anchor's own
-      // measured shift, never from summing per-row deltas.
+      // Mid-history: a batch of rows realized/reflowed this frame. The reading
+      // anchor — the first row a safe margin below the fold, snapshotted by the
+      // per-rAF baseline sampler — has shifted by the net height change of
+      // everything above it, and must be re-pinned to its saved offset so it
+      // stays visually fixed. This is the single scroll writer for realization;
+      // `overflow-anchor: none` (and WKWebView's absence of it) mean nothing
+      // else competes. We use the RO batch as the TRIGGER — a row's laid-out
+      // height actually changed (seeded from the reserve so a first-realization
+      // delivery counts, not swallowed as a first sighting) — and correct via
+      // one of two engine-order-independent signals computed below.
       let changed = false;
+      let aboveShift = 0;
+      const anchorForShift = readingAnchorRef.current;
+      const anchorRowForShift = anchorForShift
+        ? container.querySelector<HTMLElement>(
+            `[data-message-id="${CSS.escape(anchorForShift.id)}"]`,
+          )
+        : null;
+      const anchorTopForShift = anchorRowForShift
+        ? anchorRowForShift.getBoundingClientRect().top
+        : Number.POSITIVE_INFINITY;
       for (const entry of entries) {
         const row = entry.target as HTMLElement;
-        const height = row.getBoundingClientRect().height;
+        const rect = row.getBoundingClientRect();
+        const height = rect.height;
         const last = lastHeights.get(row);
         lastHeights.set(row, height);
         if (last === undefined) continue; // never seeded (defensive).
         if (Math.abs(height - last) > 0.5) changed = true;
+        // A row that grew/shrank ABOVE the anchor shifts the anchor by its
+        // height delta. Rows at/below the anchor don't move it.
+        if (rect.top < anchorTopForShift) aboveShift += height - last;
       }
       if (!changed) return;
       const baseline = readingAnchorRef.current;
@@ -703,11 +714,22 @@ export function useAnchoredScroll({
         scrollTop: currentScrollTop,
       });
       if (target !== null) {
+        // The anchor's own document position moved (Chromium: the rAF baseline
+        // is captured pre-reflow, so this fires and measures the exact shift).
         container.scrollTo({ top: target, behavior: "auto" });
-        // No re-baseline here: the rAF loop is the single writer of
-        // `readingAnchorRef` and re-snapshots from live geometry next frame
-        // (~16ms), which already reflects this correction. Writing it here too
-        // would make the "single writer" invariant a lie for no gain.
+      } else if (Math.abs(aboveShift) > 0.5) {
+        // The position diff sees no move — the WebKit case, where the rAF
+        // baseline lands post-realization so `baseline` and `current` straddle
+        // the SAME side of the reflow (dTop=dScroll=0) and the diff is blind to
+        // it. The RO entries still carry the true magnitude: the net height
+        // change of the rows ABOVE the anchor is how far the anchor's document
+        // position shifted, so absorb it into scrollTop to hold the row. This is
+        // baseline-timing-independent — it reads the reflow directly rather than
+        // diffing a snapshot WebKit captured too late.
+        container.scrollTo({
+          top: currentScrollTop + aboveShift,
+          behavior: "auto",
+        });
       }
     });
     // Observe every timeline row (not the content wrapper): a
