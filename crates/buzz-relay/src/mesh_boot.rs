@@ -145,10 +145,14 @@ pub struct MeshHandle {
     /// dispatcher itself is already installed as the transport's single
     /// inbound slot by [`boot_mesh`].
     pub dispatcher: MeshInboundDispatcher,
-    /// The huddle media generation floor shared by the datagram fan-in path
-    /// and session teardown (`GenerationFloor::forget`). Owned here;
-    /// [`wire_mesh_consumers`] constructs the [`MeshAudioRouter`] with this
-    /// same `Arc` so both halves enforce exactly one floor per session.
+    /// The single local generation floor for huddle audio. Owned here and
+    /// shared so the datagram receive path ([`MeshAudioRouter`], constructed
+    /// with this same `Arc` by [`wire_mesh_consumers`]) and the non-owner
+    /// teardown path (`audio::handler`) consult and clear ONE floor — a
+    /// private floor per consumer would let a torn-down session keep
+    /// suppressing a rejoin. It is a *local stale-frame guard only*: Redis
+    /// fenced CAS remains the ownership arbiter; `forget` clears local
+    /// suppression after teardown and never authorizes ownership.
     ///
     /// [`MeshAudioRouter`]: crate::audio::mesh::MeshAudioRouter
     pub audio_fence: Arc<crate::audio::mesh::GenerationFloor>,
