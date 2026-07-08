@@ -248,35 +248,52 @@
 }
 
 /*
- * Active nav item. The accent system (`applyAccentColor` in ThemeProvider)
- * sets `--sidebar-active` to the theme foreground as an INLINE style on
- * :root, which renders the selected page as a solid black pill under GitHub
- * Light. For the Buzz theme we want a white pill instead. Override the two
- * active tokens here — `!important` is required because an important
- * stylesheet declaration is what beats the non-important inline style set by
- * the accent system. Text flips to the theme foreground so it stays legible
- * on the white pill; the derived `bg-sidebar-active-foreground/20` badge on
- * active items follows automatically.
+ * Shared translucent-white fill for sidebar hover states and the search box.
+ * Only the sidebar rules below consume it, but it is safe at :root and other
+ * Buzz sidebar rules reference it, so it stays here.
  */
 :root[data-buzz-sidebar] {
-  --sidebar-active: 0 0% 100% !important;
-  --sidebar-active-foreground: var(--foreground) !important;
-
-  /* Shared translucent-white fill for hover states and the search box. */
   --buzz-hover-surface: rgb(255 255 255 / 0.6);
 }
 
 /*
- * Dark variant: a solid white pill and 60%-white fills are too harsh on the
- * dark gradient. Use a light translucent tint for the active pill (keeping
- * the light theme foreground for legible text) and a lower-opacity white for
- * hover / search surfaces.
+ * Dark variant: 60%-white fills are too harsh on the dark gradient, so use a
+ * lower-opacity white for hover / search surfaces.
  */
 :root[data-buzz-sidebar].dark {
+  --buzz-hover-surface: rgb(255 255 255 / 0.12);
+}
+
+/*
+ * Active nav item. The accent system (`applyAccentColor` in ThemeProvider)
+ * sets `--sidebar-active` to the theme foreground as an INLINE style on
+ * :root, which renders the selected page as a solid black pill under GitHub
+ * Light. For the Buzz theme we want a white pill instead. Override the two
+ * active tokens — `!important` is required because an important stylesheet
+ * declaration is what beats the non-important inline style set by the accent
+ * system. Text flips to the theme foreground so it stays legible on the white
+ * pill; the derived `bg-sidebar-active-foreground/20` badge on active items
+ * follows automatically.
+ *
+ * SCOPED to the app sidebar container, NOT :root — the `bg-sidebar-active` /
+ * `text-sidebar-active-foreground` tokens are also consumed by non-sidebar
+ * controls (avatar edit buttons in ProfileSettingsCard / AgentCreationPreview,
+ * the selected persona row in PersonaCatalogDialog). A root-level override
+ * turned those white (white-on-white under Buzz Dark); scoping keeps them on
+ * the normal accent-driven active colors.
+ */
+:root[data-buzz-sidebar] [data-testid="app-sidebar"] {
+  --sidebar-active: 0 0% 100% !important;
+  --sidebar-active-foreground: var(--foreground) !important;
+}
+
+/*
+ * Dark variant: keep the active-pill foreground white on the dark gradient.
+ * (The pill itself is repainted to a translucent tint by the rule below.)
+ */
+:root[data-buzz-sidebar].dark [data-testid="app-sidebar"] {
   --sidebar-active: 0 0% 100% !important;
   --sidebar-active-foreground: 0 0% 100% !important;
-
-  --buzz-hover-surface: rgb(255 255 255 / 0.12);
 }
 
 /*
