@@ -2,7 +2,6 @@ import {
   CircleDot,
   FolderGit2,
   GitCommit,
-  GitFork,
   GitPullRequest,
   MoreHorizontal,
   TerminalSquare,
@@ -40,8 +39,6 @@ import {
 import { hasLocalCheckout } from "@/features/projects/lib/projectLocalRepos";
 import {
   formatExactTimestamp,
-  getActivityLabel,
-  getClonePathLabel,
   getProjectUpdatedAt,
   isProjectMine,
   isProjectOwnedByCurrentUser,
@@ -97,30 +94,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const MANY_PROJECTS_THRESHOLD = 12;
-
-const CLONE_PATH_TAIL_CHARS = 14;
-
-function ClonePathLabel({ project }: { project: Project }) {
-  const label = getClonePathLabel(project);
-  const fullUrl = project.cloneUrls[0] ?? label;
-  const splitAt = Math.max(0, label.length - CLONE_PATH_TAIL_CHARS);
-  const head = label.slice(0, splitAt);
-  const tail = label.slice(splitAt);
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="relative z-10 flex min-w-0 font-mono">
-          <span className="min-w-0 truncate">{head}</span>
-          <span className="shrink-0">{tail}</span>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-96 break-all font-mono">
-        {fullUrl}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
 
 function ProjectUpdatedLabel({
   profiles,
@@ -547,33 +520,43 @@ function ProjectListRow({
       data-testid={`project-row-${project.dtag}`}
     >
       <ProjectCardButton onOpen={onOpen} project={project} />
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_16rem] lg:items-center">
-        <div className="min-w-0 space-y-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="truncate text-sm font-medium text-foreground">
-              {project.name}
-            </span>
-            <StatusPill status={project.status} />
-          </div>
-          <p className="line-clamp-1 text-sm text-muted-foreground">
-            {project.description || "A shared space for internal git work."}
-          </p>
-          <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
-            <GitFork className="h-3.5 w-3.5 shrink-0" />
-            <ClonePathLabel project={project} />
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted/60">
+            <FolderGit2 className="h-4 w-4 text-muted-foreground" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-sm font-semibold text-foreground">
+                {project.name}
+              </span>
+              <StatusPill status={project.status} />
+            </div>
+            <p className="line-clamp-1 text-sm text-muted-foreground">
+              {project.description || "A shared space for internal git work."}
+            </p>
           </div>
         </div>
 
-        <div className="relative z-10 flex min-w-0 items-center gap-2 rounded-xl bg-muted/60 px-2.5 py-2 lg:w-full">
-          <p className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
-            {getActivityLabel(summary)}
-          </p>
+        <div className="relative z-10 flex shrink-0 items-center gap-3">
+          <div className="hidden items-center gap-3 md:flex">
+            <ProjectStatsRow summary={summary} />
+            <div className="w-20">
+              <ProjectActivityBar summary={summary} />
+            </div>
+          </div>
           <ProjectPeopleStack
             profiles={profiles}
             pubkeys={people}
             workOwnerPubkey={project.owner}
           />
+          <div className="hidden sm:block">
+            <ProjectUpdatedLabel
+              profiles={profiles}
+              project={project}
+              summary={summary}
+            />
+          </div>
           <ProjectActionsMenu
             canDelete={canDelete}
             disabled={deleteDisabled}
