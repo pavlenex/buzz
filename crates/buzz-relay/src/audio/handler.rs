@@ -253,7 +253,9 @@ async fn handle_audio_connection(
         return;
     }
 
-    let room = state.audio_rooms.get_or_create(channel_id);
+    let room = state
+        .audio_rooms
+        .get_or_create(tenant.community(), channel_id);
 
     // Re-check archived status after obtaining the room. This closes the
     // cross-boundary race: a joiner that passed ensure_membership before
@@ -271,12 +273,16 @@ async fn handle_audio_connection(
                         .into(),
                 ))
                 .await;
-            state.audio_rooms.cleanup_if_empty(channel_id);
+            state
+                .audio_rooms
+                .cleanup_if_empty(tenant.community(), channel_id);
             return;
         }
         Err(e) => {
             warn!(channel_id = %channel_id, "pre-join channel check failed (fail-closed): {e}");
-            state.audio_rooms.cleanup_if_empty(channel_id);
+            state
+                .audio_rooms
+                .cleanup_if_empty(tenant.community(), channel_id);
             return;
         }
         Ok(_) => {} // Channel exists and is not archived — proceed.
@@ -475,7 +481,9 @@ async fn handle_audio_connection(
                 room.clear_ended();
             }
             Ok(()) => {
-                state.audio_rooms.cleanup_if_empty(channel_id);
+                state
+                    .audio_rooms
+                    .cleanup_if_empty(tenant.community(), channel_id);
 
                 emit_participant_event(
                     &state,
@@ -489,7 +497,9 @@ async fn handle_audio_connection(
             }
         }
     } else {
-        state.audio_rooms.cleanup_if_empty(channel_id);
+        state
+            .audio_rooms
+            .cleanup_if_empty(tenant.community(), channel_id);
     }
 
     info!(
