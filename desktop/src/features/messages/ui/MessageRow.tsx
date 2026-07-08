@@ -153,6 +153,17 @@ export const MessageRow = React.memo(
     } = useReactionHandler(message, onToggleReaction);
     const { openReminder, activeReminderEventIds } = useRemindLater();
     const hasActiveReminder = activeReminderEventIds.has(message.id);
+    const handleRemindLater = React.useCallback(
+      (msg: TimelineMessage) => {
+        openReminder({
+          eventId: msg.id,
+          channelId: channelId ?? "",
+          preview: msg.body.slice(0, 100),
+          authorPubkey: msg.pubkey ?? "",
+        });
+      },
+      [channelId, openReminder],
+    );
     const mentionNames = React.useMemo(
       () => resolveMentionNames(message.tags, profiles),
       [profiles, message.tags],
@@ -446,14 +457,7 @@ export const MessageRow = React.memo(
           onReactionSelect={
             canToggleReactions ? handleReactionSelect : undefined
           }
-          onRemindLater={(msg) => {
-            openReminder({
-              eventId: msg.id,
-              channelId: channelId ?? "",
-              preview: msg.body.slice(0, 100),
-              authorPubkey: msg.pubkey ?? "",
-            });
-          }}
+          onRemindLater={handleRemindLater}
           onReply={onReply}
           onUnfollowThread={onUnfollowThread}
           reactionErrorMessage={reactionErrorMessage}
