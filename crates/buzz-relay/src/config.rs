@@ -94,10 +94,10 @@ pub struct Config {
     pub huddle_audio_available: bool,
 
     /// Inter-relay mesh configuration (`BUZZ_MESH`, `BUZZ_MESH_BIND_ADDR`).
-    /// `mesh.enabled=false` (`BUZZ_MESH=off`) is the incident kill switch: the
-    /// relay must behave exactly like a single-instance deployment. Even when
-    /// enabled, the mesh only forms once peer registry records exist, so
-    /// N=1 deployments carry no mesh at runtime.
+    /// Opt-in: mesh forms only when `BUZZ_MESH=on` is explicit. The default
+    /// (absent/off) is exact single-instance behavior — no bind, no Redis
+    /// registry write — so an image upgrade with untouched env is a strict
+    /// no-regression rollout.
     pub mesh: buzz_relay_mesh::MeshConfig,
 
     /// Optional hex-encoded pubkey of the relay owner.
@@ -243,12 +243,14 @@ impl Config {
             .map(|v| !(v == "false" || v == "0"))
             .unwrap_or(true);
 
-        // Mesh kill switch: default enabled — the mesh is inert until peer
-        // registry records exist, so N=1 deployments pay nothing. `off`
-        // hard-disables for incidents (single-instance behavior guaranteed).
+        // Mesh opt-in: default OFF. Strict rollout no-regression — an image
+        // upgrade with untouched env must not bind a new UDP port or write a
+        // new Redis key. Horizontally-scaled deployments explicitly set
+        // `BUZZ_MESH=on`; anything else (absent, `off`, other values) keeps
+        // exact single-instance behavior.
         let mesh_enabled = std::env::var("BUZZ_MESH")
-            .map(|v| !(v.eq_ignore_ascii_case("off") || v == "false" || v == "0"))
-            .unwrap_or(true);
+            .map(|v| v.eq_ignore_ascii_case("on") || v == "true" || v == "1")
+            .unwrap_or(false);
         let mesh_bind_addr = std::env::var("BUZZ_MESH_BIND_ADDR")
             .map(|raw| {
                 raw.parse::<SocketAddr>().map_err(|e| {

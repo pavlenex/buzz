@@ -193,7 +193,10 @@ impl StreamRecvHalf for IrohRecvHalf {
 }
 
 impl MeshStream {
-    pub(crate) fn new(send: Box<dyn StreamSendHalf>, recv: Box<dyn StreamRecvHalf>) -> Self {
+    /// Assemble a stream from framing halves. Public so consumer crates can
+    /// build in-memory streams over stub halves in tests; production streams
+    /// only come from the transport (`MeshPeer::open_bi` / accept loop).
+    pub fn new(send: Box<dyn StreamSendHalf>, recv: Box<dyn StreamRecvHalf>) -> Self {
         Self { send, recv }
     }
 }

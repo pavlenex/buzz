@@ -20,17 +20,113 @@
 //! "behave exactly like a single-instance relay."
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use buzz_relay_mesh::endpoint::MeshEndpoint;
 use buzz_relay_mesh::gossip::GossipRecord;
 use buzz_relay_mesh::registry::{ReadyRecord, ReadyRegistry};
 use buzz_relay_mesh::{
-    MeshMembership, MeshRuntime, MeshStatus, RelayMeshMembership, RelayPeerTransport, RuntimeId,
+    InboundHandler, MeshDatagram, MeshMembership, MeshRuntime, MeshStatus, MeshStream, Profile,
+    RelayMeshMembership, RelayPeerTransport, RuntimeId, StreamHello, StreamRole,
 };
 
 use crate::config::Config;
 use crate::tunnel::directory::SessionDirectory;
+
+/// Handler for one inbound session-stream profile. Called on the accept task;
+/// implementations must hand off promptly (spawn) rather than block.
+pub type SessionStreamHandler = Box<dyn Fn(RuntimeId, StreamHello, MeshStream) + Send + Sync>;
+
+/// Handler for inbound realtime-media datagrams.
+pub type DatagramHandler = Box<dyn Fn(RuntimeId, MeshDatagram) + Send + Sync>;
+
+/// The single [`InboundHandler`] slot owner: fans inbound mesh traffic out to
+/// per-profile consumers.
+///
+/// The transport has exactly one inbound slot (`set_inbound`), but two lanes
+/// consume session streams (`HuddleControl`, `ReliableStream`) and one
+/// consumes datagrams (`RealtimeMedia`). This dispatcher is installed once by
+/// [`boot_mesh`]; consumers register their entrypoints afterwards via the
+/// `register_*` methods on [`MeshHandle`]'s dispatcher. Traffic arriving
+/// before a slot is registered is logged and dropped — a bounded boot-window
+/// race; fencing makes the peer's retry safe.
+#[derive(Clone, Default)]
+pub struct MeshInboundDispatcher {
+    slots: Arc<DispatcherSlots>,
+}
+
+#[derive(Default)]
+struct DispatcherSlots {
+    huddle_control: OnceLock<SessionStreamHandler>,
+    reliable_stream: OnceLock<SessionStreamHandler>,
+    datagrams: OnceLock<DatagramHandler>,
+}
+
+impl MeshInboundDispatcher {
+    /// Register the `HuddleControl` session-stream consumer (huddle join lane).
+    /// First registration wins; later calls are logged and ignored.
+    pub fn register_huddle_control(&self, handler: SessionStreamHandler) {
+        if self.slots.huddle_control.set(handler).is_err() {
+            tracing::warn!("mesh dispatcher: huddle_control handler already registered — ignored");
+        }
+    }
+
+    /// Register the `ReliableStream` session-stream consumer (goose/berd lane).
+    pub fn register_reliable_stream(&self, handler: SessionStreamHandler) {
+        if self.slots.reliable_stream.set(handler).is_err() {
+            tracing::warn!("mesh dispatcher: reliable_stream handler already registered — ignored");
+        }
+    }
+
+    /// Register the realtime-media datagram consumer (huddle audio fan-out).
+    pub fn register_datagrams(&self, handler: DatagramHandler) {
+        if self.slots.datagrams.set(handler).is_err() {
+            tracing::warn!("mesh dispatcher: datagram handler already registered — ignored");
+        }
+    }
+}
+
+impl InboundHandler for MeshInboundDispatcher {
+    fn on_datagram(&self, from: RuntimeId, dgram: MeshDatagram) {
+        match self.slots.datagrams.get() {
+            Some(handler) => handler(from, dgram),
+            None => tracing::warn!(
+                peer = %from,
+                "mesh dispatcher: datagram before handler registration — dropped"
+            ),
+        }
+    }
+
+    fn on_session_stream(&self, from: RuntimeId, hello: StreamHello, stream: MeshStream) {
+        let StreamRole::Session { profile, .. } = &hello.role else {
+            // Control streams are consumed inside the runtime and never reach
+            // the inbound slot; anything else here is a peer bug.
+            tracing::warn!(peer = %from, "mesh dispatcher: non-session stream role — dropped");
+            return;
+        };
+        let slot = match profile {
+            Profile::HuddleControl => &self.slots.huddle_control,
+            Profile::ReliableStream => &self.slots.reliable_stream,
+            Profile::RealtimeMedia => {
+                // Datagram-only profile: a *stream* claiming it is a protocol
+                // violation, never a valid session.
+                tracing::warn!(
+                    peer = %from,
+                    "mesh dispatcher: RealtimeMedia arrived as a stream (datagram-only profile) — rejected"
+                );
+                return;
+            }
+        };
+        match slot.get() {
+            Some(handler) => handler(from, hello, stream),
+            None => tracing::warn!(
+                peer = %from,
+                ?profile,
+                "mesh dispatcher: session stream before handler registration — dropped"
+            ),
+        }
+    }
+}
 
 /// Everything a mesh consumer needs, as one bundle.
 #[derive(Clone)]
@@ -43,6 +139,11 @@ pub struct MeshHandle {
     pub membership: Arc<dyn RelayMeshMembership>,
     /// This runtime's boot-unique mesh identity.
     pub local_runtime_id: RuntimeId,
+    /// Per-profile inbound registration: consumers call
+    /// `dispatcher.register_*` to receive their profile's traffic. The
+    /// dispatcher itself is already installed as the transport's single
+    /// inbound slot by [`boot_mesh`].
+    pub dispatcher: MeshInboundDispatcher,
     /// The running mesh (status snapshots, shutdown).
     runtime: MeshRuntime,
 }
@@ -106,7 +207,7 @@ pub async fn boot_mesh(
     shutting_down: Arc<AtomicBool>,
 ) -> anyhow::Result<Option<MeshHandle>> {
     if !config.mesh.enabled {
-        tracing::info!("mesh disabled (BUZZ_MESH=off) — single-instance behavior");
+        tracing::info!("mesh disabled (BUZZ_MESH is not 'on') — single-instance behavior");
         return Ok(None);
     }
 
@@ -129,7 +230,11 @@ pub async fn boot_mesh(
 
     let mut local_record = GossipRecord::new(runtime_id, addrs.clone(), PROTO_VERSION);
     local_record.capabilities = capabilities();
-    let membership = MeshMembership::new(local_record);
+    // Anchor ready-record acceptance to this deployment's relay identity: all
+    // pods share the relay signing key, so a seed attested by any other key is
+    // foreign and rejected (Wren's review — possession is not authorization).
+    let membership = MeshMembership::new(local_record)
+        .with_expected_relay_pubkey(relay_keypair.public_key().to_hex());
 
     let registry = ReadyRegistry::new(redis_pool.clone(), config.mesh.registry_refresh);
     let ready_record = ReadyRecord::new(
@@ -181,11 +286,18 @@ pub async fn boot_mesh(
     let membership_arc: Arc<dyn RelayMeshMembership> = Arc::new(runtime.membership().clone());
     let transport: Arc<dyn RelayPeerTransport> = Arc::new(runtime.clone());
 
+    // Install the profile dispatcher as the transport's single inbound slot.
+    // Consumers (huddle control, reliable-stream) register their entrypoints
+    // on the handle's dispatcher after AppState wiring.
+    let dispatcher = MeshInboundDispatcher::default();
+    transport.set_inbound(Box::new(dispatcher.clone()));
+
     Ok(Some(MeshHandle {
         directory: SessionDirectory::new(redis_pool),
         transport,
         membership: membership_arc,
         local_runtime_id: runtime_id,
+        dispatcher,
         runtime,
     }))
 }
@@ -210,5 +322,142 @@ mod tests {
             .await
             .expect("off path is never an error");
         assert!(handle.is_none());
+    }
+
+    /// Blocker fix (Wren review of 8b077fdb): absent `BUZZ_MESH`, the mesh is
+    /// OFF — an env-untouched image upgrade must not bind or write Redis.
+    #[test]
+    fn mesh_defaults_off_when_env_absent() {
+        // `Config::from_env` in the test env has no BUZZ_MESH set unless a
+        // caller exported it; assert the fail-safe reading.
+        if std::env::var("BUZZ_MESH").is_ok() {
+            return; // externally forced — skip rather than assert a lie
+        }
+        let config = crate::config::Config::from_env().expect("default config loads");
+        assert!(!config.mesh.enabled, "BUZZ_MESH absent must mean mesh off");
+    }
+
+    use std::sync::Mutex;
+
+    use buzz_relay_mesh::{
+        BoxFuture, FencedHeader, MeshError, MeshStreamFrame, StreamRecvHalf, StreamSendHalf,
+    };
+
+    struct StubSend;
+    impl StreamSendHalf for StubSend {
+        fn send_frame(&mut self, _frame: MeshStreamFrame) -> BoxFuture<'_, Result<(), MeshError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn finish(&mut self) -> Result<(), MeshError> {
+            Ok(())
+        }
+    }
+    struct StubRecv;
+    impl StreamRecvHalf for StubRecv {
+        fn recv_frame(&mut self) -> BoxFuture<'_, Result<Option<MeshStreamFrame>, MeshError>> {
+            Box::pin(async { Ok(None) })
+        }
+    }
+
+    fn stub_stream() -> MeshStream {
+        MeshStream::new(Box::new(StubSend), Box::new(StubRecv))
+    }
+
+    fn rid(byte: u8) -> RuntimeId {
+        RuntimeId([byte; 32])
+    }
+
+    fn session_hello(sender: RuntimeId, profile: Profile) -> StreamHello {
+        StreamHello {
+            sender,
+            role: buzz_relay_mesh::StreamRole::Session {
+                fenced: FencedHeader {
+                    session_id: uuid::Uuid::nil(),
+                    generation: 1,
+                    owner_runtime_id: sender,
+                },
+                profile,
+            },
+        }
+    }
+
+    #[test]
+    fn dispatcher_routes_session_streams_by_profile() {
+        let dispatcher = MeshInboundDispatcher::default();
+        let huddle_hits: Arc<Mutex<Vec<RuntimeId>>> = Arc::new(Mutex::new(vec![]));
+        let reliable_hits: Arc<Mutex<Vec<RuntimeId>>> = Arc::new(Mutex::new(vec![]));
+
+        let h = Arc::clone(&huddle_hits);
+        dispatcher.register_huddle_control(Box::new(move |from, _hello, _stream| {
+            h.lock().unwrap().push(from);
+        }));
+        let r = Arc::clone(&reliable_hits);
+        dispatcher.register_reliable_stream(Box::new(move |from, _hello, _stream| {
+            r.lock().unwrap().push(from);
+        }));
+
+        dispatcher.on_session_stream(
+            rid(1),
+            session_hello(rid(1), Profile::HuddleControl),
+            stub_stream(),
+        );
+        dispatcher.on_session_stream(
+            rid(2),
+            session_hello(rid(2), Profile::ReliableStream),
+            stub_stream(),
+        );
+        // Datagram-only profile arriving as a stream: rejected, routed nowhere.
+        dispatcher.on_session_stream(
+            rid(3),
+            session_hello(rid(3), Profile::RealtimeMedia),
+            stub_stream(),
+        );
+
+        assert_eq!(*huddle_hits.lock().unwrap(), vec![rid(1)]);
+        assert_eq!(*reliable_hits.lock().unwrap(), vec![rid(2)]);
+    }
+
+    #[test]
+    fn dispatcher_drops_traffic_before_registration_and_keeps_first_handler() {
+        let dispatcher = MeshInboundDispatcher::default();
+
+        // Pre-registration traffic must not panic — logged and dropped.
+        dispatcher.on_session_stream(
+            rid(1),
+            session_hello(rid(1), Profile::HuddleControl),
+            stub_stream(),
+        );
+        dispatcher.on_datagram(
+            rid(1),
+            MeshDatagram {
+                fenced: FencedHeader {
+                    session_id: uuid::Uuid::nil(),
+                    generation: 1,
+                    owner_runtime_id: rid(1),
+                },
+                seq: 0,
+                payload: vec![],
+            },
+        );
+
+        let first: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+        let f = Arc::clone(&first);
+        dispatcher.register_datagrams(Box::new(move |_, _| *f.lock().unwrap() += 1));
+        // Second registration is ignored; the first handler keeps the slot.
+        dispatcher.register_datagrams(Box::new(|_, _| panic!("second handler must not win")));
+
+        dispatcher.on_datagram(
+            rid(2),
+            MeshDatagram {
+                fenced: FencedHeader {
+                    session_id: uuid::Uuid::nil(),
+                    generation: 1,
+                    owner_runtime_id: rid(2),
+                },
+                seq: 1,
+                payload: vec![],
+            },
+        );
+        assert_eq!(*first.lock().unwrap(), 1);
     }
 }

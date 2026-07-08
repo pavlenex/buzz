@@ -135,7 +135,10 @@ pub struct PeerInfo {
     pub load: f32,
 }
 
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+/// Boxed future used across the seam traits. Public because implementors of
+/// [`StreamSendHalf`]/[`StreamRecvHalf`]/[`RelayPeerTransport`] outside this
+/// crate must name it.
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Seam 1: membership. Answers "who can I route to?" — never "who owns what."
 pub trait RelayMeshMembership: Send + Sync + 'static {
