@@ -23,6 +23,7 @@ import { TimelineSkeleton, useTimelineSkeletonRows } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
 import { useAnchoredScroll } from "./useAnchoredScroll";
 import { useLoadOlderOnScroll } from "./useLoadOlderOnScroll";
+import { useTimelinePreRealizationBand } from "./useTimelinePreRealizationBand";
 
 export type MessageTimelineHandle = {
   scrollToBottomOnNextUpdate: () => void;
@@ -364,6 +365,10 @@ const MessageTimelineBase = React.forwardRef<
     isLoading: showTimelineSkeleton,
     scrollContainerRef,
     sentinelRef: topSentinelRef,
+  });
+  useTimelinePreRealizationBand({
+    contentRef,
+    scrollContainerRef,
   });
 
   const timelineSkeletonRows = useTimelineSkeletonRows({
