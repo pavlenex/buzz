@@ -1049,6 +1049,7 @@ dependencies = [
  "buzz-db",
  "buzz-media",
  "buzz-pubsub",
+ "buzz-relay-mesh",
  "buzz-sdk",
  "buzz-search",
  "buzz-workflow",
