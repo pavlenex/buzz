@@ -187,6 +187,15 @@ test("GATE: trackpad-momentum upscroll — peak jerk in rect.top stays below the
 }) => {
   test.setTimeout(900_000);
   await installMockBridge(page);
+  // Seed the anchor probe array before navigation so the hook's build-stamp
+  // write (guarded on `__ANCHOR_PROBE__` existing) fires on its first
+  // correction — this is what lets the build-stamp guard below prove which
+  // dist loaded. Harmless on builds that predate the stamp (they never touch
+  // it). Mirrors Dawn's fixture setup.
+  await page.addInitScript(() => {
+    (window as unknown as { __ANCHOR_PROBE__?: unknown[] }).__ANCHOR_PROBE__ =
+      [];
+  });
   await page.goto("/");
   await page.waitForFunction(
     () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
@@ -385,6 +394,24 @@ test("GATE: trackpad-momentum upscroll — peak jerk in rect.top stays below the
     () => (window as unknown as { __FRAMES__: Frame[] }).__FRAMES__,
   )) as Frame[];
 
+  // BUILD-STAMP GUARD (Quinn's sharpening, folded into this harness per Eva).
+  // The anchoring hook writes a per-experiment `ANCHOR_BUILD_STAMP` onto
+  // `window.__ANCHOR_BUILD_STAMP__` the first time it corrects; reading it back
+  // proves WHICH writer's dist actually loaded. In an A/B harness the stamp
+  // differs per arm (baseline has none/an older value; each fix arm ships a new
+  // stamp per Eva's "new stamp per experiment" rule), so the expected value is
+  // supplied per-run via BUZZ_PERF_EXPECTED_STAMP. When set, we ASSERT equality
+  // — catching both "build failed → stale dist" and "built fine but serving the
+  // previous arm's dist," the two ways an A/B run silently scores the wrong
+  // build. When unset (a bare exploratory run), we only LOG the observed stamp
+  // so the operator always sees which build loaded without forcing a pin.
+  const observedBuildStamp = (await page.evaluate(
+    () =>
+      (window as unknown as { __ANCHOR_BUILD_STAMP__?: string })
+        .__ANCHOR_BUILD_STAMP__ ?? null,
+  )) as string | null;
+  const expectedBuildStamp = process.env.BUZZ_PERF_EXPECTED_STAMP ?? null;
+
   // ---- Analysis: two legs on per-frame rect.top derivatives (Quinn's W4).
   //
   // Build the first-difference series rowMove_i = p_i − p_{i-1}, flagging frames
@@ -581,10 +608,20 @@ test("GATE: trackpad-momentum upscroll — peak jerk in rect.top stays below the
     `profile=${PROFILE} ${IS_SLOW ? `(decay ${SLOW_PEAK_PX}→${SLOW_TAIL_PX}px, tail ${SLOW_TAIL_FRACTION}, pace ${SLOW_PACE_MS}ms)` : `(constant STEP_PX=${STEP_PX}, pace 8ms)`}`,
   );
   console.log(
+    `build stamp: observed=${observedBuildStamp ?? "(none)"}  expected=${expectedBuildStamp ?? "(unset — log-only)"}`,
+  );
+  console.log(
     "(peak jerk ~0 == smooth row motion; a one-frame spike == felt lurch)",
   );
   console.log("===========================================================\n");
   /* eslint-enable no-console */
+
+  // BUILD-STAMP GUARD (fail fast, before any score is trusted). When an expected
+  // stamp is pinned for this arm, the loaded bundle MUST carry it — otherwise the
+  // run scored a stale or wrong-arm dist and every number below is meaningless.
+  if (expectedBuildStamp !== null) {
+    expect(observedBuildStamp).toBe(expectedBuildStamp);
+  }
 
   // Sanity: the run actually exercised a meaningful momentum upscroll.
   expect(frames.length).toBeGreaterThan(500);
