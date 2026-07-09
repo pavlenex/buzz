@@ -569,6 +569,54 @@ test("GATE: trackpad-momentum upscroll — peak jerk in rect.top stays below the
     }
   }
 
+  // ---- LEG 5: net-final row residual — the persistent misalignment left in a
+  // span, i.e. how far the row ended up from where PURE scroll-tracking would
+  // put it. A correctly-anchored row moves only with scroll (rowMove ==
+  // scrollDelta: scrollTop drops by X on upscroll, a fixed row's rect.top rises
+  // by X); any deviation is the corrector's footprint. Per step the deviation is
+  // (rowMove − scrollDelta); accumulated over a clean span it is the NET
+  // corrector effect, and the value CARRIED at span end is the residual left
+  // behind. Report the peak |span-end residual| across spans (run end closes the
+  // final span).
+  //
+  // WHY THIS LEG EXISTS — the blind spot Leg 4 and Leg 2 share. Both sum/score
+  // BACKWARD motion (anti-scroll). The px-cap control arm's failure is the
+  // OPPOSITE shape: it clamps one correction then, because the shift measure is
+  // scroll-invariant to its own write, no-ops the next still frame and ABANDONS
+  // the remainder — leaving the row forward-but-short. Under-correction is an
+  // ABSENCE of forward motion (rowMove short of scrollDelta), never a backward
+  // step, so it is structurally invisible to every anti-scroll leg. Leg 5 is the
+  // only leg that sees it. Predictions (log-only until pinned): absorption pays
+  // the ledger down → residual ~0; cap abandons the remainder → residual is the
+  // persistent offset; a correct writer never deviates from scroll → ~0.
+  //
+  // SIGN-AGNOSTIC by construction — measures |deviation from scroll-tracking|,
+  // so it reads the corrector's net footprint whether it writes forward or
+  // backward. Span boundaries are Leg 4's break set (re-pick / prepend-commit /
+  // teardown); these MUST match the absorption ledger's zeroing boundaries —
+  // a ledger reset where Leg 5 does not reset would read as false residual (Eva,
+  // arbiter contract). breakBefore closes a span before the current step.
+  let peakNetResidual = 0;
+  let peakResidualAt = -1;
+  let spanResidual = 0;
+  let spanStart = -1;
+  for (const step of steps) {
+    if (step.breakBefore) {
+      if (Math.abs(spanResidual) > Math.abs(peakNetResidual)) {
+        peakNetResidual = spanResidual;
+        peakResidualAt = spanStart;
+      }
+      spanResidual = 0;
+      spanStart = step.i;
+    }
+    spanResidual += step.rowMove - step.scrollDelta; // deviation from tracking
+  }
+  // Run end closes the final span.
+  if (Math.abs(spanResidual) > Math.abs(peakNetResidual)) {
+    peakNetResidual = spanResidual;
+    peakResidualAt = spanStart;
+  }
+
   const commits = frames.filter(
     (f, i) => i > 0 && f.mounted > frames[i - 1].mounted,
   );
@@ -603,6 +651,9 @@ test("GATE: trackpad-momentum upscroll — peak jerk in rect.top stays below the
   );
   console.log(
     `LEG 4 peak reverse-excursion:  ${peakReverseExcursion.toFixed(2)}px  @frame ${peakExcursionAt}  (${IS_SLOW ? `gate <= ${MAX_REVERSE_EXCURSION_PX}` : "LOG-ONLY — slow-regime discriminator, gated only in profile=slow"})`,
+  );
+  console.log(
+    `LEG 5 net-final residual:      ${peakNetResidual.toFixed(2)}px  @span-start frame ${peakResidualAt}  (LOG-ONLY both profiles — under-correction discriminator: cap→persistent offset, absorption/correct→~0)`,
   );
   console.log(
     `profile=${PROFILE} ${IS_SLOW ? `(decay ${SLOW_PEAK_PX}→${SLOW_TAIL_PX}px, tail ${SLOW_TAIL_FRACTION}, pace ${SLOW_PACE_MS}ms)` : `(constant STEP_PX=${STEP_PX}, pace 8ms)`}`,
