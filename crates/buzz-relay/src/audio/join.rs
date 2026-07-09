@@ -36,6 +36,7 @@
 //! the client as a join error, never a silent media drop).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use buzz_core::CommunityId;
 use buzz_relay_mesh::{
@@ -43,11 +44,14 @@ use buzz_relay_mesh::{
     RelayPeerTransport, RuntimeId, StreamHello, StreamRole,
 };
 use serde::{Deserialize, Serialize};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use uuid::Uuid;
 
 use super::mesh::spawn_remote_peer_sink;
 use super::room::{AdmissionError, AudioRoomManager};
+use crate::tunnel::directory::{ReleaseResult, RenewResult, SessionDirectory, SessionLease};
 
 /// The slice of the Redis fenced session directory the huddle join path needs.
 ///
@@ -68,14 +72,27 @@ pub trait HuddleDirectory: Send + Sync {
 
     /// Acquire ownership of a huddle if it is currently unowned. `owner` is the
     /// runtime that would own the lease (this pod's mesh identity). Returns the
-    /// resulting ownership either way: `Acquired` when this pod took the lease,
-    /// `Held` when another pod won the race (CAS lost).
+    /// resulting ownership either way: `Acquired` when this pod took the lease
+    /// (carrying the full [`HuddleLease`] material so the owner side can renew /
+    /// release it), `Held` when another pod won the race (CAS lost) — a routing
+    /// hint only, so it carries the lighter [`Ownership`] snapshot.
     async fn acquire(
         &self,
         community_id: CommunityId,
         session_id: Uuid,
         owner: RuntimeId,
     ) -> Result<AcquireOutcome, MeshError>;
+
+    /// Renew an owned huddle lease. The renewer calls this on an interval to
+    /// hold the fenced lease; a [`HuddleRenewOutcome::Lost`] or an error is
+    /// owner-loss (Redis, the arbiter, no longer names this pod at this
+    /// generation). Mesh membership never enters here.
+    async fn renew(&self, lease: &HuddleLease) -> Result<HuddleRenewOutcome, MeshError>;
+
+    /// Release an owned huddle lease on clean teardown. A
+    /// [`HuddleReleaseOutcome::NotOwner`] means the lease already moved — the
+    /// caller lost ownership before it could release, which is owner-loss.
+    async fn release(&self, lease: &HuddleLease) -> Result<HuddleReleaseOutcome, MeshError>;
 
     /// Validate a fenced header against the live lease. Returns a typed
     /// [`MeshError`] fence rejection when the frame is stale / unowned /
@@ -121,14 +138,34 @@ impl HuddleDirectory for crate::tunnel::directory::SessionDirectory {
             .await
             .map_err(|e| MeshError::Transport(e.to_string()))?;
         Ok(match result {
-            AcquireResult::Acquired(l) => AcquireOutcome::Acquired(Ownership {
-                owner_runtime_id: l.owner_runtime_id,
-                generation: l.generation,
-            }),
+            // Acquired: keep the full lease so the owner side can renew/release
+            // it. Redis is the arbiter — we retain its material, never rebuild
+            // authority from `{owner, generation}`.
+            AcquireResult::Acquired(l) => AcquireOutcome::Acquired(HuddleLease(l)),
             AcquireResult::Exists(l) => AcquireOutcome::Held(Ownership {
                 owner_runtime_id: l.owner_runtime_id,
                 generation: l.generation,
             }),
+        })
+    }
+
+    async fn renew(&self, lease: &HuddleLease) -> Result<HuddleRenewOutcome, MeshError> {
+        let result = SessionDirectory::renew(self, &lease.0)
+            .await
+            .map_err(|e| MeshError::Transport(e.to_string()))?;
+        Ok(match result {
+            RenewResult::Renewed(l) => HuddleRenewOutcome::Renewed(HuddleLease(l)),
+            RenewResult::Lost { .. } => HuddleRenewOutcome::Lost,
+        })
+    }
+
+    async fn release(&self, lease: &HuddleLease) -> Result<HuddleReleaseOutcome, MeshError> {
+        let result = SessionDirectory::release(self, &lease.0)
+            .await
+            .map_err(|e| MeshError::Transport(e.to_string()))?;
+        Ok(match result {
+            ReleaseResult::Released(_) => HuddleReleaseOutcome::Released,
+            ReleaseResult::NotOwner { .. } => HuddleReleaseOutcome::NotOwner,
         })
     }
 
@@ -150,11 +187,55 @@ pub struct Ownership {
     pub generation: u64,
 }
 
+/// Real, fenced lease material for a huddle this pod owns.
+///
+/// Retained from [`HuddleDirectory::acquire`] so the owner side can renew and
+/// release the exact `(owner_runtime_id, generation)` epoch Redis granted —
+/// authority is never reconstructed from an `Ownership` snapshot or a mesh
+/// membership hint. The inner [`SessionLease`] is the session-directory lane's
+/// Redis-arbitrated lease; huddle code treats it as an opaque handle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HuddleLease(pub(crate) SessionLease);
+
+impl HuddleLease {
+    /// The fenced generation this lease owns.
+    pub fn generation(&self) -> u64 {
+        self.0.generation
+    }
+
+    /// The runtime that owns this lease (this pod).
+    pub fn owner_runtime_id(&self) -> RuntimeId {
+        self.0.owner_runtime_id
+    }
+}
+
+/// Result of a huddle-lease renewal. Loss is owner-loss: Redis no longer names
+/// this pod at this generation, so the owner must tear down and let clients
+/// rejoin against the new owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HuddleRenewOutcome {
+    /// Lease TTL extended; this pod still owns the generation (carries the
+    /// refreshed lease).
+    Renewed(HuddleLease),
+    /// Lease absent or moved to a different owner/generation — owner-loss.
+    Lost,
+}
+
+/// Result of releasing a huddle lease on teardown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HuddleReleaseOutcome {
+    /// Lease deleted; clean release by the owner.
+    Released,
+    /// Lease absent or already moved — the owner lost it before releasing.
+    NotOwner,
+}
+
 /// Result of an ownership acquire attempt.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AcquireOutcome {
-    /// This pod created the lease and owns the returned generation.
-    Acquired(Ownership),
+    /// This pod created the lease and owns the returned generation. Carries the
+    /// full [`HuddleLease`] so the owner side can renew/release it.
+    Acquired(HuddleLease),
     /// Another pod already holds the lease (CAS lost); route to it instead.
     Held(Ownership),
 }
@@ -234,7 +315,7 @@ pub async fn resolve_join<D: HuddleDirectory + ?Sized>(
             {
                 AcquireOutcome::Acquired(o) => {
                     return Ok(JoinOutcome::LocalOwner {
-                        generation: o.generation,
+                        generation: o.generation(),
                     });
                 }
                 AcquireOutcome::Held(o) => o,
@@ -262,6 +343,120 @@ pub async fn resolve_join<D: HuddleDirectory + ?Sized>(
         owner_runtime_id: ownership.owner_runtime_id,
         generation: ownership.generation,
     })
+}
+
+/// Renewal cadence for an owned huddle lease. Mirrors the reliable lane
+/// (`crate::tunnel::reliable::DEFAULT_RENEW_INTERVAL`): renew every 10s against
+/// the directory's 30s TTL, giving three renew attempts per lease lifetime.
+const DEFAULT_HUDDLE_RENEW_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Background huddle-lease renewer plus an observable ownership-loss signal.
+///
+/// The owner-side analog of the reliable lane's
+/// `crate::tunnel::reliable::ReliableLeaseRenewer`, with the identical
+/// contract: `lost` is cancelled **only** on fenced owner-loss —
+/// [`HuddleRenewOutcome::Lost`], a renew error, a release
+/// [`HuddleReleaseOutcome::NotOwner`], or a release error on a non-caller-loss
+/// exit. Caller-initiated `cancel` (client drain, clean leave, shutdown) is
+/// normal teardown and stays silent.
+pub struct HuddleLeaseRenewer {
+    /// Worker task. Await during teardown if the caller needs release
+    /// completion.
+    pub task: JoinHandle<()>,
+    /// Cancelled when renewal observes loss / `NotOwner` or a renewal error.
+    /// Owner-side `serve_control_loop`s select on this to emit a proactive
+    /// `Goodbye(StaleGeneration)` so non-owner pods rejoin against the new
+    /// owner.
+    pub lost: CancellationToken,
+}
+
+/// Start background renewal for an owner-held huddle lease and return a loss
+/// signal consumers can observe.
+///
+/// A mirror of `crate::tunnel::reliable::spawn_observable_renewer`: renew the
+/// fenced lease on an interval; on owner-loss trip `lost` and stop; on
+/// caller-`cancel` release cleanly and stay silent. `directory` is the fenced
+/// arbiter — the sole authority for whether this pod still owns the generation.
+pub fn spawn_observable_huddle_renewer<D: HuddleDirectory + ?Sized + 'static>(
+    directory: Arc<D>,
+    lease: HuddleLease,
+    cancel: CancellationToken,
+) -> HuddleLeaseRenewer {
+    spawn_huddle_renewer_with_interval(directory, lease, cancel, DEFAULT_HUDDLE_RENEW_INTERVAL)
+}
+
+fn spawn_huddle_renewer_with_interval<D: HuddleDirectory + ?Sized + 'static>(
+    directory: Arc<D>,
+    lease: HuddleLease,
+    cancel: CancellationToken,
+    renew_interval: Duration,
+) -> HuddleLeaseRenewer {
+    let lost = CancellationToken::new();
+    let lost_for_task = lost.clone();
+    let task = tokio::spawn(async move {
+        let owner_runtime_id = lease.owner_runtime_id();
+        let generation = lease.generation();
+        let mut interval = tokio::time::interval(renew_interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let caller_cancelled = loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break true,
+                _ = interval.tick() => {
+                    match directory.renew(&lease).await {
+                        Ok(HuddleRenewOutcome::Renewed(_)) => {}
+                        Ok(HuddleRenewOutcome::Lost) => {
+                            tracing::warn!(
+                                %owner_runtime_id,
+                                generation,
+                                "huddle lease renewal lost"
+                            );
+                            lost_for_task.cancel();
+                            break false;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                %owner_runtime_id,
+                                generation,
+                                error = %err,
+                                "huddle lease renewal failed"
+                            );
+                            lost_for_task.cancel();
+                            break false;
+                        }
+                    }
+                }
+            }
+        };
+
+        match directory.release(&lease).await {
+            Ok(HuddleReleaseOutcome::Released) => {}
+            Ok(HuddleReleaseOutcome::NotOwner) => {
+                tracing::warn!(
+                    %owner_runtime_id,
+                    generation,
+                    "huddle lease release found non-owner"
+                );
+                lost_for_task.cancel();
+            }
+            Err(err) => {
+                tracing::warn!(
+                    %owner_runtime_id,
+                    generation,
+                    error = %err,
+                    "huddle lease release failed"
+                );
+                // A release error after a clean caller cancel is logged but not
+                // owner-loss: we are shutting down anyway. On any other exit
+                // (already lost) the signal has already tripped; trip it here
+                // too so a loss that only surfaces at release is never silent.
+                if !caller_cancelled {
+                    lost_for_task.cancel();
+                }
+            }
+        }
+    });
+
+    HuddleLeaseRenewer { task, lost }
 }
 
 /// `HuddleControl` stream payload, carried in
@@ -455,11 +650,19 @@ impl<D: HuddleDirectory + ?Sized> HuddleControlAcceptor<D> {
     /// see [`Self::serve_control_loop`]. Matches the dispatcher callback shape
     /// `(from, hello, stream)`; no `community_id` param — community rides the
     /// wire and is self-verified by the fence.
+    ///
+    /// `lost` is the owner-loss mechanism: `None` (the current dispatcher path)
+    /// preserves prior behavior; `Some(lost)` — supplied by the future
+    /// `JoinOutcome::LocalOwner` live-attach that fans one renewer's `lost` into
+    /// this pod's control loops — makes the loop emit a proactive
+    /// [`GoodbyeReason::StaleGeneration`] and stop when the fenced lease is
+    /// lost, so non-owner pods rejoin against the new owner.
     pub async fn accept_inbound(
         &self,
         from: RuntimeId,
         hello: StreamHello,
         stream: MeshStream,
+        lost: Option<CancellationToken>,
     ) -> Result<(), MeshError> {
         if hello.sender != from {
             return Err(MeshError::Transport(format!(
@@ -490,7 +693,7 @@ impl<D: HuddleDirectory + ?Sized> HuddleControlAcceptor<D> {
             });
         }
 
-        self.serve_control_loop(from, fenced, stream).await
+        self.serve_control_loop(from, fenced, stream, lost).await
     }
 
     /// Serve register/unregister frames for one non-owner pod's stream.
@@ -508,11 +711,17 @@ impl<D: HuddleDirectory + ?Sized> HuddleControlAcceptor<D> {
     /// Peers this stream registers are tracked so a stream close (the non-owner
     /// pod went away) tears them all down — no leaked remote peers holding
     /// index slots in the owner's room.
+    /// `lost`, when `Some`, is an owner-loss signal (from the huddle-lease
+    /// renewer): if it fires the loop stops and sends a proactive
+    /// [`GoodbyeReason::StaleGeneration`] before teardown, so the non-owner pod
+    /// rejoins against the new owner instead of waiting for the stream to fault.
+    /// `None` disables the arm and preserves the recv-only behavior.
     async fn serve_control_loop(
         &self,
         from: RuntimeId,
         fenced: FencedHeader,
         mut stream: MeshStream,
+        lost: Option<CancellationToken>,
     ) -> Result<(), MeshError> {
         let session_id = fenced.session_id;
         // pubkey -> peer_id, for UnregisterPeer and teardown on stream close.
@@ -522,8 +731,28 @@ impl<D: HuddleDirectory + ?Sized> HuddleControlAcceptor<D> {
         // frame must agree. `None` until the first register arrives.
         let mut stream_community: Option<Uuid> = None;
 
+        // Owner-loss latch: set when `lost` fires so teardown sends a proactive
+        // `Goodbye(StaleGeneration)`. A stream faulting on its own leaves this
+        // false and the close stays silent, as before.
+        let mut owner_lost = false;
+
         let result = loop {
-            let msg = match stream.recv_frame().await {
+            // A future that never resolves when there is no loss signal, so the
+            // `select!` degenerates to a plain recv for the `None` case.
+            let lost_fired = async {
+                match &lost {
+                    Some(token) => token.cancelled().await,
+                    None => std::future::pending().await,
+                }
+            };
+            let frame = tokio::select! {
+                _ = lost_fired => {
+                    owner_lost = true;
+                    break Ok(());
+                }
+                frame = stream.recv_frame() => frame,
+            };
+            let msg = match frame {
                 Ok(Some(MeshStreamFrame::Data { fenced: f, payload })) => {
                     // Every control frame must carry the same fenced header the
                     // Hello did: a lease that moves mid-stream (owner or
@@ -622,6 +851,19 @@ impl<D: HuddleDirectory + ?Sized> HuddleControlAcceptor<D> {
                 }
             }
         };
+
+        // Owner-loss: tell the non-owner pod its owner fenced itself out, so it
+        // rejoins against the new owner. Best-effort — teardown proceeds even if
+        // the send fails (the stream may already be gone). This is the only
+        // place the owner side emits `StaleGeneration`; a normal close does not.
+        if owner_lost {
+            let _ = stream
+                .send_frame(MeshStreamFrame::Goodbye {
+                    fenced,
+                    reason: GoodbyeReason::StaleGeneration,
+                })
+                .await;
+        }
 
         // Teardown: drop every peer this stream registered, regardless of how
         // the loop ended. Dropping the peer drops its `audio_tx`, which ends the
@@ -961,6 +1203,12 @@ mod tests {
         validate_fails: Mutex<bool>,
         acquire_calls: Mutex<u32>,
         validate_calls: Mutex<u32>,
+        // Renewer scripting: each `renew` pops the next outcome; an empty queue
+        // yields `Renewed` (lease holds). `release` returns the scripted value.
+        renew_outcomes: Mutex<std::collections::VecDeque<HuddleRenewOutcome>>,
+        release_outcome: Mutex<Option<HuddleReleaseOutcome>>,
+        renew_calls: Mutex<u32>,
+        release_calls: Mutex<u32>,
     }
 
     impl FakeDir {
@@ -972,6 +1220,17 @@ mod tests {
         fn unowned_then_acquire(a: AcquireOutcome) -> Self {
             let d = Self::default();
             *d.acquire.lock().unwrap() = Some(a);
+            d
+        }
+        /// Renewer-lane double: `renew` yields the scripted outcomes in order
+        /// (then holds), `release` yields `release`.
+        fn with_renew_script(
+            renews: impl IntoIterator<Item = HuddleRenewOutcome>,
+            release: HuddleReleaseOutcome,
+        ) -> Self {
+            let d = Self::default();
+            *d.renew_outcomes.lock().unwrap() = renews.into_iter().collect();
+            *d.release_outcome.lock().unwrap() = Some(release);
             d
         }
     }
@@ -992,7 +1251,12 @@ mod tests {
             _owner: RuntimeId,
         ) -> Result<AcquireOutcome, MeshError> {
             *self.acquire_calls.lock().unwrap() += 1;
-            Ok(self.acquire.lock().unwrap().expect("acquire not scripted"))
+            Ok(self
+                .acquire
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("acquire not scripted"))
         }
         async fn validate(&self, _c: CommunityId, _f: &FencedHeader) -> Result<(), MeshError> {
             *self.validate_calls.lock().unwrap() += 1;
@@ -1007,14 +1271,48 @@ mod tests {
                 Ok(())
             }
         }
+        async fn renew(&self, _lease: &HuddleLease) -> Result<HuddleRenewOutcome, MeshError> {
+            *self.renew_calls.lock().unwrap() += 1;
+            Ok(self
+                .renew_outcomes
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(HuddleRenewOutcome::Renewed(test_lease())))
+        }
+        async fn release(&self, _lease: &HuddleLease) -> Result<HuddleReleaseOutcome, MeshError> {
+            *self.release_calls.lock().unwrap() += 1;
+            Ok(self
+                .release_outcome
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(HuddleReleaseOutcome::Released))
+        }
+    }
+
+    /// A `HuddleLease` for renewer tests: the inner `SessionLease` is opaque to
+    /// the huddle lane, so any well-formed fenced tuple works.
+    fn test_lease() -> HuddleLease {
+        HuddleLease(SessionLease {
+            community_id: community(),
+            session_id: Uuid::from_u128(0xFEED),
+            owner_runtime_id: rt(1),
+            generation: 7,
+            profile: HUDDLE_CONTROL_PROFILE,
+        })
     }
 
     #[tokio::test]
     async fn unowned_huddle_is_acquired_as_local_owner() {
-        let dir = FakeDir::unowned_then_acquire(AcquireOutcome::Acquired(Ownership {
-            owner_runtime_id: rt(1),
-            generation: 7,
-        }));
+        let dir =
+            FakeDir::unowned_then_acquire(AcquireOutcome::Acquired(HuddleLease(SessionLease {
+                community_id: community(),
+                session_id: Uuid::from_u128(0xFEED),
+                owner_runtime_id: rt(1),
+                generation: 7,
+                profile: HUDDLE_CONTROL_PROFILE,
+            })));
         let out = resolve_join(&dir, community(), Uuid::new_v4(), rt(1))
             .await
             .unwrap();
@@ -1221,8 +1519,11 @@ mod tests {
 
         let (owner_stream, mut client) = stream_pair();
         let hello = huddle_hello(from, fenced);
-        let served =
-            tokio::spawn(async move { acceptor.accept_inbound(from, hello, owner_stream).await });
+        let served = tokio::spawn(async move {
+            acceptor
+                .accept_inbound(from, hello, owner_stream, None)
+                .await
+        });
 
         // Client registers, carrying its community as the wire UUID.
         client
@@ -1274,8 +1575,11 @@ mod tests {
 
         let (owner_stream, mut client) = stream_pair();
         let hello = huddle_hello(from, fenced);
-        let served =
-            tokio::spawn(async move { acceptor.accept_inbound(from, hello, owner_stream).await });
+        let served = tokio::spawn(async move {
+            acceptor
+                .accept_inbound(from, hello, owner_stream, None)
+                .await
+        });
 
         client
             .send_frame(MeshStreamFrame::Data {
@@ -1306,6 +1610,108 @@ mod tests {
         );
 
         drop(client);
+        served.await.unwrap().unwrap();
+    }
+
+    // --- Huddle-lease renewer: owner-loss observability ---------------------
+    //
+    // These mirror the reliable lane's renewer tests
+    // (`crate::tunnel::reliable::observable_renewer_*`), driven off the
+    // `HuddleDirectory` seam with a scripted `FakeDir` so no Redis is needed.
+
+    #[tokio::test]
+    async fn observable_renewer_signals_loss_when_lease_disappears() {
+        // First renew observes the lease gone → owner-loss.
+        let dir = Arc::new(FakeDir::with_renew_script(
+            [HuddleRenewOutcome::Lost],
+            HuddleReleaseOutcome::Released,
+        ));
+        let cancel = CancellationToken::new();
+        let renewer = spawn_huddle_renewer_with_interval(
+            Arc::clone(&dir) as Arc<dyn HuddleDirectory>,
+            test_lease(),
+            cancel,
+            Duration::from_millis(5),
+        );
+
+        tokio::time::timeout(Duration::from_secs(2), renewer.lost.cancelled())
+            .await
+            .expect("lost token is cancelled after ownership loss");
+        renewer.task.await.unwrap();
+        assert_eq!(*dir.renew_calls.lock().unwrap(), 1);
+        // Loss still runs the release attempt on the way out.
+        assert_eq!(*dir.release_calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn observable_renewer_normal_cancel_does_not_signal_loss() {
+        // Empty renew script → `Renewed` forever; caller cancels cleanly.
+        let dir = Arc::new(FakeDir::with_renew_script(
+            std::iter::empty(),
+            HuddleReleaseOutcome::Released,
+        ));
+        let cancel = CancellationToken::new();
+        let renewer = spawn_huddle_renewer_with_interval(
+            Arc::clone(&dir) as Arc<dyn HuddleDirectory>,
+            test_lease(),
+            cancel.clone(),
+            Duration::from_millis(5),
+        );
+        cancel.cancel();
+        renewer.task.await.unwrap();
+        assert!(
+            !renewer.lost.is_cancelled(),
+            "caller-initiated shutdown is not ownership loss"
+        );
+        // Clean release ran and did not trip the loss signal.
+        assert_eq!(*dir.release_calls.lock().unwrap(), 1);
+    }
+
+    /// The owner-side control loop, given a `lost` token, emits a proactive
+    /// `Goodbye(StaleGeneration)` to the non-owner pod when the token fires —
+    /// the wire mechanism the live-attach seam will drive from a lost lease.
+    #[tokio::test]
+    async fn serve_control_loop_emits_stale_generation_goodbye_on_loss() {
+        let owner_rt = rt(1);
+        let from = rt(2);
+        let session_id = Uuid::new_v4();
+        let fenced = fenced_owned_by(owner_rt, session_id);
+
+        let acceptor = HuddleControlAcceptor::new(
+            Arc::new(AudioRoomManager::new()),
+            Arc::new(NullTransport) as Arc<dyn RelayPeerTransport>,
+            Arc::new(FakeDir::default()),
+            owner_rt,
+        );
+
+        let (owner_stream, mut client) = stream_pair();
+        let hello = huddle_hello(from, fenced);
+        let lost = CancellationToken::new();
+        let lost_for_owner = lost.clone();
+        let served = tokio::spawn(async move {
+            acceptor
+                .accept_inbound(from, hello, owner_stream, Some(lost_for_owner))
+                .await
+        });
+
+        // Owner observes lease loss → proactive Goodbye down the client stream.
+        lost.cancel();
+
+        let frame = tokio::time::timeout(Duration::from_secs(2), client.recv_frame())
+            .await
+            .expect("goodbye arrives")
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(
+                frame,
+                MeshStreamFrame::Goodbye {
+                    reason: GoodbyeReason::StaleGeneration,
+                    ..
+                }
+            ),
+            "expected Goodbye(StaleGeneration), got {frame:?}"
+        );
         served.await.unwrap().unwrap();
     }
 

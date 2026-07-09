@@ -240,7 +240,11 @@ pub fn wire_mesh_consumers(
     dispatcher.register_huddle_control(Box::new(move |from, hello, stream| {
         let acceptor = Arc::clone(&acceptor);
         tokio::spawn(async move {
-            if let Err(e) = acceptor.accept_inbound(from, hello, stream).await {
+            // `None` loss signal: this dispatcher path serves a *remote* pod's
+            // control stream and owns no lease. The owner-loss fan-out is
+            // attached from the local `JoinOutcome::LocalOwner` join arm (the
+            // deferred live-attach seam), not from inbound acceptance.
+            if let Err(e) = acceptor.accept_inbound(from, hello, stream, None).await {
                 tracing::warn!(peer = %from, "huddle-control stream ended with error: {e}");
             }
         });
