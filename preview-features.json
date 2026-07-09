@@ -40,6 +40,14 @@
       "platforms": [
         "desktop"
       ]
+    },
+    {
+      "id": "compositorTimelineScroll",
+      "name": "Compositor timeline scrolling",
+      "description": "Lets the webview handle timeline trackpad gestures without a global blocking wheel listener",
+      "platforms": [
+        "desktop"
+      ]
     }
   ]
 }

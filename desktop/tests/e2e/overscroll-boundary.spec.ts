@@ -28,7 +28,38 @@ async function dispatchWheelPrevented(
 }
 
 test.beforeEach(async ({ page }) => {
-  await installMockBridge(page);
+  // Boundary-lock contracts exercise the stable/default path. Most E2E suites
+  // opt every preview feature in, but compositorTimelineScroll intentionally
+  // removes this listener so trackpad scrolling can stay off the main thread.
+  await installMockBridge(page, undefined, { seedPreviewFeatures: false });
+});
+
+test("compositor timeline scrolling leaves timeline wheel events unhandled", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "buzz-feature-overrides-v1",
+      JSON.stringify({ compositorTimelineScroll: true }),
+    );
+  });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("message-timeline")).toBeVisible();
+
+  // The diagnostic path removes the global non-passive listener rather than
+  // merely returning early for conversations. The fixed-height shell and CSS
+  // overscroll backstop remain; JS no longer blocks timeline scrolling.
+  await expect(
+    dispatchWheelPrevented(page, '[data-testid="message-timeline"]', {
+      deltaY: -120,
+    }),
+  ).resolves.toBe(false);
+  await expect(
+    dispatchWheelPrevented(page, '[data-testid="message-timeline"]', {
+      deltaX: -120,
+    }),
+  ).resolves.toBe(false);
 });
 
 test("locks viewport rubber-band outside conversation scrollers", async ({
