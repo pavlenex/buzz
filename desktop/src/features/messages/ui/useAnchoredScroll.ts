@@ -313,6 +313,16 @@ export function useAnchoredScroll({
     topOffset: number;
     scrollTop: number;
   } | null>(null);
+  // The reading-anchor snapshot from the PREVIOUS rAF tick. On WebKit the
+  // current-frame snapshot is captured post-realization (blind to this frame's
+  // reflow), so the RO fallback diffs against this older, pre-realization read
+  // to recover the anchor's true document-position shift. Same shape as
+  // `readingAnchorRef`; the sampler shifts current->previous each frame.
+  const prevReadingAnchorRef = React.useRef<{
+    id: string;
+    topOffset: number;
+    scrollTop: number;
+  } | null>(null);
 
   // Reset everything when the channel changes — the layout effect that runs
   // immediately after this reset is responsible for either jumping to bottom
@@ -718,18 +728,42 @@ export function useAnchoredScroll({
         // is captured pre-reflow, so this fires and measures the exact shift).
         container.scrollTo({ top: target, behavior: "auto" });
       } else if (Math.abs(aboveShift) > 0.5) {
-        // The position diff sees no move — the WebKit case, where the rAF
-        // baseline lands post-realization so `baseline` and `current` straddle
-        // the SAME side of the reflow (dTop=dScroll=0) and the diff is blind to
-        // it. The RO entries still carry the true magnitude: the net height
-        // change of the rows ABOVE the anchor is how far the anchor's document
-        // position shifted, so absorb it into scrollTop to hold the row. This is
-        // baseline-timing-independent — it reads the reflow directly rather than
-        // diffing a snapshot WebKit captured too late.
-        container.scrollTo({
-          top: currentScrollTop + aboveShift,
-          behavior: "auto",
-        });
+        // The baseline-relative position diff is blind. On WebKit the rAF
+        // baseline is captured post-realization, so `baseline` and `current`
+        // sit on the SAME side of the reflow and the diff reads 0 — but that is
+        // ALSO what a frame with no genuine displacement reads, and `aboveShift`
+        // (summed from the RO entries) is not by itself enough to tell them
+        // apart: a row straddling the anchor boundary is misclassified, so
+        // `aboveShift` can be nonzero on a frame where the anchor did not move
+        // (the "Shape B" slow-trackpad lurch — firing it IS the visible jump).
+        //
+        // Sufficient signal: the anchor's own document-position shift measured
+        // independently of the RO entries, over the PREVIOUS rAF tick (which,
+        // unlike the same-frame baseline, was captured before this frame's
+        // realization, so it spans the reflow and is not blind). Document
+        // position (`scrollTop + topOffset`) is scroll-invariant: the user's own
+        // scroll moves `scrollTop` and `topOffset` equal-and-opposite, so this
+        // observed shift is the reflow alone — Eva's probe `e = rowMove +
+        // dScroll`, computed from one coherent prev-tick snapshot.
+        //
+        // Fire only when the two instruments AGREE (`aboveShift ≈ observed`):
+        // agreement is the sufficiency condition — both the RO sum and the
+        // independent geometry see the same reflow, so it is real (not a
+        // straddler miscount). Correct by the observed shift, never by raw
+        // on-screen motion (that would refold the user's scroll into the pin).
+        const prev = prevReadingAnchorRef.current;
+        if (prev && prev.id === baseline.id) {
+          const observedShift =
+            currentScrollTop +
+            currentTopOffset -
+            (prev.scrollTop + prev.topOffset);
+          if (Math.abs(aboveShift - observedShift) <= 0.5) {
+            container.scrollTo({
+              top: currentScrollTop + observedShift,
+              behavior: "auto",
+            });
+          }
+        }
       }
     });
     // Observe every timeline row (not the content wrapper): a
@@ -774,6 +808,13 @@ export function useAnchoredScroll({
     let rafId = requestAnimationFrame(function sample() {
       const container = scrollContainerRef.current;
       if (container && !settlingRef.current) {
+        // Shift the current snapshot into the previous slot BEFORE overwriting
+        // it, so the RO callback (which runs after this rAF in the same frame)
+        // can diff the anchor's document position against the PREVIOUS frame's
+        // pre-realization read — the only rAF snapshot old enough to span this
+        // frame's reflow on WebKit. The same-frame snapshot below is captured
+        // post-realization and is blind to it.
+        prevReadingAnchorRef.current = readingAnchorRef.current;
         readingAnchorRef.current = isAtBottomNow(container)
           ? null
           : snapshotReadingAnchor(container);
