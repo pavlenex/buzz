@@ -237,6 +237,11 @@ async fn handle_audio_connection(
     // registration to the owner and, once the client is admitted locally, is
     // opened so its media forwards to the owner instead of fanning out locally.
     let mut pending_remote: Option<crate::audio::join::JoinOutcome> = None;
+    // The freshly-acquired owner lease, if this connection won the CAS. Held
+    // until `add_peer` succeeds, then installed in the owner registry so the
+    // renewer's lifetime matches the room's, not this connection's failure
+    // paths (archived channel, version reject, room full) which return early.
+    let mut acquired_lease: Option<crate::audio::join::HuddleLease> = None;
     match state.mesh() {
         Some(mesh) => {
             match crate::audio::join::resolve_join(
@@ -247,7 +252,10 @@ async fn handle_audio_connection(
             )
             .await
             {
-                Ok(outcome) => pending_remote = Some(outcome),
+                Ok(resolved) => {
+                    acquired_lease = resolved.acquired;
+                    pending_remote = Some(resolved.outcome);
+                }
                 Err(e) => {
                     warn!(
                         channel_id = %channel_id,
@@ -406,6 +414,39 @@ async fn handle_audio_connection(
         peer_index,
         "audio peer joined"
     );
+
+    // Owner path: install (or reuse) this room's single lease renewer now that
+    // a peer is admitted, and capture its owner-loss signal. The connection
+    // that won the CAS holds `acquired_lease`; it installs the renewer. A
+    // steady-state owner (an earlier joiner installed it) reuses the room's
+    // existing signal. `owner_lost` drives this connection's own teardown
+    // below; `owner_generation` fences the release on room-empty so a stale
+    // teardown cannot release a newer epoch a re-acquire installed.
+    //
+    // A control stream from a non-owner pod that raced this install finds no
+    // entry and serves recv-only for its lifetime — degraded, not incorrect:
+    // the per-frame fence in `serve_control_loop` still tears it down when the
+    // owner's generation moves. The proactive `Goodbye` is an optimization on
+    // top of the fence, not the sole protection.
+    let mut owner_lost: Option<CancellationToken> = None;
+    let mut owner_generation: Option<u64> = None;
+    if let Some(mesh) = state.mesh() {
+        match (pending_remote, acquired_lease.take()) {
+            (Some(crate::audio::join::JoinOutcome::LocalOwner { generation }), Some(lease)) => {
+                owner_lost = Some(mesh.owners.attach(
+                    channel_id,
+                    Arc::new(mesh.directory.clone()),
+                    lease,
+                ));
+                owner_generation = Some(generation);
+            }
+            (Some(crate::audio::join::JoinOutcome::LocalOwner { generation }), None) => {
+                owner_lost = mesh.owners.lost_for(channel_id);
+                owner_generation = Some(generation);
+            }
+            _ => {}
+        }
+    }
 
     // Non-owner path: the huddle is owned by another pod. Register this client
     // with the owner over a `HuddleControl` stream so the owner fans media back
@@ -571,6 +612,34 @@ async fn handle_audio_connection(
         })
     });
 
+    // Owner path: watch the room's owner-loss signal. When the renewer trips
+    // `owner_lost` (Redis no longer names this pod at this generation), tear
+    // this owner client down exactly as the non-owner reader does on a remote
+    // teardown — cancel the connection so the client's WS closes and it rejoins
+    // against the new owner, and forget the local generation floor so the
+    // rejoin's fresh generation is accepted. This is the owner-side reflection
+    // of `teardown_remote_huddle`; Redis fenced CAS stays the ownership
+    // arbiter, `forget` only clears local stale-frame suppression. Silent on a
+    // normal connection cancel (client left / shutdown): the renewer's `lost`
+    // fires only on fenced loss, never on caller cancel.
+    let owner_loss_task = owner_lost.clone().and_then(|lost| {
+        let fence = Arc::clone(&state.mesh()?.audio_fence);
+        let owner_cancel = cancel.clone();
+        Some(tokio::spawn(async move {
+            tokio::select! {
+                _ = lost.cancelled() => {
+                    info!(
+                        channel_id = %channel_id,
+                        "huddle owner lost its lease — closing local client for rejoin"
+                    );
+                    owner_cancel.cancel();
+                    fence.forget(channel_id);
+                }
+                _ = owner_cancel.cancelled() => {}
+            }
+        }))
+    });
+
     recv_loop(
         ws_recv,
         Arc::clone(&room),
@@ -591,6 +660,11 @@ async fn handle_audio_connection(
     // its clean-close (or teardown) completes before connection cleanup returns.
     if let Some(reader_task) = reader_task {
         let _ = reader_task.await;
+    }
+    // The owner-loss watcher is cancelled by `cancel.cancel()` above (or has
+    // already fired); join it so it settles before cleanup.
+    if let Some(owner_loss_task) = owner_loss_task {
+        let _ = owner_loss_task.await;
     }
 
     // Atomic remove + end check: remove_peer_and_check_ended holds the
@@ -620,6 +694,7 @@ async fn handle_audio_connection(
     )
     .await;
 
+    let room_emptied;
     if should_auto_end {
         info!(channel_id = %channel_id, "audio room empty — auto-ending huddle");
 
@@ -631,9 +706,10 @@ async fn handle_audio_connection(
             Err(e) => {
                 warn!(channel_id = %channel_id, "auto-archive failed, huddle stays alive: {e}");
                 room.clear_ended();
+                room_emptied = false;
             }
             Ok(()) => {
-                state.audio_rooms.cleanup_if_empty(channel_id);
+                room_emptied = state.audio_rooms.cleanup_if_empty(channel_id);
 
                 emit_participant_event(
                     &state,
@@ -647,7 +723,19 @@ async fn handle_audio_connection(
             }
         }
     } else {
-        state.audio_rooms.cleanup_if_empty(channel_id);
+        room_emptied = state.audio_rooms.cleanup_if_empty(channel_id);
+    }
+
+    // Owner path: release this room's lease when the room empties, so a new
+    // owner can acquire and the renewer stops cleanly (silent, not owner-loss).
+    // Fenced on the generation this connection saw as owner: if the room
+    // emptied and a re-acquire installed a newer epoch in the gap, `release`
+    // is a no-op for the stale generation and leaves the live renewer running.
+    // Only the last leaver empties the room, so exactly one release fires.
+    if room_emptied {
+        if let (Some(mesh), Some(generation)) = (state.mesh(), owner_generation) {
+            mesh.owners.release(channel_id, generation);
+        }
     }
 
     info!(

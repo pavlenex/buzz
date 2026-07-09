@@ -43,6 +43,7 @@ use buzz_relay_mesh::{
     FencedHeader, GoodbyeReason, MeshDatagram, MeshError, MeshStream, MeshStreamFrame, Profile,
     RelayPeerTransport, RuntimeId, StreamHello, StreamRole,
 };
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -285,6 +286,23 @@ impl JoinOutcome {
     }
 }
 
+/// Outcome of [`resolve_join`]: the routing verdict plus, on the arm that
+/// freshly acquired the lease, the real [`HuddleLease`] to install in the
+/// [`HuddleOwnerRegistry`].
+///
+/// `acquired` is `Some` **only** when this call won the Redis CAS and minted a
+/// new lease (`JoinOutcome::LocalOwner` via acquire). The steady-state owner
+/// arm and every remote-owner arm carry `None`: a steady-state owner reuses the
+/// registry's existing renewer rather than rebuilding authority from the
+/// generation snapshot, honoring the authority-not-snapshot rule.
+#[derive(Debug)]
+pub struct ResolvedJoin {
+    /// What the handler should do with the join.
+    pub outcome: JoinOutcome,
+    /// The freshly-acquired owner lease, present only on the acquire arm.
+    pub acquired: Option<HuddleLease>,
+}
+
 /// Resolve who owns a huddle and how this pod should join it.
 ///
 /// The ownership plane is Redis-arbitrated: we look up the live lease and, only
@@ -293,6 +311,11 @@ impl JoinOutcome {
 /// outcome is fence-validated against the live lease before we route to it, so
 /// a caller never opens a control stream on a header Redis would reject.
 ///
+/// On the arm that freshly acquires the lease, the real [`HuddleLease`] is
+/// returned in [`ResolvedJoin::acquired`] so the caller installs one per-room
+/// renewer in the [`HuddleOwnerRegistry`] — the authority is the lease Redis
+/// minted, never rebuilt from the generation snapshot.
+///
 /// `local_runtime_id` is this pod's mesh identity, used to tell "I own it" from
 /// "someone else owns it."
 pub async fn resolve_join<D: HuddleDirectory + ?Sized>(
@@ -300,7 +323,7 @@ pub async fn resolve_join<D: HuddleDirectory + ?Sized>(
     community_id: CommunityId,
     session_id: Uuid,
     local_runtime_id: RuntimeId,
-) -> Result<JoinOutcome, MeshError> {
+) -> Result<ResolvedJoin, MeshError> {
     // Look up the live lease first: the common steady-state case is an already
     // owned huddle, and we avoid an acquire attempt (and its generation INCR
     // race window) when a live owner already exists.
@@ -314,8 +337,10 @@ pub async fn resolve_join<D: HuddleDirectory + ?Sized>(
                 .await?
             {
                 AcquireOutcome::Acquired(o) => {
-                    return Ok(JoinOutcome::LocalOwner {
-                        generation: o.generation(),
+                    let generation = o.generation();
+                    return Ok(ResolvedJoin {
+                        outcome: JoinOutcome::LocalOwner { generation },
+                        acquired: Some(o),
                     });
                 }
                 AcquireOutcome::Held(o) => o,
@@ -324,8 +349,11 @@ pub async fn resolve_join<D: HuddleDirectory + ?Sized>(
     };
 
     if ownership.owner_runtime_id == local_runtime_id {
-        return Ok(JoinOutcome::LocalOwner {
-            generation: ownership.generation,
+        return Ok(ResolvedJoin {
+            outcome: JoinOutcome::LocalOwner {
+                generation: ownership.generation,
+            },
+            acquired: None,
         });
     }
 
@@ -339,9 +367,12 @@ pub async fn resolve_join<D: HuddleDirectory + ?Sized>(
     };
     directory.validate(community_id, &fenced).await?;
 
-    Ok(JoinOutcome::RemoteOwner {
-        owner_runtime_id: ownership.owner_runtime_id,
-        generation: ownership.generation,
+    Ok(ResolvedJoin {
+        outcome: JoinOutcome::RemoteOwner {
+            owner_runtime_id: ownership.owner_runtime_id,
+            generation: ownership.generation,
+        },
+        acquired: None,
     })
 }
 
@@ -457,6 +488,125 @@ fn spawn_huddle_renewer_with_interval<D: HuddleDirectory + ?Sized + 'static>(
     });
 
     HuddleLeaseRenewer { task, lost }
+}
+
+/// Per-room owner-lease coordination shared by the WS-join owner path and the
+/// [`HuddleControlAcceptor`].
+///
+/// The huddle-lease renewer is a per-*room* resource, not per-connection: the
+/// pod that wins the Redis CAS holds one lease for the room, and N local owner
+/// joiners must not each spawn a renewer racing to renew/release it. This
+/// registry holds that single owner state, keyed by `session_id`, so:
+/// - the acquiring WS connection installs one renewer ([`Self::attach`]);
+/// - later owner joiners and the inbound control acceptor read its `lost`
+///   signal ([`Self::lost_for`]) instead of rebuilding authority from a
+///   generation snapshot;
+/// - when the room empties the owner connection releases the lease
+///   ([`Self::release`]), cancelling the renewer.
+///
+/// **The registry, not the `resolve_join` snapshot, gates reuse.** A late
+/// joiner whose ownership lookup says "owned by us" but finds no live entry
+/// (the room emptied and released underneath it) must re-acquire rather than
+/// adopt a torn-down lease — `lost_for` returning `None` is that signal.
+#[derive(Default)]
+pub struct HuddleOwnerRegistry {
+    entries: DashMap<Uuid, HuddleOwnerEntry>,
+}
+
+struct HuddleOwnerEntry {
+    /// Owner-loss signal fanned into every control loop and owner WS peer for
+    /// the room. Cancelled by the renewer on fenced loss.
+    lost: CancellationToken,
+    /// Caller-cancel handed to the renewer; cancelled by [`Self::release`] on
+    /// room-empty so the lease is released cleanly (silent, not owner-loss).
+    cancel: CancellationToken,
+    /// Generation this entry's lease owns. `release` is fenced on it so a stale
+    /// room-empty cannot tear down a newer epoch a re-acquire installed.
+    generation: u64,
+}
+
+impl HuddleOwnerRegistry {
+    /// Empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The room's owner-loss signal, or `None` when this pod holds no live
+    /// owner lease for the session. The acceptor passes this into
+    /// `serve_control_loop`; a steady-state owner joiner uses it to reuse the
+    /// existing renewer instead of acquiring again.
+    pub fn lost_for(&self, session_id: Uuid) -> Option<CancellationToken> {
+        self.entries.get(&session_id).map(|e| e.lost.clone())
+    }
+
+    /// Install the single per-room renewer for a freshly-acquired lease and
+    /// return its `lost` signal.
+    ///
+    /// Called only on the acquire path — Redis CAS admits exactly one
+    /// `Acquired` per generation, so at most one caller installs. If a live
+    /// entry already exists (a re-acquire racing a not-yet-released prior
+    /// epoch) the existing renewer wins and the just-acquired lease is released
+    /// by cancelling a throwaway renewer, so no lease leaks.
+    pub fn attach<D: HuddleDirectory + ?Sized + 'static>(
+        &self,
+        session_id: Uuid,
+        directory: Arc<D>,
+        lease: HuddleLease,
+    ) -> CancellationToken {
+        let generation = lease.generation();
+        if let Some(existing) = self.entries.get(&session_id) {
+            // A live entry already owns this room; release our extra lease
+            // cleanly rather than leaving two renewers on one session.
+            let cancel = CancellationToken::new();
+            cancel.cancel();
+            spawn_observable_huddle_renewer(directory, lease, cancel);
+            return existing.lost.clone();
+        }
+        let cancel = CancellationToken::new();
+        let renewer = spawn_observable_huddle_renewer(directory, lease, cancel.clone());
+        self.entries.insert(
+            session_id,
+            HuddleOwnerEntry {
+                lost: renewer.lost.clone(),
+                cancel,
+                generation,
+            },
+        );
+        renewer.lost
+    }
+
+    /// Release the room's owner lease on room-empty: cancel the renewer's
+    /// caller-token so it releases cleanly (silent) and drop the entry.
+    ///
+    /// Fenced on `generation`: a stale caller cannot tear down a newer epoch a
+    /// re-acquire installed between this caller's room-empty and its release.
+    pub fn release(&self, session_id: Uuid, generation: u64) {
+        self.entries.remove_if(&session_id, |_, entry| {
+            if entry.generation == generation {
+                entry.cancel.cancel();
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    /// Install an entry with a caller-supplied `lost` token and no renewer, for
+    /// tests that exercise the fan-out to the control loop / WS peers in
+    /// isolation from the (separately tested) renewer timing.
+    #[cfg(test)]
+    fn install_for_test(&self, session_id: Uuid, generation: u64) -> CancellationToken {
+        let lost = CancellationToken::new();
+        self.entries.insert(
+            session_id,
+            HuddleOwnerEntry {
+                lost: lost.clone(),
+                cancel: CancellationToken::new(),
+                generation,
+            },
+        );
+        lost
+    }
 }
 
 /// `HuddleControl` stream payload, carried in
@@ -617,23 +767,31 @@ pub struct HuddleControlAcceptor<D: HuddleDirectory + ?Sized> {
     transport: Arc<dyn RelayPeerTransport>,
     directory: Arc<D>,
     local_runtime_id: RuntimeId,
+    /// Per-room owner state. The acceptor reads the room's owner-loss signal
+    /// from here so every inbound control loop for a room this pod owns fans
+    /// the *same* renewer's `lost` — the loss surfaces as a proactive
+    /// `Goodbye(StaleGeneration)` to each non-owner pod.
+    owners: Arc<HuddleOwnerRegistry>,
 }
 
 impl<D: HuddleDirectory + ?Sized> HuddleControlAcceptor<D> {
     /// Build the acceptor. `directory` is the fenced arbiter (re-validated on
     /// every registration); `transport` is used to open the media datagram
-    /// sink back to each registering pod.
+    /// sink back to each registering pod; `owners` supplies each room's
+    /// owner-loss signal for the control-loop fan-out.
     pub fn new(
         rooms: Arc<AudioRoomManager>,
         transport: Arc<dyn RelayPeerTransport>,
         directory: Arc<D>,
         local_runtime_id: RuntimeId,
+        owners: Arc<HuddleOwnerRegistry>,
     ) -> Self {
         Self {
             rooms,
             transport,
             directory,
             local_runtime_id,
+            owners,
         }
     }
 
@@ -651,18 +809,18 @@ impl<D: HuddleDirectory + ?Sized> HuddleControlAcceptor<D> {
     /// `(from, hello, stream)`; no `community_id` param — community rides the
     /// wire and is self-verified by the fence.
     ///
-    /// `lost` is the owner-loss mechanism: `None` (the current dispatcher path)
-    /// preserves prior behavior; `Some(lost)` — supplied by the future
-    /// `JoinOutcome::LocalOwner` live-attach that fans one renewer's `lost` into
-    /// this pod's control loops — makes the loop emit a proactive
-    /// [`GoodbyeReason::StaleGeneration`] and stop when the fenced lease is
-    /// lost, so non-owner pods rejoin against the new owner.
+    /// The owner-loss fan-out is read from the [`HuddleOwnerRegistry`] keyed by
+    /// the stream's `session_id`: if this pod holds a live owner lease for the
+    /// room the loop selects on that renewer's `lost` and emits a proactive
+    /// [`GoodbyeReason::StaleGeneration`] before teardown when the lease is
+    /// lost, so non-owner pods rejoin against the new owner. If no live entry
+    /// exists (the room emptied and released, or the entry has not landed yet)
+    /// the loop degenerates to recv-only, exactly the prior behavior.
     pub async fn accept_inbound(
         &self,
         from: RuntimeId,
         hello: StreamHello,
         stream: MeshStream,
-        lost: Option<CancellationToken>,
     ) -> Result<(), MeshError> {
         if hello.sender != from {
             return Err(MeshError::Transport(format!(
@@ -693,6 +851,7 @@ impl<D: HuddleDirectory + ?Sized> HuddleControlAcceptor<D> {
             });
         }
 
+        let lost = self.owners.lost_for(fenced.session_id);
         self.serve_control_loop(from, fenced, stream, lost).await
     }
 
@@ -1294,11 +1453,18 @@ mod tests {
     /// A `HuddleLease` for renewer tests: the inner `SessionLease` is opaque to
     /// the huddle lane, so any well-formed fenced tuple works.
     fn test_lease() -> HuddleLease {
+        lease_for(Uuid::from_u128(0xFEED), 7)
+    }
+
+    /// A `HuddleLease` for a specific session and generation — the registry
+    /// tests key on `session_id` and fence `release` on `generation`, so they
+    /// need to vary both.
+    fn lease_for(session_id: Uuid, generation: u64) -> HuddleLease {
         HuddleLease(SessionLease {
             community_id: community(),
-            session_id: Uuid::from_u128(0xFEED),
+            session_id,
             owner_runtime_id: rt(1),
-            generation: 7,
+            generation,
             profile: HUDDLE_CONTROL_PROFILE,
         })
     }
@@ -1316,7 +1482,9 @@ mod tests {
         let out = resolve_join(&dir, community(), Uuid::new_v4(), rt(1))
             .await
             .unwrap();
-        assert_eq!(out, JoinOutcome::LocalOwner { generation: 7 });
+        assert_eq!(out.outcome, JoinOutcome::LocalOwner { generation: 7 });
+        // Freshly acquired → the real lease is surfaced for the renewer.
+        assert_eq!(out.acquired.as_ref().map(HuddleLease::generation), Some(7));
         assert_eq!(*dir.acquire_calls.lock().unwrap(), 1);
         // No fence validation on the local-owner path — we ARE the lease.
         assert_eq!(*dir.validate_calls.lock().unwrap(), 0);
@@ -1331,7 +1499,9 @@ mod tests {
         let out = resolve_join(&dir, community(), Uuid::new_v4(), rt(1))
             .await
             .unwrap();
-        assert_eq!(out, JoinOutcome::LocalOwner { generation: 3 });
+        assert_eq!(out.outcome, JoinOutcome::LocalOwner { generation: 3 });
+        // Steady-state owner reuses the registry renewer — no fresh lease.
+        assert!(out.acquired.is_none());
         // Live lease found → no acquire attempt.
         assert_eq!(*dir.acquire_calls.lock().unwrap(), 0);
     }
@@ -1346,12 +1516,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            out,
+            out.outcome,
             JoinOutcome::RemoteOwner {
                 owner_runtime_id: rt(2),
                 generation: 9,
             }
         );
+        assert!(out.acquired.is_none());
         // The remote-owner path validates the fence before routing.
         assert_eq!(*dir.validate_calls.lock().unwrap(), 1);
     }
@@ -1366,12 +1537,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            out,
+            out.outcome,
             JoinOutcome::RemoteOwner {
                 owner_runtime_id: rt(2),
                 generation: 4,
             }
         );
+        assert!(out.acquired.is_none());
         assert_eq!(*dir.acquire_calls.lock().unwrap(), 1);
         assert_eq!(*dir.validate_calls.lock().unwrap(), 1);
     }
@@ -1515,15 +1687,13 @@ mod tests {
             Arc::new(NullTransport) as Arc<dyn RelayPeerTransport>,
             Arc::new(FakeDir::default()), // validate() succeeds by default
             owner_rt,
+            Arc::new(HuddleOwnerRegistry::new()), // no owner lease → recv-only
         );
 
         let (owner_stream, mut client) = stream_pair();
         let hello = huddle_hello(from, fenced);
-        let served = tokio::spawn(async move {
-            acceptor
-                .accept_inbound(from, hello, owner_stream, None)
-                .await
-        });
+        let served =
+            tokio::spawn(async move { acceptor.accept_inbound(from, hello, owner_stream).await });
 
         // Client registers, carrying its community as the wire UUID.
         client
@@ -1571,15 +1741,13 @@ mod tests {
             Arc::new(NullTransport) as Arc<dyn RelayPeerTransport>,
             Arc::new(dir),
             owner_rt,
+            Arc::new(HuddleOwnerRegistry::new()), // no owner lease → recv-only
         );
 
         let (owner_stream, mut client) = stream_pair();
         let hello = huddle_hello(from, fenced);
-        let served = tokio::spawn(async move {
-            acceptor
-                .accept_inbound(from, hello, owner_stream, None)
-                .await
-        });
+        let served =
+            tokio::spawn(async move { acceptor.accept_inbound(from, hello, owner_stream).await });
 
         client
             .send_frame(MeshStreamFrame::Data {
@@ -1667,9 +1835,139 @@ mod tests {
         assert_eq!(*dir.release_calls.lock().unwrap(), 1);
     }
 
-    /// The owner-side control loop, given a `lost` token, emits a proactive
-    /// `Goodbye(StaleGeneration)` to the non-owner pod when the token fires —
-    /// the wire mechanism the live-attach seam will drive from a lost lease.
+    // --- Huddle owner registry: install / reuse / fenced release ------------
+
+    /// Poll `dir.release_calls` until it reaches `want` or the deadline: the
+    /// registry owns the renewer task (no JoinHandle exposed), so a released
+    /// lease is observed through the directory double it releases against.
+    async fn await_release_calls(dir: &FakeDir, want: u32) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while *dir.release_calls.lock().unwrap() < want {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "expected {want} release(s), saw {}",
+                *dir.release_calls.lock().unwrap()
+            )
+        });
+    }
+
+    /// A second `attach` on a live room reuses the installed renewer and hands
+    /// back its `lost` — and releases the extra lease so no second renewer
+    /// leaks. The reused signal is the same token the first attach returned.
+    #[tokio::test]
+    async fn registry_double_attach_reuses_renewer_and_releases_extra_lease() {
+        let dir = Arc::new(FakeDir::default()); // renew holds, release => Released
+        let registry = HuddleOwnerRegistry::new();
+        let session = Uuid::new_v4();
+
+        let first = registry.attach(
+            session,
+            Arc::clone(&dir) as Arc<dyn HuddleDirectory>,
+            lease_for(session, 7),
+        );
+        let second = registry.attach(
+            session,
+            Arc::clone(&dir) as Arc<dyn HuddleDirectory>,
+            lease_for(session, 7),
+        );
+
+        // Same room → same loss signal; the second attach did not replace it.
+        assert!(!first.is_cancelled());
+        first.cancel();
+        assert!(
+            second.is_cancelled(),
+            "reused entry shares the first renewer's lost token"
+        );
+
+        // Exactly one extra lease was released (the throwaway renewer); the
+        // installed renewer is still live (only its caller-cancel releases it).
+        await_release_calls(&dir, 1).await;
+        assert!(
+            registry.lost_for(session).is_some(),
+            "installed entry stays live"
+        );
+    }
+
+    /// `release` fenced on generation: a stale room-empty (older generation
+    /// than the live entry, e.g. a re-acquire landed in the gap) is a no-op —
+    /// it neither drops the entry nor cancels the live renewer.
+    #[tokio::test]
+    async fn registry_release_is_generation_fenced() {
+        let dir = Arc::new(FakeDir::default());
+        let registry = HuddleOwnerRegistry::new();
+        let session = Uuid::new_v4();
+
+        // Live entry owns generation 9 (a re-acquire installed the new epoch).
+        let lost = registry.attach(
+            session,
+            Arc::clone(&dir) as Arc<dyn HuddleDirectory>,
+            lease_for(session, 9),
+        );
+
+        // A stale leaver releases generation 8 → no-op against the newer epoch.
+        registry.release(session, 8);
+        assert!(
+            registry.lost_for(session).is_some(),
+            "stale release must not drop a newer entry"
+        );
+        assert!(
+            !lost.is_cancelled(),
+            "stale release must not cancel the live renewer"
+        );
+        assert_eq!(
+            *dir.release_calls.lock().unwrap(),
+            0,
+            "stale release runs no directory release"
+        );
+
+        // The matching generation releases cleanly: entry gone, renewer's
+        // caller-cancel drives the directory release, and loss stays silent.
+        registry.release(session, 9);
+        assert!(
+            registry.lost_for(session).is_none(),
+            "matching release drops the entry"
+        );
+        await_release_calls(&dir, 1).await;
+        assert!(!lost.is_cancelled(), "clean release is not owner-loss");
+    }
+
+    /// The room-empty release path: attach installs, `release` on the same
+    /// generation drops the entry and releases the lease. Mirrors the
+    /// `handler.rs` `room_emptied` call with a matching generation.
+    #[tokio::test]
+    async fn registry_room_empty_release_drops_entry_and_releases_lease() {
+        let dir = Arc::new(FakeDir::default());
+        let registry = HuddleOwnerRegistry::new();
+        let session = Uuid::new_v4();
+
+        let lost = registry.attach(
+            session,
+            Arc::clone(&dir) as Arc<dyn HuddleDirectory>,
+            lease_for(session, 3),
+        );
+        assert!(registry.lost_for(session).is_some());
+
+        registry.release(session, 3);
+        assert!(
+            registry.lost_for(session).is_none(),
+            "room-empty release clears the entry"
+        );
+        await_release_calls(&dir, 1).await;
+        assert!(
+            !lost.is_cancelled(),
+            "room-empty is a clean release, not owner-loss"
+        );
+    }
+
+    /// The owner-side control loop, given the room's `lost` from the registry,
+    /// emits a proactive `Goodbye(StaleGeneration)` to the non-owner pod when
+    /// the lease is lost — the fan-out the live-attach seam drives. The
+    /// acceptor reads `lost` from the shared registry keyed by `session_id`,
+    /// not from a per-call argument.
     #[tokio::test]
     async fn serve_control_loop_emits_stale_generation_goodbye_on_loss() {
         let owner_rt = rt(1);
@@ -1677,22 +1975,23 @@ mod tests {
         let session_id = Uuid::new_v4();
         let fenced = fenced_owned_by(owner_rt, session_id);
 
+        // This pod owns the room: install its owner entry so the acceptor's
+        // `lost_for(session_id)` returns the room's loss signal.
+        let owners = Arc::new(HuddleOwnerRegistry::new());
+        let lost = owners.install_for_test(session_id, fenced.generation);
+
         let acceptor = HuddleControlAcceptor::new(
             Arc::new(AudioRoomManager::new()),
             Arc::new(NullTransport) as Arc<dyn RelayPeerTransport>,
             Arc::new(FakeDir::default()),
             owner_rt,
+            Arc::clone(&owners),
         );
 
         let (owner_stream, mut client) = stream_pair();
         let hello = huddle_hello(from, fenced);
-        let lost = CancellationToken::new();
-        let lost_for_owner = lost.clone();
-        let served = tokio::spawn(async move {
-            acceptor
-                .accept_inbound(from, hello, owner_stream, Some(lost_for_owner))
-                .await
-        });
+        let served =
+            tokio::spawn(async move { acceptor.accept_inbound(from, hello, owner_stream).await });
 
         // Owner observes lease loss → proactive Goodbye down the client stream.
         lost.cancel();

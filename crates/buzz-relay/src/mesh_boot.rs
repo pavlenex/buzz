@@ -158,6 +158,12 @@ pub struct MeshHandle {
     pub audio_fence: Arc<crate::audio::mesh::GenerationFloor>,
     /// The running mesh (status snapshots, shutdown).
     runtime: MeshRuntime,
+    /// Per-room huddle owner-lease coordination. Shared with the WS-join owner
+    /// path (via `AppState::mesh()`) so the connection that wins the Redis CAS
+    /// installs one renewer per room, and with the `HuddleControlAcceptor` (via
+    /// [`Self::wire_consumers`]) so inbound control loops fan that renewer's
+    /// owner-loss signal. One registry per pod; single source of owner truth.
+    pub owners: Arc<crate::audio::join::HuddleOwnerRegistry>,
 }
 
 impl MeshHandle {
@@ -178,6 +184,7 @@ impl MeshHandle {
             self.local_runtime_id,
             Arc::clone(&self.audio_fence),
             rooms,
+            Arc::clone(&self.owners),
             demo_echo,
         )
     }
@@ -214,6 +221,7 @@ pub fn wire_mesh_consumers(
     local_runtime_id: RuntimeId,
     audio_fence: Arc<crate::audio::mesh::GenerationFloor>,
     rooms: Arc<crate::audio::AudioRoomManager>,
+    owners: Arc<crate::audio::join::HuddleOwnerRegistry>,
     demo_echo: bool,
 ) {
     // RealtimeMedia datagrams: huddle media fan-in over the shared fence.
@@ -236,15 +244,16 @@ pub fn wire_mesh_consumers(
         Arc::clone(&transport),
         Arc::new(directory.clone()),
         local_runtime_id,
+        Arc::clone(&owners),
     ));
     dispatcher.register_huddle_control(Box::new(move |from, hello, stream| {
         let acceptor = Arc::clone(&acceptor);
         tokio::spawn(async move {
-            // `None` loss signal: this dispatcher path serves a *remote* pod's
-            // control stream and owns no lease. The owner-loss fan-out is
-            // attached from the local `JoinOutcome::LocalOwner` join arm (the
-            // deferred live-attach seam), not from inbound acceptance.
-            if let Err(e) = acceptor.accept_inbound(from, hello, stream, None).await {
+            // The acceptor reads this room's owner-loss signal from the shared
+            // `HuddleOwnerRegistry` (installed by the local `LocalOwner` join
+            // arm). Inbound acceptance owns no lease of its own; it only fans a
+            // lease this pod owns into the control loop it serves.
+            if let Err(e) = acceptor.accept_inbound(from, hello, stream).await {
                 tracing::warn!(peer = %from, "huddle-control stream ended with error: {e}");
             }
         });
@@ -466,6 +475,7 @@ pub async fn boot_mesh(
         dispatcher,
         audio_fence: Arc::new(crate::audio::mesh::GenerationFloor::new()),
         runtime,
+        owners: Arc::new(crate::audio::join::HuddleOwnerRegistry::new()),
     }))
 }
 
@@ -665,6 +675,7 @@ mod tests {
             rid(9),
             Arc::clone(&fence),
             Arc::new(crate::audio::AudioRoomManager::new()),
+            Arc::new(crate::audio::join::HuddleOwnerRegistry::new()),
             false,
         );
 
