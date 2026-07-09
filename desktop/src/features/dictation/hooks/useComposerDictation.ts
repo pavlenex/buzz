@@ -121,13 +121,20 @@ export function useComposerDictation({
 
   // ⌘D push-to-talk — hold to record, release to stop.
   // Dispatched from AppShell's keydown/keyup handlers.
-  // Only the active (most recently focused) composer responds, and only when
-  // not disabled/send-blocked.
+  // Only the active (most recently focused) composer responds, and only while
+  // focus remains inside it and it is not disabled/send-blocked.
   // biome-ignore lint/correctness/useExhaustiveDependencies: disabledRef/isSendBlockedRef are stable refs read at call time
   useEffect(() => {
     function handleKeyDown() {
       // Only respond if this is the active composer instance.
       if (!isActiveDictationComposer(instanceId)) return;
+      // Only respond if focus is still inside this composer. The active-composer
+      // registration persists after focusout (until unmount), so without this
+      // check, focusing a composer and then moving to another mounted input or
+      // dialog (quick search, create-channel, etc.) would still let ⌘D start
+      // microphone capture and append transcript into the background draft.
+      const el = composerRef?.current;
+      if (el && !el.contains(document.activeElement)) return;
       // Don't start dictation in disabled/blocked composers.
       if (disabledRef.current || isSendBlockedRef.current) return;
       if (!dictation.isRecording && !dictation.isStarting) {
@@ -147,6 +154,7 @@ export function useComposerDictation({
     };
   }, [
     instanceId,
+    composerRef,
     dictation.isRecording,
     dictation.isStarting,
     dictation.startRecording,
