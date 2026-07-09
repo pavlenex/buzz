@@ -52,6 +52,23 @@ import { installMockBridge } from "../helpers/bridge";
  * discriminator, co-gated: pass = bite count AND bite max-px both down). Same
  * numbers for every impl.
  *
+ * BITE CORPUS BOUND (null control, thread c62888de, `upscroll-null-control.perf.ts`
+ * @ c4c82963). The bite signature is IMPL-CAUSED, not an instrument floor: run
+ * the identical sampler + wheel drive + bite scorer against a plain overflow:auto
+ * page (500 fixed rows, data-message-id, overflow-anchor:none, zero JS/React/
+ * virtualization) and both engines score 0 bites / 0.0 max on a HEALTHY frame
+ * population (Chromium 310 momentum / 1266 still, WebKit 240 / 480). "bites → 0"
+ * is reachable, so every candidate's ~21-26 bites are genuine impl behavior —
+ * count AND max are real signal, no floor caveat. TWO consequences for reading
+ * this column: (1) the bite metric is engine-INDEPENDENT (both engines ~22 @ 60
+ * on every baseline), while Tyler's complaint is WebKit-specific — so the bite
+ * column measures a shared cross-engine anchoring cost, NOT the WebKit feel gap,
+ * which lives in the mid-momentum column + the frozen-offset stall. (2) the
+ * sub-cap bite DISTRIBUTION is corpus-dependent (a bite's px value is quantized
+ * by the fixture's row heights), so cross-lane bite comparisons are only valid
+ * where the candidates share THIS row corpus. Compare bite count/max across
+ * lanes; do NOT compare sub-cap histograms across differently-seeded fixtures.
+ *
  * HONESTY BOUND (carried from the W4a fixture): Playwright `mouse.wheel` is a
  * synthetic discrete event; the real WKWebView coalesced-momentum still frame
  * is a device phenomenon that only fully reproduces in the shipped Tauri shell
