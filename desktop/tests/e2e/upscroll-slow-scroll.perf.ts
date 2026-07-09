@@ -252,9 +252,17 @@ test("W4a slow-scroll: reversal distribution in the felt low-velocity regime", a
     const rowMove = b.top - a.top;
     const dScroll = b.scrollTop - a.scrollTop;
     if (rowMove > -REVERSAL_PX) continue;
-    // Attempts appended in this frame's window; pick the one whose |signedShift|
-    // is largest (the dominant reflow this frame drives the felt motion).
-    const window = corrections.slice(a.probeLen, b.probeLen);
+    // Attribution window. The hook's correction attempt for the reflow that
+    // produced this reversal can append across a ±1-frame span relative to our
+    // sampler: the two rAF loops interleave in an order we don't control, and on
+    // WebKit a late RO appends a frame after the reflow paints. So the window is
+    // [prev-frame probeLen, NEXT-frame probeLen) — attempts from the frame
+    // before through the frame after. A reversal with NO attempt anywhere in
+    // that span is genuinely unattributed (the corrector did not run a mid-
+    // history attempt on those frames at all — e.g. re-pick guard or null cur),
+    // which is itself a distinct diagnosis from a fired-then-clamped write.
+    const next = frames[i + 1] ?? b;
+    const window = corrections.slice(a.probeLen, next.probeLen);
     let attempt: (typeof corrections)[number] | null = null;
     for (const c of window) {
       if (
