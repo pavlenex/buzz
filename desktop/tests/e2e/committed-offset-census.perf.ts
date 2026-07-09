@@ -440,6 +440,22 @@ test("PORTABLE upscroll classify: reflow-driven vs tracking-failure reversals", 
   console.log(
     `  scroller rect.top (control ~0):     ${nz(frozen.map((f) => f.dScrollerRectTop))}/${frozen.length}`,
   );
+  // Eva's pre-registered read (thread c62888de): if the 60px ceiling is
+  // wheel-queue discharge (WHEEL_DELTA=12 * N), frozen rowMoves should be
+  // ~0 mod 12. Emit the FULL distribution + residuals so my instrument can
+  // test her hypothesis on my gate, not just the bite gate.
+  const rms = frozen.map((f) => Math.abs(f.rowMove)).sort((a, b) => a - b);
+  const mod12 = rms.map((v) => (v % 12).toFixed(1));
+  console.log(
+    "--- Eva mod-12 read: all frozen |rowMove| + residual mod 12 ---",
+  );
+  console.log(
+    `  |rowMove| sorted: [${rms.map((v) => v.toFixed(1)).join(", ")}]`,
+  );
+  console.log(`  residual mod 12:  [${mod12.join(", ")}]`);
+  console.log(
+    `  exact multiples of 12: ${rms.filter((v) => Math.abs(v % 12) < 0.5 || Math.abs((v % 12) - 12) < 0.5).length}/${rms.length}`,
+  );
   console.log("--- sample frozen frames (first 12) ---");
   for (const f of frozen.slice(0, 12)) {
     console.log(
