@@ -242,6 +242,13 @@ test("W4a fast-classify: SKIP admission — no fired write near the survivors", 
     // robust to the widen. If true, the class attribution's largest-|shift| rule
     // could have labelled it grow/shrink and the SKIP bin is in question.
     firedNear: boolean;
+    // ARBITER DISCRIMINATOR (Sami): the gate's own quantity on the attributed
+    // attempt. A momentum-gate skip has |renderedScroll| > 120 (the bound); a
+    // walk-blind skip (null-target / cross-check bail) has signedShift=0 and
+    // small |renderedScroll|. Distinguishes Dawn's KNOWN-RESIDUAL class claim
+    // from a residual momentum-gate trip, from the raw stream not the label.
+    renderedScroll: number | null;
+    source: "raf" | "ro" | null;
     rowId: string | null;
   }> = [];
   for (let i = 1; i < frames.length; i += 1) {
@@ -311,6 +318,8 @@ test("W4a fast-classify: SKIP admission — no fired write near the survivors", 
       fired: attempt?.wouldFire ?? false,
       klass,
       firedNear,
+      renderedScroll: attempt?.renderedScroll ?? null,
+      source: attempt?.source ?? null,
       rowId: b.rowId,
     });
   }
@@ -352,8 +361,9 @@ test("W4a fast-classify: SKIP admission — no fired write near the survivors", 
     .sort((x, y) => x.rowMove - y.rowMove)
     .slice(0, 12)) {
     const s = r.signedShift === null ? "n/a" : r.signedShift.toFixed(1);
+    const rS = r.renderedScroll === null ? "n/a" : r.renderedScroll.toFixed(1);
     console.log(
-      `  frame ${r.i} rowMove=${r.rowMove.toFixed(1)} dScroll=${r.dScroll.toFixed(1)} dev=${r.dev.toFixed(1)} signedShift=${s} fired=${r.fired} firedNear=${r.firedNear} class=${r.klass} row=${r.rowId}`,
+      `  frame ${r.i} rowMove=${r.rowMove.toFixed(1)} dScroll=${r.dScroll.toFixed(1)} dev=${r.dev.toFixed(1)} signedShift=${s} renderedScroll=${rS} source=${r.source ?? "n/a"} fired=${r.fired} firedNear=${r.firedNear} class=${r.klass} row=${r.rowId}`,
     );
   }
   console.log("========================================\n");
