@@ -110,14 +110,30 @@ export function useComposerDictation({
     }
   }, [draftKey]);
 
-  // Auto-cancel dictation when the composer becomes disabled mid-recording
+  // Auto-cancel dictation when the composer becomes disabled mid-session
   // (e.g. channel becomes read-only, parent send state disables thread composer).
   // Without this, the STT session keeps running with no way to stop it.
+  //
+  // Covers the full ownership window — `isStarting` and `isTranscribing`, not
+  // just `isRecording`. If the composer is disabled while `startRecording()` is
+  // still resolving (mic permission / AudioWorklet setup), the pending start
+  // would otherwise finish and begin microphone capture in a disabled composer.
+  // `cancelRecording()` aborts the in-flight start as well as a live recording,
+  // and re-running when any of these flags flip catches a start that completes
+  // after the disable.
   useEffect(() => {
-    if (disabled && dictation.isRecording) {
+    const owningSession =
+      dictation.isRecording || dictation.isStarting || dictation.isTranscribing;
+    if (disabled && owningSession) {
       dictation.cancelRecording();
     }
-  }, [disabled, dictation.isRecording, dictation.cancelRecording]);
+  }, [
+    disabled,
+    dictation.isRecording,
+    dictation.isStarting,
+    dictation.isTranscribing,
+    dictation.cancelRecording,
+  ]);
 
   // ⌘D push-to-talk — hold to record, release to stop.
   // Dispatched from AppShell's keydown/keyup handlers.
