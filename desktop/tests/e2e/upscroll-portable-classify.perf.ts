@@ -46,8 +46,11 @@ import { installMockBridge } from "../helpers/bridge";
  *       column on WebKit, that's the headline.
  *
  * VERDICT COLUMNS (per engine): reversal count, max reversal px, still-frame
- * count (|dScroll| < REVERSAL_PX — the felt case, eye barely moving), and the
- * reflow-driven / tracking-failure split. Same numbers for every impl.
+ * count (|dScroll| < REVERSAL_PX — the felt case, eye barely moving), the
+ * reflow-driven / tracking-failure split, the mid-momentum one-way regression
+ * guard, and the post-momentum bite count + its restricted max-px (THE
+ * discriminator, co-gated: pass = bite count AND bite max-px both down). Same
+ * numbers for every impl.
  *
  * HONESTY BOUND (carried from the W4a fixture): Playwright `mouse.wheel` is a
  * synthetic discrete event; the real WKWebView coalesced-momentum still frame
@@ -137,12 +140,33 @@ test("PORTABLE upscroll classify: reflow-driven vs tracking-failure reversals", 
     }
   }, SEED_ROWS);
 
-  await page.waitForFunction(() => {
+  // Impl-agnostic readiness. The OLD wait ("> 50 mounted [data-message-id]")
+  // baked in an un-virtualized-DOM assumption: it only passes when the impl
+  // mounts every visible-band row into the DOM at once. A real virtualizer
+  // WINDOWS the mount set below 50 by design (that is the whole point), so the
+  // wait times out on a correct candidate and never yields a perf number — the
+  // exact impl-coupling this fixture's rekey exists to remove. Replace it with
+  // the signal ANY timeline exposes once its corpus is loaded and scrollable:
+  //   (1) the scroll container overflows its own client box by a wide margin —
+  //       500 heterogeneous rows produce many screens of content, so a scroll
+  //       container whose scrollHeight is a large multiple of its clientHeight
+  //       has clearly ingested the corpus, whether it mounts 12 rows or 500. A
+  //       generous multiple (not a fixed px total) keeps this height-estimator
+  //       neutral: a windowed impl reports its FULL estimated scrollHeight even
+  //       while mounting a fraction of the rows.
+  //   (2) at least one message row is present — the sampler needs a live anchor.
+  // Zero per-impl branches: both conditions read only DOM every timeline exposes.
+  const MIN_OVERFLOW_RATIO = 8; // scrollHeight must exceed clientHeight by >=8x
+  await page.waitForFunction((minRatio) => {
     const el = document.querySelector(
       '[data-testid="message-timeline"]',
     ) as HTMLDivElement | null;
-    return !!el && el.querySelectorAll("[data-message-id]").length > 50;
-  });
+    if (!el) return false;
+    const overflows =
+      el.clientHeight > 0 && el.scrollHeight >= el.clientHeight * minRatio;
+    const hasRow = el.querySelectorAll("[data-message-id]").length >= 1;
+    return overflows && hasRow;
+  }, MIN_OVERFLOW_RATIO);
   await page.waitForTimeout(500); // let live emits settle
 
   await timeline.evaluate((element) => {
@@ -323,6 +347,17 @@ test("PORTABLE upscroll classify: reflow-driven vs tracking-failure reversals", 
       Math.abs(r.dScroll) < REVERSAL_PX &&
       hadRecentMomentum(r.i),
   );
+  // Restricted max px — Dawn's co-gate (thread evt 04a7e28b response). The
+  // discriminator is bite COUNT *and* bite MAX-PX both down, not count alone: a
+  // candidate could drop bite count while leaving the survivors larger (fewer,
+  // more violent snaps — worse felt), and count-only would score that a win.
+  // The GLOBAL maxReversalPx above spans ALL reversals; this is the max snap
+  // WITHIN the post-momentum-bite set, so the co-gate reads the felt severity of
+  // exactly the frames the discriminator counts.
+  const postMomentumBiteMaxPx =
+    postMomentumBite.length === 0
+      ? 0
+      : Math.max(...postMomentumBite.map((r) => Math.abs(r.rowMove)));
   const momentumFrames = (() => {
     let n = 0;
     for (let i = 1; i < frames.length; i += 1) {
@@ -358,6 +393,9 @@ test("PORTABLE upscroll classify: reflow-driven vs tracking-failure reversals", 
   );
   console.log(
     `  POST-momentum bite (still-frame ≤${POST_MOMENTUM_FRAMES}f after flick): ${postMomentumBite.length} (#1662 signature — the real discriminator)`,
+  );
+  console.log(
+    `    └ bite-set max px (co-gate w/ count): ${postMomentumBiteMaxPx.toFixed(1)}`,
   );
   for (const r of reversals
     .slice()
