@@ -136,6 +136,43 @@ const FETCH_DELAY_MS = Number(process.env.BUZZ_PERF_FETCH_DELAY_MS ?? 1000);
 // windowing: peak≫rms on WebKit is a clean outlier above a ~2px Chromium floor.
 const STEP_PX = Number(process.env.BUZZ_PERF_STEP_PX ?? 2);
 
+// SCROLL PROFILE (W4 slow-scroll leg). "fast" = the original constant-STEP_PX
+// momentum ramp (a settled/fast flick; peak jerk is the discriminator). "slow" =
+// a momentum-DECAY gesture: each swipe starts near SLOW_PEAK_PX and decays
+// exponentially to a SLOW_TAIL_PX tail held for many events, with slower
+// inter-event pacing (a real slow-trackpad thumb). WHY IT'S A SEPARATE REGIME,
+// NOT JUST STEP=1: the felt failure Tyler reports on slow trackpad is a
+// correction (≤~14.5px on WebKit) that, at 40px/frame, is one invisible frame,
+// but at 2-3px/frame is 5-7 frames of visible reverse-then-catch. My Leg-1 jerk
+// (2nd diff) UNDER-reports that: a 14.5px shove smeared across 6 frames peaks at
+// ~2.4px/frame — under the 8px ceiling → FALSE GREEN. The slow regime's
+// discriminator is therefore the reverse-EXCURSION (Leg 4 below): total backward
+// travel in a contiguous anti-scroll run, frame-count agnostic. The fast leg
+// stays — it catches the single-frame realization the slow tail can't force.
+const PROFILE = (process.env.BUZZ_PERF_PROFILE ?? "fast").toLowerCase();
+const IS_SLOW = PROFILE === "slow";
+// Slow-gesture actuation shape (px per wheel event within a swipe).
+const SLOW_PEAK_PX = Number(process.env.BUZZ_PERF_SLOW_PEAK_PX ?? 8);
+const SLOW_TAIL_PX = Number(process.env.BUZZ_PERF_SLOW_TAIL_PX ?? 1);
+// Fraction of a swipe's events spent in the decayed low-velocity tail — this is
+// where mid-gesture corrections land and read as jumps.
+const SLOW_TAIL_FRACTION = Number(
+  process.env.BUZZ_PERF_SLOW_TAIL_FRACTION ?? 0.6,
+);
+// Inter-event pacing (ms): slow thumb spaces events wider than the fast flick's
+// 8ms, so a mid-gesture correction has real frames to be seen against.
+const SLOW_PACE_MS = Number(process.env.BUZZ_PERF_SLOW_PACE_MS ?? 16);
+// LEG 4 ceiling: peak contiguous reverse-excursion (px) — the largest cumulative
+// anti-scroll travel in one unbroken backward run, resetting on any forward
+// frame. This is the frame-count-agnostic "how far the row lurched back before
+// recovering," the thing a slow thumb feels and Leg 1 misses. GATED ONLY in the
+// slow profile (the fast-regime floor for it is not on the record); log-only in
+// fast mode. Pinned between the Chromium slow floor and the WebKit slow red once
+// both are measured (see the slow-leg WORK_LOG).
+const MAX_REVERSE_EXCURSION_PX = Number(
+  process.env.BUZZ_PERF_MAX_REVERSE_EXCURSION_PX ?? 8,
+);
+
 type Frame = {
   t: number;
   scrollTop: number;
@@ -282,21 +319,53 @@ test("GATE: trackpad-momentum upscroll — peak jerk in rect.top stays below the
   // live profile's ~816px/swipe (68 × 12px), STEP=2 → ~408 events/swipe.
   const SWIPE_DISTANCE_PX = 816;
   const EVENTS_PER_SWIPE = Math.max(1, Math.round(SWIPE_DISTANCE_PX / STEP_PX));
+
+  // Build the per-event delta sequence for one swipe. Fast profile: a flat
+  // STEP_PX ramp (the original). Slow profile: an exponential momentum decay
+  // from SLOW_PEAK_PX down into a held SLOW_TAIL_PX tail, so the same
+  // SWIPE_DISTANCE is covered but the back portion of every swipe is a
+  // low-velocity crawl — the regime where a mid-gesture correction spans many
+  // frames. Distance is preserved (a correctly-tracking row still pages a
+  // fetchOlder prepend); only the velocity profile within the swipe changes.
+  const buildSwipeDeltas = (): number[] => {
+    if (!IS_SLOW) return new Array(EVENTS_PER_SWIPE).fill(STEP_PX);
+    const deltas: number[] = [];
+    let covered = 0;
+    // Decay phase: peak → tail, exponential, over (1 − tailFraction) of the
+    // distance; then a flat tail at SLOW_TAIL_PX for the rest.
+    const decayDistance = SWIPE_DISTANCE_PX * (1 - SLOW_TAIL_FRACTION);
+    let d = SLOW_PEAK_PX;
+    while (covered < decayDistance && d > SLOW_TAIL_PX) {
+      const step = Math.max(SLOW_TAIL_PX, Math.round(d));
+      deltas.push(step);
+      covered += step;
+      d *= 0.92; // exponential momentum decay
+    }
+    // Tail: crawl at SLOW_TAIL_PX until the swipe distance is covered.
+    while (covered < SWIPE_DISTANCE_PX) {
+      deltas.push(SLOW_TAIL_PX);
+      covered += SLOW_TAIL_PX;
+    }
+    return deltas;
+  };
+  const paceMs = IS_SLOW ? SLOW_PACE_MS : 8;
+
   for (let s = 0; s < SWIPES; s++) {
-    for (let e = 0; e < EVENTS_PER_SWIPE; e++) {
+    const deltas = buildSwipeDeltas();
+    for (const delta of deltas) {
       if (cdp) {
         await cdp.send("Input.dispatchMouseEvent", {
           type: "mouseWheel",
           x: cx,
           y: cy,
           deltaX: 0,
-          deltaY: -STEP_PX,
+          deltaY: -delta,
           pointerType: "mouse",
         });
       } else {
-        await page.mouse.wheel(0, -STEP_PX);
+        await page.mouse.wheel(0, -delta);
       }
-      await new Promise((r) => setTimeout(r, 8));
+      await new Promise((r) => setTimeout(r, paceMs));
     }
     await page.waitForTimeout(120);
     const at = await timeline.evaluate(
@@ -365,7 +434,20 @@ test("GATE: trackpad-momentum upscroll — peak jerk in rect.top stays below the
   const totalMove = steps.reduce((acc, s) => acc + s.rowMove, 0);
   const totalDt = steps.reduce((acc, s) => acc + s.dt, 0);
   const velocity = totalDt > 0 ? totalMove / totalDt : 0; // px/ms
-  const scrollDir = Math.sign(steps.reduce((acc, s) => acc + s.scrollDelta, 0)); // coarse run direction (up), constant — NOT a per-frame input delta
+  // Coarse run direction (up), constant — NOT a per-frame input delta. Use the
+  // MEDIAN sign of per-step scrollDelta, not the sum: a fetchOlder prepend jumps
+  // scrollTop up by thousands of px in one frame, and that single discontinuity
+  // dominates a summed direction and can FLIP it — inverting the anti-scroll
+  // sign so forward tracking frames score as reversals (observed: baseline
+  // Chromium control read a 281px false drawdown when the prepend flipped a
+  // summed scrollDir). The median is immune to the one outlier: the overwhelming
+  // majority of frames scroll one way.
+  const scrollDeltas = steps.map((s) => s.scrollDelta).sort((x, y) => x - y);
+  const medianScrollDelta =
+    scrollDeltas.length > 0
+      ? scrollDeltas[Math.floor(scrollDeltas.length / 2)]
+      : 0;
+  const scrollDir = Math.sign(medianScrollDelta) || 1;
 
   // ---- LEG 1: peak |second difference| within clean spans. A span breaks at
   // any step whose breakBefore is set; jerk_k = |rowMove_k − rowMove_{k-1}| is
@@ -426,6 +508,40 @@ test("GATE: trackpad-momentum upscroll — peak jerk in rect.top stays below the
     if (anti > 0) totalDrift += anti;
   }
 
+  // ---- LEG 4: peak reverse-excursion, as a DRAWDOWN of the row's cumulative
+  // position. Walk cumulative row displacement in the scroll direction; the
+  // excursion is the largest drop below the running forward high-water mark
+  // within one clean span (reset at any break boundary — re-pick / prepend
+  // commit). This is "how far the row snapped backward from its furthest-forward
+  // point before recovering," independent of how many frames the snap spans — a
+  // 14.5px correction smeared across 6 low-velocity frames still reads as a
+  // 14.5px drawdown, which Leg 1's per-frame 2nd diff misses.
+  //
+  // WHY DRAWDOWN, NOT A SUM-OF-ANTI-STEPS RUN. Summing every anti-scroll step
+  // accumulates quantization noise across the long slow tail (a mostly-still row
+  // micro-drifting ±0.5px never resets and sums to hundreds of px — a pure
+  // artifact). Drawdown counts NET distance below the high-water mark, so
+  // still-frame and sub-pixel jitter contribute ~0 and only a genuine sustained
+  // backward snap registers. (WORK_LOG 2026-07-08: position-derivative scorers
+  // must be net/bounded or they read discretization noise.)
+  let peakReverseExcursion = 0;
+  let peakExcursionAt = -1;
+  let cum = 0; // cumulative forward (scroll-direction) row displacement in span
+  let highWater = 0;
+  for (const step of steps) {
+    if (step.breakBefore) {
+      cum = 0;
+      highWater = 0;
+    }
+    cum += scrollDir * step.rowMove; // forward-positive cumulative position
+    if (cum > highWater) highWater = cum;
+    const drawdown = highWater - cum; // how far below the furthest-forward point
+    if (drawdown > peakReverseExcursion) {
+      peakReverseExcursion = drawdown;
+      peakExcursionAt = step.i;
+    }
+  }
+
   const commits = frames.filter(
     (f, i) => i > 0 && f.mounted > frames[i - 1].mounted,
   );
@@ -459,6 +575,12 @@ test("GATE: trackpad-momentum upscroll — peak jerk in rect.top stays below the
     `LEG 3 rms jerk (chatter):      ${rmsJerk.toFixed(2)}px  (${GATE_RMS_JERK ? `gate <= ${MAX_RMS_JERK_PX}` : "LOG-ONLY — no A/B separation pinned yet"})`,
   );
   console.log(
+    `LEG 4 peak reverse-excursion:  ${peakReverseExcursion.toFixed(2)}px  @frame ${peakExcursionAt}  (${IS_SLOW ? `gate <= ${MAX_REVERSE_EXCURSION_PX}` : "LOG-ONLY — slow-regime discriminator, gated only in profile=slow"})`,
+  );
+  console.log(
+    `profile=${PROFILE} ${IS_SLOW ? `(decay ${SLOW_PEAK_PX}→${SLOW_TAIL_PX}px, tail ${SLOW_TAIL_FRACTION}, pace ${SLOW_PACE_MS}ms)` : `(constant STEP_PX=${STEP_PX}, pace 8ms)`}`,
+  );
+  console.log(
     "(peak jerk ~0 == smooth row motion; a one-frame spike == felt lurch)",
   );
   console.log("===========================================================\n");
@@ -481,7 +603,9 @@ test("GATE: trackpad-momentum upscroll — peak jerk in rect.top stays below the
   // a fixed 0.1 floor was pinned at STEP=12 and false-fails a correctly-tracking
   // STEP=2 run. 0.008·STEP_PX ≈ 0.016 at STEP=2 / 0.096 at STEP=12: well above a
   // frozen scroller (~0), well below a real tracking run (STEP=2 measured ~0.07).
-  const MIN_VELOCITY = 0.008 * STEP_PX;
+  const MIN_VELOCITY = IS_SLOW
+    ? (0.15 * SLOW_TAIL_PX) / SLOW_PACE_MS
+    : 0.008 * STEP_PX;
   expect(Math.abs(velocity)).toBeGreaterThanOrEqual(MIN_VELOCITY);
 
   // THE GATE (LEG 1). RED at tip under the WebKit mirror (felt lurches spike
@@ -491,15 +615,34 @@ test("GATE: trackpad-momentum upscroll — peak jerk in rect.top stays below the
   // GUARDRAIL: trustworthy only once a correct writer (Chromium T1.2-green) is
   // confirmed ~0 here under wheel. If jerk can't hold Chromium ~0, invariance is
   // falsified — do NOT relax; fall back to sync-only (option 2). See the header.
-  expect(peakJerk).toBeLessThanOrEqual(MAX_PEAK_JERK_PX);
-  // Leg 2 (signed drift) — the skip-forever guard. Pinned once the guardrail
-  // number lands; asserted here as the second leg of the ratified contract.
-  expect(peakDrift).toBeLessThanOrEqual(MAX_DRIFT_PX);
+  //
+  // PROFILE SPLIT: Leg 1 and Leg 2 ceilings were pinned for the FAST regime
+  // (constant STEP_PX; peak jerk is the fast discriminator). The slow-decay
+  // profile is a different actuation whose felt failure is a multi-frame
+  // correction that Leg 1 under-reports and whose long low-velocity tail inflates
+  // Leg 2's windowed anti-scroll sum with quantization noise — so their fast
+  // ceilings don't transfer. In profile=slow the discriminator is Leg 4
+  // (drawdown), and Leg 1/2 are LOG-ONLY, symmetric with Leg 4 being log-only in
+  // fast. Each regime asserts only the leg calibrated for it.
+  if (!IS_SLOW) {
+    expect(peakJerk).toBeLessThanOrEqual(MAX_PEAK_JERK_PX);
+    // Leg 2 (signed drift) — the skip-forever guard. Pinned once the guardrail
+    // number lands; asserted here as the second leg of the ratified contract.
+    expect(peakDrift).toBeLessThanOrEqual(MAX_DRIFT_PX);
+  }
   // Leg 3 (rms-jerk) — the chatter guard. Gated only when the A/B separation is
   // on the record (BUZZ_PERF_GATE_RMS_JERK=1); log-only until then so a run
   // against a correct writer that merely sits at the ~2px discretization floor
   // does not false-red. See §Leg 3 pin criterion in the metric doc.
   if (GATE_RMS_JERK) {
     expect(rmsJerk).toBeLessThanOrEqual(MAX_RMS_JERK_PX);
+  }
+  // Leg 4 (reverse-excursion) — the slow-regime skip-then-catch guard. A
+  // correction that spans many low-velocity frames is invisible to Leg 1's
+  // per-frame 2nd diff but shows here as a large contiguous backward run.
+  // Asserted only in profile=slow (the fast-regime floor for it is not pinned);
+  // log-only otherwise so a fast run at the quantization floor can't false-red.
+  if (IS_SLOW) {
+    expect(peakReverseExcursion).toBeLessThanOrEqual(MAX_REVERSE_EXCURSION_PX);
   }
 });
