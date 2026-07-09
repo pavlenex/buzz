@@ -296,6 +296,33 @@ test("PORTABLE upscroll classify: reflow-driven vs tracking-failure reversals", 
   const midMomentumFight = reversals.filter(
     (r) => Math.abs(r.dScroll) >= MOMENTUM_PX && r.cause === "tracking-failure",
   );
+  // POST-MOMENTUM BITE (#1662 coalesced-desync signature). Eva's read of the
+  // vacuous mid-momentum cell: the WebKit compositor desync does not render
+  // DURING the momentum window — it lands on the coalesced STILL frame one or
+  // two frames AFTER momentum, when scrollTop reports 0 delta but the row snaps
+  // back. So the discriminating signature is a still-frame TRACKING-FAILURE
+  // reversal that TRAILS a recent momentum frame. Unlike the raw mid-momentum
+  // filter (which our known-bad impl scores 0 on, making it vacuous), this
+  // captures the frames where the bite actually appears — so it is non-zero on
+  // ours and a candidate that eliminates the stale-window write drops it.
+  const POST_MOMENTUM_FRAMES = 3; // bite lands within this many frames of momentum end
+  const hadRecentMomentum = (frameIndex: number): boolean => {
+    for (
+      let j = frameIndex - 1;
+      j >= Math.max(1, frameIndex - POST_MOMENTUM_FRAMES);
+      j -= 1
+    ) {
+      const d = Math.abs(frames[j].scrollTop - frames[j - 1].scrollTop);
+      if (d >= MOMENTUM_PX) return true;
+    }
+    return false;
+  };
+  const postMomentumBite = reversals.filter(
+    (r) =>
+      r.cause === "tracking-failure" &&
+      Math.abs(r.dScroll) < REVERSAL_PX &&
+      hadRecentMomentum(r.i),
+  );
   const momentumFrames = (() => {
     let n = 0;
     for (let i = 1; i < frames.length; i += 1) {
@@ -327,7 +354,10 @@ test("PORTABLE upscroll classify: reflow-driven vs tracking-failure reversals", 
     `  momentum frames (|dScroll|>=${MOMENTUM_PX}px):     ${momentumFrames}`,
   );
   console.log(
-    `  mid-momentum tracking-failure jerks:  ${midMomentumFight.length} (near-zero = doesn't fight)`,
+    `  mid-momentum tracking-failure jerks:  ${midMomentumFight.length} (vacuous on known-bad main — see post-momentum)`,
+  );
+  console.log(
+    `  POST-momentum bite (still-frame ≤${POST_MOMENTUM_FRAMES}f after flick): ${postMomentumBite.length} (#1662 signature — the real discriminator)`,
   );
   for (const r of reversals
     .slice()
