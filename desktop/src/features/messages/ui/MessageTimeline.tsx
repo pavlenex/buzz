@@ -253,6 +253,10 @@ const MessageTimelineBase = React.forwardRef<
     onTargetReached,
     scrollContainerRef,
     targetMessageId,
+    // CLASSIFIER-ONLY OVERLAY (branch quinn/polled-settle-gate-on): flip the
+    // default-off settle gate ON so Sami's instrument reads the gated timeline.
+    // NOT for merge — the PR branch (quinn/polled-settle-gate) keeps this off.
+    settleGate: { enabled: true },
   });
 
   const timelineIntroSurface = selectTimelineIntroSurface({
