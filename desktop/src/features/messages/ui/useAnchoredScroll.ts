@@ -57,6 +57,8 @@ type UseAnchoredScrollOptions = {
   virtualScrollToBottom?: (behavior?: ScrollBehavior) => void;
   /** Spike mode: let the virtualizer preserve prepend position via its own firstItemIndex path. */
   virtualizerOwnsPrependAnchoring?: boolean;
+  /** Bumps when a virtualized range changes, so pending target/search retries can re-check newly mounted DOM. */
+  virtualizerRenderVersion?: number;
 };
 
 type UseAnchoredScrollResult = {
@@ -163,6 +165,7 @@ export function useAnchoredScroll({
   virtualScrollToMessage,
   virtualScrollToBottom,
   virtualizerOwnsPrependAnchoring = false,
+  virtualizerRenderVersion = 0,
 }: UseAnchoredScrollOptions): UseAnchoredScrollResult {
   // Anchor lives in a ref because it must survive renders and is updated
   // both on scroll (commit-time read) and in the layout effect (post-render
@@ -288,8 +291,11 @@ export function useAnchoredScroll({
         ) {
           anchorRef.current = { kind: "message", messageId, topOffset: 0 };
           setIsAtBottom(false);
-          if (options.highlight) highlightMessage(messageId);
-          return true;
+          // In virtualized mode, this is only the phase-1 realization request:
+          // the target row is not in the DOM yet, so centering can still re-aim
+          // once Virtuoso mounts/measures it. Start the highlight clock only on
+          // the later DOM-visible path, otherwise it can fade before the row has
+          // settled in view.
         }
         return false;
       }
@@ -579,6 +585,7 @@ export function useAnchoredScroll({
     scrollToMessageImperative,
     targetMessageId,
     virtualizerOwnsPrependAnchoring,
+    virtualizerRenderVersion,
   ]);
 
   React.useEffect(() => {

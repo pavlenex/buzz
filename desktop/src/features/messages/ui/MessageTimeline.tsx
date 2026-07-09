@@ -194,8 +194,19 @@ const MessageTimelineBase = React.forwardRef<
   const topSentinelRef = React.useRef<HTMLDivElement>(null);
   const [virtualizerScrollParent, setVirtualizerScrollParent] =
     React.useState<HTMLDivElement | null>(null);
+  const [virtualizerRenderVersion, bumpVirtualizerRenderVersion] =
+    React.useReducer((version: number) => version + 1, 0);
   const [timelineVirtualizerApi, setTimelineVirtualizerApi] =
     React.useState<TimelineVirtualizerApi | null>(null);
+  const useTimelineVirtualizer = true;
+  const activeScrollContainerRef = React.useMemo(
+    () => ({
+      get current() {
+        return virtualizerScrollParent ?? scrollContainerRef.current;
+      },
+    }),
+    [scrollContainerRef, virtualizerScrollParent],
+  );
 
   // Gate the heavy timeline render (each row runs a synchronous
   // react-markdown parse) behind React concurrency. `useDeferredValue` lets the
@@ -238,7 +249,9 @@ const MessageTimelineBase = React.forwardRef<
   React.useLayoutEffect(() => {
     // Re-read after `scrollContainerDomKey` swaps the keyed scroll DOM node.
     void scrollContainerDomKey;
-    setVirtualizerScrollParent(scrollContainerRef.current);
+    if (!useTimelineVirtualizer) {
+      setVirtualizerScrollParent(scrollContainerRef.current);
+    }
     setTimelineVirtualizerApi(null);
   }, [scrollContainerRef, scrollContainerDomKey]);
 
@@ -264,11 +277,12 @@ const MessageTimelineBase = React.forwardRef<
     isLoading: showTimelineSkeleton,
     messages: deferredMessages,
     onTargetReached,
-    scrollContainerRef,
+    scrollContainerRef: activeScrollContainerRef,
     targetMessageId,
     virtualScrollToMessage: timelineVirtualizerApi?.scrollToMessage,
     virtualScrollToBottom: timelineVirtualizerApi?.scrollToBottom,
-    virtualizerOwnsPrependAnchoring: virtualizerScrollParent !== null,
+    virtualizerOwnsPrependAnchoring: useTimelineVirtualizer,
+    virtualizerRenderVersion,
   });
 
   const timelineIntroSurface = selectTimelineIntroSurface({
@@ -282,11 +296,18 @@ const MessageTimelineBase = React.forwardRef<
   const showDirectMessageIntro =
     timelineIntroSurface === "direct-message-intro";
   const showChannelIntro = timelineIntroSurface === "channel-intro";
-  const activeDirectMessageIntro = showDirectMessageIntro
-    ? directMessageIntro
-    : null;
-  const activeChannelIntro = showChannelIntro ? channelIntro : null;
-  const showIntro = showDirectMessageIntro || showChannelIntro;
+  const activeDirectMessageIntro =
+    showDirectMessageIntro &&
+    (!useTimelineVirtualizer || timelineBodySurface !== "list")
+      ? directMessageIntro
+      : null;
+  const activeChannelIntro =
+    showChannelIntro &&
+    (!useTimelineVirtualizer || timelineBodySurface !== "list")
+      ? channelIntro
+      : null;
+  const showIntro =
+    activeDirectMessageIntro !== null || activeChannelIntro !== null;
   const showGenericEmpty = timelineBodySurface === "empty" && !showIntro;
   const showMessageList = timelineBodySurface === "list";
 
@@ -365,14 +386,19 @@ const MessageTimelineBase = React.forwardRef<
     }
   }, [jumpToMessage, searchActiveMessageId, showTimelineSkeleton]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: deferredMessages is the intentional retry trigger — a search hit outside the initial window is spliced into messages asynchronously, and the DOM scroll should retry when that row commits.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deferredMessages and virtualizerRenderVersion are intentional retry triggers — a search hit may be spliced into messages asynchronously, and in virtualized mode a phase-1 index jump only realizes the row; retry when the rendered range changes so the DOM-visible path can center and highlight it.
   React.useEffect(() => {
     const target = pendingSearchTargetRef.current;
     if (!target || showTimelineSkeleton) return;
     if (jumpToMessage(target, { behavior: "auto" })) {
       pendingSearchTargetRef.current = null;
     }
-  }, [deferredMessages, jumpToMessage, showTimelineSkeleton]);
+  }, [
+    deferredMessages,
+    jumpToMessage,
+    showTimelineSkeleton,
+    virtualizerRenderVersion,
+  ]);
 
   const loadOlderViaVirtualizer = React.useCallback(() => {
     if (!fetchOlder || showTimelineSkeleton || !hasOlderMessages) return;
@@ -380,10 +406,10 @@ const MessageTimelineBase = React.forwardRef<
   }, [fetchOlder, hasOlderMessages, showTimelineSkeleton]);
 
   useLoadOlderOnScroll({
-    fetchOlder: virtualizerScrollParent ? undefined : fetchOlder,
+    fetchOlder: useTimelineVirtualizer ? undefined : fetchOlder,
     hasOlderMessages,
     isLoading: showTimelineSkeleton,
-    scrollContainerRef,
+    scrollContainerRef: activeScrollContainerRef,
     sentinelRef: topSentinelRef,
   });
 
@@ -392,6 +418,49 @@ const MessageTimelineBase = React.forwardRef<
     isLoading: showTimelineSkeleton,
     messages: showTimelineSkeleton ? EMPTY_MESSAGES : deferredMessages,
   });
+
+  const timelineList = showMessageList ? (
+    <TimelineMessageList
+      key={scrollContainerDomKey}
+      agentPubkeys={agentPubkeys}
+      channelId={channelId}
+      channelName={channelName}
+      channelType={channelType}
+      currentPubkey={currentPubkey}
+      firstUnreadMessageId={firstUnreadMessageId}
+      followThreadById={followThreadById}
+      highlightedMessageId={highlightedMessageId}
+      huddleMemberPubkeys={huddleMemberPubkeys}
+      huddleMemberPubkeysPending={huddleMemberPubkeysPending}
+      isFollowingThreadById={isFollowingThreadById}
+      isMessageUnreadById={isMessageUnreadById}
+      messageFooters={messageFooters}
+      mainEntries={deferredMessages === messages ? mainEntries : undefined}
+      threadSummaries={threadSummaries}
+      messages={deferredMessages}
+      onDelete={onDelete}
+      onEdit={onEdit}
+      onMarkUnread={onMarkUnread}
+      onMarkRead={onMarkRead}
+      onReply={onReply}
+      isSendingVideoReviewComment={isSendingVideoReviewComment}
+      onSendVideoReviewComment={onSendVideoReviewComment}
+      onStartReached={loadOlderViaVirtualizer}
+      onToggleReaction={onToggleReaction}
+      onVirtualizerApiChange={setTimelineVirtualizerApi}
+      onVirtualizerRangeChanged={bumpVirtualizerRenderVersion}
+      onVirtualizerScrollerChange={setVirtualizerScrollParent}
+      onAtBottomStateChange={onVirtualizerAtBottomStateChange}
+      personaLookup={personaLookup}
+      profiles={profiles}
+      searchActiveMessageId={searchActiveMessageId}
+      searchMatchingMessageIds={searchMatchingMessageIds}
+      searchQuery={searchQuery}
+      useVirtualizer={useTimelineVirtualizer}
+      threadUnreadCounts={threadUnreadCounts}
+      unfollowThreadById={unfollowThreadById}
+    />
+  ) : null;
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -429,221 +498,205 @@ const MessageTimelineBase = React.forwardRef<
         ) : null}
         <div
           className={cn(
-            "absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-2 pt-1",
-            hasComposerOverlay ? "pb-24" : "pb-4",
+            "absolute inset-0 overflow-hidden",
+            !useTimelineVirtualizer &&
+              cn(
+                "overflow-y-auto overflow-x-hidden overscroll-contain px-2 pt-1",
+                hasComposerOverlay ? "pb-24" : "pb-4",
+              ),
           )}
-          data-buzz-conversation-scroll
+          data-buzz-conversation-scroll={
+            useTimelineVirtualizer ? undefined : "true"
+          }
           data-scroll-restoration-id={scrollRestorationId}
-          data-testid="message-timeline"
+          data-testid={useTimelineVirtualizer ? undefined : "message-timeline"}
           key={scrollContainerDomKey}
-          onScroll={onScroll}
+          onScroll={useTimelineVirtualizer ? undefined : onScroll}
           ref={scrollContainerRef}
         >
-          <div
-            className={cn(
-              "flex w-full flex-col gap-2",
-              channelChrome.contentPadding,
-              (showIntro || showGenericEmpty || showMessageList) &&
-                "min-h-full",
-            )}
-            ref={contentRef}
-          >
-            <div ref={topSentinelRef} aria-hidden className="h-px" />
-
-            {/* Fixed-height slot: an always-mounted height keeps the virtual
-                spacer's offset stable across the load-older fetch toggle, so
-                `scrollMargin` doesn't shift mid-fetch and yank the restore. The
-                visible fetch spinner lives in the absolute overlay above, which
-                does not occupy inline flow. */}
-            <div aria-hidden className="h-8" />
-
+          {useTimelineVirtualizer && timelineList ? (
+            <div
+              className="h-full min-h-0 w-full"
+              data-render-pending={isRenderPending ? "true" : undefined}
+            >
+              {timelineList}
+            </div>
+          ) : (
             <div
               className={cn(
-                "flex min-h-[18rem] min-w-0 flex-col gap-2",
-                (showIntro || showGenericEmpty) && "min-h-full",
-                showMessageList && !showIntro && "mt-auto",
+                "flex w-full flex-col gap-2",
+                channelChrome.contentPadding,
+                (showIntro || showGenericEmpty || showMessageList) &&
+                  "min-h-full",
               )}
+              ref={contentRef}
             >
-              {showTimelineSkeleton ? (
-                <TimelineSkeleton rows={timelineSkeletonRows} />
-              ) : null}
-              {activeDirectMessageIntro ? (
-                <div
-                  className="mt-auto flex w-full flex-col items-start px-3 py-2 text-left"
-                  data-testid="message-dm-intro"
-                >
-                  <DirectMessageIntroAvatarStack
-                    participants={activeDirectMessageIntro.participants}
-                  />
-                  <p className="mt-4 max-w-full truncate text-xl font-semibold leading-7 tracking-tight text-foreground">
-                    {activeDirectMessageIntro.displayName}
-                  </p>
-                  <p className="mt-1 max-w-full truncate whitespace-nowrap text-sm leading-5 text-muted-foreground">
-                    This is the beginning of your direct message with{" "}
-                    <span className="font-medium text-foreground">
-                      {activeDirectMessageIntro.displayName}
-                    </span>
-                    .
-                  </p>
-                </div>
-              ) : null}
+              <div ref={topSentinelRef} aria-hidden className="h-px" />
 
-              {activeChannelIntro ? (
-                <div
-                  className="mt-auto flex w-full max-w-2xl flex-col items-start px-3 py-2 text-left"
-                  data-testid="message-channel-intro"
-                >
+              {/* Fixed-height slot: an always-mounted height keeps the virtual
+                  spacer's offset stable across the load-older fetch toggle, so
+                  `scrollMargin` doesn't shift mid-fetch and yank the restore. The
+                  visible fetch spinner lives in the absolute overlay above, which
+                  does not occupy inline flow. */}
+              <div aria-hidden className="h-8" />
+
+              <div
+                className={cn(
+                  "flex min-h-[18rem] min-w-0 flex-col gap-2",
+                  useTimelineVirtualizer && "min-h-0 flex-1",
+                  (showIntro || showGenericEmpty) && "min-h-full",
+                  showMessageList &&
+                    !showIntro &&
+                    !useTimelineVirtualizer &&
+                    "mt-auto",
+                )}
+              >
+                {showTimelineSkeleton ? (
+                  <TimelineSkeleton rows={timelineSkeletonRows} />
+                ) : null}
+                {activeDirectMessageIntro ? (
                   <div
-                    className="flex h-[60px] w-[60px] items-center justify-center rounded-2xl border border-border/70 bg-muted/40 text-muted-foreground"
-                    data-testid="message-channel-intro-icon"
+                    className="mt-auto flex w-full flex-col items-start px-3 py-2 text-left"
+                    data-testid="message-dm-intro"
                   >
-                    {activeChannelIntro.icon ?? (
-                      <Hash aria-hidden className="h-7 w-7" />
-                    )}
-                  </div>
-                  <p className="mt-4 max-w-full truncate text-xl font-semibold leading-7 tracking-tight text-foreground">
-                    #{activeChannelIntro.channelName}
-                  </p>
-                  <p className="mt-1 max-w-full text-sm leading-5 text-muted-foreground">
-                    This is the beginning of the{" "}
-                    <span className="font-medium text-foreground">
-                      {activeChannelIntro.channelKindLabel}
-                    </span>
-                    .
-                  </p>
-                  {activeChannelIntro.description ? (
-                    <p className="mt-2 max-w-xl text-sm leading-5 text-muted-foreground">
-                      {activeChannelIntro.description}
+                    <DirectMessageIntroAvatarStack
+                      participants={activeDirectMessageIntro.participants}
+                    />
+                    <p className="mt-4 max-w-full truncate text-xl font-semibold leading-7 tracking-tight text-foreground">
+                      {activeDirectMessageIntro.displayName}
                     </p>
-                  ) : null}
-                  {activeChannelIntro.actions?.length ? (
-                    <div className="mt-4 flex max-w-full flex-nowrap gap-3 overflow-x-auto pb-1">
-                      {activeChannelIntro.actions.map((action) => {
-                        const hasDescription = Boolean(action.description);
+                    <p className="mt-1 max-w-full truncate whitespace-nowrap text-sm leading-5 text-muted-foreground">
+                      This is the beginning of your direct message with{" "}
+                      <span className="font-medium text-foreground">
+                        {activeDirectMessageIntro.displayName}
+                      </span>
+                      .
+                    </p>
+                  </div>
+                ) : null}
 
-                        return (
-                          <button
-                            className={cn(
-                              "flex shrink-0 border border-border/70 bg-background/70 text-left transition-colors hover:bg-muted/60 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
-                              hasDescription
-                                ? "h-56 w-[13.75rem] flex-col rounded-2xl p-4"
-                                : "h-28 w-64 flex-col rounded-2xl p-4",
-                            )}
-                            data-testid={action.testId}
-                            key={action.label}
-                            onClick={action.onClick}
-                            type="button"
-                          >
-                            <span
+                {activeChannelIntro ? (
+                  <div
+                    className="mt-auto flex w-full max-w-2xl flex-col items-start px-3 py-2 text-left"
+                    data-testid="message-channel-intro"
+                  >
+                    <div
+                      className="flex h-[60px] w-[60px] items-center justify-center rounded-2xl border border-border/70 bg-muted/40 text-muted-foreground"
+                      data-testid="message-channel-intro-icon"
+                    >
+                      {activeChannelIntro.icon ?? (
+                        <Hash aria-hidden className="h-7 w-7" />
+                      )}
+                    </div>
+                    <p className="mt-4 max-w-full truncate text-xl font-semibold leading-7 tracking-tight text-foreground">
+                      #{activeChannelIntro.channelName}
+                    </p>
+                    <p className="mt-1 max-w-full text-sm leading-5 text-muted-foreground">
+                      This is the beginning of the{" "}
+                      <span className="font-medium text-foreground">
+                        {activeChannelIntro.channelKindLabel}
+                      </span>
+                      .
+                    </p>
+                    {activeChannelIntro.description ? (
+                      <p className="mt-2 max-w-xl text-sm leading-5 text-muted-foreground">
+                        {activeChannelIntro.description}
+                      </p>
+                    ) : null}
+                    {activeChannelIntro.actions?.length ? (
+                      <div className="mt-4 flex max-w-full flex-nowrap gap-3 overflow-x-auto pb-1">
+                        {activeChannelIntro.actions.map((action) => {
+                          const hasDescription = Boolean(action.description);
+
+                          return (
+                            <button
                               className={cn(
-                                "flex shrink-0 items-center justify-center rounded-full bg-muted/70 text-muted-foreground",
+                                "flex shrink-0 border border-border/70 bg-background/70 text-left transition-colors hover:bg-muted/60 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
                                 hasDescription
-                                  ? "h-12 w-12 [&_svg]:h-6 [&_svg]:w-6"
-                                  : "h-10 w-10 [&_svg]:h-4 [&_svg]:w-4",
+                                  ? "h-56 w-[13.75rem] flex-col rounded-2xl p-4"
+                                  : "h-28 w-64 flex-col rounded-2xl p-4",
                               )}
-                              data-testid={
-                                action.testId
-                                  ? `${action.testId}-icon`
-                                  : undefined
-                              }
+                              data-testid={action.testId}
+                              key={action.label}
+                              onClick={action.onClick}
+                              type="button"
                             >
-                              {action.icon}
-                            </span>
-                            <span className="mt-auto min-w-0">
                               <span
-                                className="block whitespace-normal break-words text-base font-medium leading-6 text-foreground"
+                                className={cn(
+                                  "flex shrink-0 items-center justify-center rounded-full bg-muted/70 text-muted-foreground",
+                                  hasDescription
+                                    ? "h-12 w-12 [&_svg]:h-6 [&_svg]:w-6"
+                                    : "h-10 w-10 [&_svg]:h-4 [&_svg]:w-4",
+                                )}
                                 data-testid={
                                   action.testId
-                                    ? `${action.testId}-title`
+                                    ? `${action.testId}-icon`
                                     : undefined
                                 }
                               >
-                                {action.label}
+                                {action.icon}
                               </span>
-                              {action.description ? (
+                              <span className="mt-auto min-w-0">
                                 <span
-                                  className="mt-1 block whitespace-normal break-words text-sm leading-5 text-muted-foreground"
+                                  className="block whitespace-normal break-words text-base font-medium leading-6 text-foreground"
                                   data-testid={
                                     action.testId
-                                      ? `${action.testId}-description`
+                                      ? `${action.testId}-title`
                                       : undefined
                                   }
                                 >
-                                  {action.description}
+                                  {action.label}
                                 </span>
-                              ) : null}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
+                                {action.description ? (
+                                  <span
+                                    className="mt-1 block whitespace-normal break-words text-sm leading-5 text-muted-foreground"
+                                    data-testid={
+                                      action.testId
+                                        ? `${action.testId}-description`
+                                        : undefined
+                                    }
+                                  >
+                                    {action.description}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
 
-              {showGenericEmpty ? (
-                <div
-                  className="mt-auto rounded-2xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-xs"
-                  data-testid="message-empty"
-                >
-                  <p className="text-base font-semibold tracking-tight">
-                    {emptyTitle}
-                  </p>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    {emptyDescription}
-                  </p>
-                </div>
-              ) : null}
+                {showGenericEmpty ? (
+                  <div
+                    className="mt-auto rounded-2xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-xs"
+                    data-testid="message-empty"
+                  >
+                    <p className="text-base font-semibold tracking-tight">
+                      {emptyTitle}
+                    </p>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      {emptyDescription}
+                    </p>
+                  </div>
+                ) : null}
 
-              {showMessageList ? (
-                <div
-                  className={cn("flex flex-col gap-2", !showIntro && "mt-auto")}
-                  data-render-pending={isRenderPending ? "true" : undefined}
-                >
-                  <TimelineMessageList
-                    key={scrollContainerDomKey}
-                    agentPubkeys={agentPubkeys}
-                    channelId={channelId}
-                    channelName={channelName}
-                    channelType={channelType}
-                    currentPubkey={currentPubkey}
-                    firstUnreadMessageId={firstUnreadMessageId}
-                    followThreadById={followThreadById}
-                    highlightedMessageId={highlightedMessageId}
-                    huddleMemberPubkeys={huddleMemberPubkeys}
-                    huddleMemberPubkeysPending={huddleMemberPubkeysPending}
-                    isFollowingThreadById={isFollowingThreadById}
-                    isMessageUnreadById={isMessageUnreadById}
-                    messageFooters={messageFooters}
-                    mainEntries={
-                      deferredMessages === messages ? mainEntries : undefined
-                    }
-                    threadSummaries={threadSummaries}
-                    messages={deferredMessages}
-                    onDelete={onDelete}
-                    onEdit={onEdit}
-                    onMarkUnread={onMarkUnread}
-                    onMarkRead={onMarkRead}
-                    onReply={onReply}
-                    isSendingVideoReviewComment={isSendingVideoReviewComment}
-                    onSendVideoReviewComment={onSendVideoReviewComment}
-                    onStartReached={loadOlderViaVirtualizer}
-                    onToggleReaction={onToggleReaction}
-                    onVirtualizerApiChange={setTimelineVirtualizerApi}
-                    onAtBottomStateChange={onVirtualizerAtBottomStateChange}
-                    personaLookup={personaLookup}
-                    profiles={profiles}
-                    searchActiveMessageId={searchActiveMessageId}
-                    searchMatchingMessageIds={searchMatchingMessageIds}
-                    searchQuery={searchQuery}
-                    scrollParent={virtualizerScrollParent}
-                    threadUnreadCounts={threadUnreadCounts}
-                    unfollowThreadById={unfollowThreadById}
-                  />
-                </div>
-              ) : null}
+                {showMessageList ? (
+                  <div
+                    className={cn(
+                      "flex flex-col gap-2",
+                      !showIntro && !useTimelineVirtualizer && "mt-auto",
+                      useTimelineVirtualizer && "min-h-0 flex-1",
+                    )}
+                    data-render-pending={isRenderPending ? "true" : undefined}
+                  >
+                    {timelineList}
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {!isAtBottom ? (

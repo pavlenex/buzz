@@ -1,6 +1,11 @@
 import * as React from "react";
 import { GroupedVirtuoso } from "react-virtuoso";
-import type { Components, GroupedVirtuosoHandle } from "react-virtuoso";
+import type {
+  Components,
+  GroupedVirtuosoHandle,
+  ListRange,
+  ScrollerProps,
+} from "react-virtuoso";
 
 import { formatDayHeading } from "@/features/messages/lib/dateFormatters";
 import { timelineRowReserveStyle } from "@/features/messages/lib/rowHeightEstimate";
@@ -93,10 +98,12 @@ type TimelineMessageListProps = {
   /** Per-thread unread counts keyed by thread root id. */
   threadUnreadCounts?: ReadonlyMap<string, number>;
   /** Existing scroll container, reused by the virtualizer spike so MessageTimeline owns the scroll node. */
-  scrollParent?: HTMLElement | null;
+  useVirtualizer?: boolean;
   onStartReached?: () => void;
   onAtBottomStateChange?: (atBottom: boolean) => void;
   onVirtualizerApiChange?: (api: TimelineVirtualizerApi | null) => void;
+  onVirtualizerRangeChanged?: () => void;
+  onVirtualizerScrollerChange?: (element: HTMLDivElement | null) => void;
 };
 
 export const TimelineMessageList = React.memo(function TimelineMessageList({
@@ -130,10 +137,12 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   searchQuery,
   threadUnreadCounts,
   unfollowThreadById,
-  scrollParent = null,
+  useVirtualizer = false,
   onStartReached,
   onAtBottomStateChange,
   onVirtualizerApiChange,
+  onVirtualizerRangeChanged,
+  onVirtualizerScrollerChange,
 }: TimelineMessageListProps) {
   const entries = React.useMemo(
     () =>
@@ -275,15 +284,16 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
     ],
   );
 
-  if (scrollParent) {
+  if (useVirtualizer) {
     return (
       <VirtualizedTimelineRows
         dayGroups={dayGroups}
         onAtBottomStateChange={onAtBottomStateChange}
         onStartReached={onStartReached}
         onVirtualizerApiChange={onVirtualizerApiChange}
+        onVirtualizerRangeChanged={onVirtualizerRangeChanged}
+        onVirtualizerScrollerChange={onVirtualizerScrollerChange}
         renderItem={renderItem}
-        scrollParent={scrollParent}
       />
     );
   }
@@ -326,8 +336,9 @@ type VirtualizedTimelineRowsProps = {
   onAtBottomStateChange?: (atBottom: boolean) => void;
   onStartReached?: () => void;
   onVirtualizerApiChange?: (api: TimelineVirtualizerApi | null) => void;
+  onVirtualizerRangeChanged?: () => void;
+  onVirtualizerScrollerChange?: (element: HTMLDivElement | null) => void;
   renderItem: (item: TimelineNonDayItem) => React.ReactNode;
-  scrollParent: HTMLElement;
 };
 
 function VirtualizedTimelineRows({
@@ -335,8 +346,9 @@ function VirtualizedTimelineRows({
   onAtBottomStateChange,
   onStartReached,
   onVirtualizerApiChange,
+  onVirtualizerRangeChanged,
+  onVirtualizerScrollerChange,
   renderItem,
-  scrollParent,
 }: VirtualizedTimelineRowsProps) {
   const virtuosoRef = React.useRef<GroupedVirtuosoHandle>(null);
   const firstItemIndexStateRef = React.useRef<StableFirstItemIndexState>({
@@ -390,17 +402,30 @@ function VirtualizedTimelineRows({
     return () => onVirtualizerApiChange(null);
   }, [messageVirtualIndexById, onVirtualizerApiChange]);
 
+  const handleScrollerRef = React.useCallback(
+    (ref: HTMLElement | Window | null) => {
+      onVirtualizerScrollerChange?.(ref instanceof HTMLDivElement ? ref : null);
+    },
+    [onVirtualizerScrollerChange],
+  );
+
+  const handleRangeChanged = React.useCallback(
+    (_range: ListRange) => {
+      onVirtualizerRangeChanged?.();
+    },
+    [onVirtualizerRangeChanged],
+  );
+
   return (
     <GroupedVirtuoso<TimelineNonDayItem>
       ref={virtuosoRef}
-      className="min-h-full"
+      className="h-full min-h-0 w-full"
       components={virtuosoComponents}
       computeItemKey={(index, item) =>
         item === undefined
           ? `timeline-missing-${index}`
           : getTimelineItemKey(item)
       }
-      customScrollParent={scrollParent}
       data={flattenedItems}
       defaultItemHeight={72}
       firstItemIndex={firstItemIndex}
@@ -433,12 +458,32 @@ function VirtualizedTimelineRows({
       itemContent={(_index, _groupIndex, item) => (
         <TimelineRowShell item={item}>{renderItem(item)}</TimelineRowShell>
       )}
+      rangeChanged={handleRangeChanged}
+      scrollerRef={handleScrollerRef}
       startReached={onStartReached ? () => onStartReached() : undefined}
     />
   );
 }
 
 const virtuosoComponents: Components<TimelineNonDayItem> = {
+  Scroller: React.forwardRef<
+    HTMLDivElement,
+    ScrollerProps & { className?: string }
+  >(function TimelineVirtuosoScroller({ className, ...props }, ref) {
+    return (
+      <div
+        {...props}
+        className={cn(
+          "h-full min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain px-2 pt-1 pb-24",
+          className,
+        )}
+        data-buzz-conversation-scroll
+        data-testid="message-timeline"
+        data-virtuoso-scroller="true"
+        ref={ref}
+      />
+    );
+  }),
   List: React.forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<"div">>(
     function TimelineVirtuosoList({ className, ...props }, ref) {
       return (
