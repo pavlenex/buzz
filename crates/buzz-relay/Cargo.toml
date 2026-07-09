@@ -82,3 +82,4 @@ mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev 
 buzz-core = { workspace = true, features = ["test-utils"] }
 buzz-auth = { workspace = true, features = ["dev"] }
 reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
