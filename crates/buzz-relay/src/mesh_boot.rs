@@ -280,7 +280,9 @@ pub fn wire_mesh_consumers(
 /// the sender. A transport/session-routing smoke for cross-pod evidence runs —
 /// each echoed frame proves fenced validation (Redis directory hit included)
 /// on the owner and delivery in both mesh directions. Not a product flow.
-async fn run_demo_echo(directory: SessionDirectory, inbound: ReliableInbound) {
+/// `pub(crate)` so the join-side probe (`api::mesh_demo`) can exercise the
+/// real consumer in its round-trip test.
+pub(crate) async fn run_demo_echo(directory: SessionDirectory, inbound: ReliableInbound) {
     let session_id = inbound.fenced.session_id;
     let peer = inbound.from;
     let mut stream = inbound.stream;

@@ -62,6 +62,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/count", post(api::bridge::count_events))
         // Webhook trigger (secret-authenticated, no NIP-98)
         .route("/hooks/{id}", post(api::bridge::workflow_webhook))
+        // Mesh demo echo probe — testbed-only; 404 unless BUZZ_MESH=on and
+        // BUZZ_MESH_DEMO_ECHO=on (see api::mesh_demo).
+        .route("/_mesh/demo/echo", post(api::mesh_demo::demo_echo))
         // Huddle audio WebSocket route
         .route(
             "/huddle/{channel_id}/audio",

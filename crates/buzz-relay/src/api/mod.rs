@@ -4,6 +4,7 @@ pub mod bridge;
 pub mod events;
 pub mod git;
 pub mod media;
+pub mod mesh_demo;
 pub mod nip05;
 
 // Re-export imeta helpers used by ingest pipeline.
