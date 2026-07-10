@@ -34,18 +34,14 @@ import {
   AUTO_MODEL_DROPDOWN_VALUE,
   AUTO_PROVIDER_DROPDOWN_VALUE,
   BLOCK_BUILD_HIDDEN_PROVIDER_IDS,
-  buildTemplateModelDropdownOptions,
-  CUSTOM_MODEL_DROPDOWN_VALUE,
   CUSTOM_PROVIDER_DROPDOWN_VALUE,
   computeLocalModeGate,
   formatRuntimeOptionLabel,
   getDefaultLlmProviderLabel,
   getDefaultPersonaRuntime,
-  getModelSelectValue,
   getPersonaModelOptions,
   getPersonaProviderOptions,
   getRuntimePersonaModelOptions,
-  hasPersonaModelOption,
   NO_RUNTIME_DROPDOWN_VALUE,
   providerRequiresExplicitModel,
   runtimeSupportsLlmProviderSelection,
@@ -57,6 +53,10 @@ import {
   sortPersonaRuntimes,
 } from "./personaDialogPickers";
 import { RequiredFieldLabel } from "./personaProviderModelFields";
+import {
+  modelDropdownOptions as buildModelDropdownOptions,
+  relayMeshModelPickerState,
+} from "./relayMeshModelPicker";
 import {
   selectionOnModelDropdownChange,
   selectionOnProviderDropdownChange,
@@ -449,18 +449,21 @@ export function AgentDefinitionDialog({
   });
   const staticModelOptions = getPersonaModelOptions(runtime, effectiveProvider);
   const runtimeModelOptions = getRuntimePersonaModelOptions(runtime);
-  const modelOptions = discoveredModelOptions ?? staticModelOptions;
-  const isModelCustom = !hasPersonaModelOption(
-    discoveredModelOptions ?? runtimeModelOptions,
+  const {
+    isCustom: isModelCustom,
+    isRelayMesh,
+    options: modelOptions,
+    selectValue: modelSelectValue,
+    showCustomInput: showCustomModelInput,
+  } = relayMeshModelPickerState({
+    discoveredOptions: discoveredModelOptions,
+    fallbackOptions: staticModelOptions,
+    knownOptions: discoveredModelOptions ?? runtimeModelOptions,
+    isCustomEditing: isCustomModelEditing,
     model,
-  );
-  const modelSelectValue = getModelSelectValue({
-    isCustomModelEditing,
-    isModelCustom,
-    model,
+    modelFieldVisible,
+    provider: effectiveProvider,
   });
-  const showCustomModelInput =
-    modelFieldVisible && (isCustomModelEditing || isModelCustom);
   // On internal Block builds, BUZZ_AGENT_PROVIDER is baked in and a boot
   // migration rewrites any persisted Databricks v1 values → v2. Hide the v1
   // option there so it is not offered for new selections. OSS builds have no
@@ -530,22 +533,14 @@ export function AgentDefinitionDialog({
     })),
     { label: "Custom provider...", value: CUSTOM_PROVIDER_DROPDOWN_VALUE },
   ];
-  const modelDropdownOptions: PersonaDropdownOption[] = [
-    ...buildTemplateModelDropdownOptions(
-      modelOptions,
-      globalConfig.model ?? "",
-    ),
-    ...(modelDiscoveryLoading && discoveredModelOptions === null
-      ? [
-          {
-            disabled: true,
-            label: "Loading models...",
-            value: MODEL_DISCOVERY_LOADING_VALUE,
-          },
-        ]
-      : []),
-    { label: "Custom model...", value: CUSTOM_MODEL_DROPDOWN_VALUE },
-  ];
+  const modelDropdownOptions: PersonaDropdownOption[] =
+    buildModelDropdownOptions({
+      allowCustom: !isRelayMesh,
+      globalModel: isRelayMesh ? undefined : (globalConfig.model ?? ""),
+      loading: modelDiscoveryLoading && discoveredModelOptions === null,
+      loadingValue: MODEL_DISCOVERY_LOADING_VALUE,
+      options: modelOptions,
+    });
   const previewLabel = displayName.trim() || "Agent name";
   const previewAvatarUrl = avatarUrl.trim() || null;
   const runtimeWarning =

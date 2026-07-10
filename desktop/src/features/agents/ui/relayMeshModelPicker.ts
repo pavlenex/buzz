@@ -1,5 +1,6 @@
 import {
   AUTO_MODEL_DROPDOWN_VALUE,
+  buildTemplateModelDropdownOptions,
   CUSTOM_MODEL_DROPDOWN_VALUE,
   getModelSelectValue,
   hasPersonaModelOption,
@@ -62,17 +63,23 @@ export function modelDropdownOptions({
   loading,
   loadingValue,
   allowCustom,
+  globalModel,
 }: {
   options: readonly PersonaModelOption[];
   loading: boolean;
   loadingValue: string;
   allowCustom: boolean;
+  globalModel?: string;
 }): PersonaDropdownOption[] {
+  const modelOptions =
+    globalModel === undefined
+      ? options.map((option) => ({
+          label: option.label,
+          value: option.id || AUTO_MODEL_DROPDOWN_VALUE,
+        }))
+      : buildTemplateModelDropdownOptions(options, globalModel);
   return [
-    ...options.map((option) => ({
-      label: option.label,
-      value: option.id || AUTO_MODEL_DROPDOWN_VALUE,
-    })),
+    ...modelOptions,
     ...(loading
       ? [{ disabled: true, label: "Loading models...", value: loadingValue }]
       : []),
