@@ -31,6 +31,7 @@ import {
   personaBehaviorDraftValid,
 } from "./personaBehaviorDraft";
 import {
+  AUTO_MODEL_DROPDOWN_VALUE,
   AUTO_PROVIDER_DROPDOWN_VALUE,
   BLOCK_BUILD_HIDDEN_PROVIDER_IDS,
   buildTemplateModelDropdownOptions,
@@ -829,6 +830,10 @@ export function AgentDefinitionDialog({
                   modelDropdownOptions={modelDropdownOptions}
                   modelSelectValue={modelSelectValue}
                   onCustomModelChange={setModel}
+                  showSharedComputeAutoHint={
+                    isRelayMesh &&
+                    modelSelectValue === AUTO_MODEL_DROPDOWN_VALUE
+                  }
                   onModelValueChange={handleModelDropdownChange}
                   showCustomModelInput={showCustomModelInput}
                   transition={advancedFieldsTransition}

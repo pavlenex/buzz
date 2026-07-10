@@ -99,6 +99,7 @@ export default defineConfig({
         "**/agent-provider-dropdowns.spec.ts",
         "**/agent-lifecycle-feedback.spec.ts",
         "**/inbox-live-update.spec.ts",
+        "**/mesh-compute.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
