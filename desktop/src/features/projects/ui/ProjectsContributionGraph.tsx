@@ -4,15 +4,24 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 const WEEK_COUNT = 26;
 const DAYS_PER_WEEK = 7;
 
-// Intensity ramp shared by the cells and the "Less … More" legend.
-// Grayscale on the theme's foreground token: the most active cells are
-// near-black in light mode and near-white in dark mode.
+// Intensity ramp shared by the cells and the legend dots.
+// Tints of the theme's primary token: the most active cells are fully
+// saturated primary, quieter days fade toward the muted background.
 const LEVEL_CLASSES = [
   "bg-muted/60 dark:bg-muted/40",
-  "bg-foreground/25",
-  "bg-foreground/50",
-  "bg-foreground/75",
-  "bg-foreground",
+  "bg-primary/25",
+  "bg-primary/50",
+  "bg-primary/75",
+  "bg-primary",
+];
+
+// Descriptors matching the thresholds in `levelFor`.
+const LEVEL_LABELS = [
+  "No activity",
+  "1–2 events",
+  "3–5 events",
+  "6–9 events",
+  "10+ events",
 ];
 
 function dayKeyOf(date: Date) {
@@ -46,13 +55,17 @@ function buildWeeks(today: Date) {
   );
 }
 
+// Minimum columns between labels so adjacent months never overlap.
+const MIN_LABEL_GAP = 3;
+
 function monthLabels(weeks: Date[][]) {
+  let lastLabeledIndex = -MIN_LABEL_GAP;
   return weeks.map((week, index) => {
-    if (index === 0) return "";
-    const month = week[0].getMonth();
-    return month !== weeks[index - 1][0].getMonth()
-      ? week[0].toLocaleDateString(undefined, { month: "short" })
-      : "";
+    const isNewMonth =
+      index === 0 || week[0].getMonth() !== weeks[index - 1][0].getMonth();
+    if (!isNewMonth || index - lastLabeledIndex < MIN_LABEL_GAP) return "";
+    lastLabeledIndex = index;
+    return week[0].toLocaleDateString(undefined, { month: "short" });
   });
 }
 
@@ -136,15 +149,15 @@ export function ProjectsContributionGraph({
           {totalContributions} {totalContributions === 1 ? "event" : "events"}{" "}
           in the last 6 months
         </p>
-        <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
-          Less
-          {LEVEL_CLASSES.map((levelClass) => (
-            <span
-              className={cn("h-2.5 w-2.5 rounded-[3px]", levelClass)}
-              key={levelClass}
-            />
+        <div className="flex items-center gap-1.5">
+          {LEVEL_CLASSES.map((levelClass, level) => (
+            <Tooltip key={levelClass}>
+              <TooltipTrigger asChild>
+                <span className={cn("h-2.5 w-2.5 rounded-[3px]", levelClass)} />
+              </TooltipTrigger>
+              <TooltipContent>{LEVEL_LABELS[level]}</TooltipContent>
+            </Tooltip>
           ))}
-          More
         </div>
       </div>
     </div>

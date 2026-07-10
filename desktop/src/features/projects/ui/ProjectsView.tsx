@@ -259,38 +259,35 @@ function ProjectActivityBar({
   const total = items.reduce((sum, item) => sum + item.count, 0);
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        {/* z-10 lifts the bar above the card's full-surface open button so it
-            can receive hover events. Fixed h-2 wrapper keeps layout stable
-            while the inner bar grows on hover. */}
-        <div className="group/activity-bar relative z-10 flex h-2 w-full items-center">
-          <div className="flex h-1.5 w-full gap-px overflow-hidden rounded-full bg-muted/60 transition-all duration-150 group-hover/activity-bar:h-2">
-            {total > 0
-              ? items
-                  .filter((item) => item.count > 0)
-                  .map((item) => (
+    // z-10 lifts the bar above the card's full-surface open button so it
+    // can receive hover events. Fixed h-2 wrapper keeps layout stable
+    // while the inner bar grows on hover.
+    <div className="group/activity-bar relative z-10 flex h-2 w-full items-center">
+      <div className="flex h-1.5 w-full gap-px overflow-hidden rounded-full bg-muted/60 transition-all duration-150 group-hover/activity-bar:h-2">
+        {total > 0
+          ? items
+              .filter((item) => item.count > 0)
+              .map((item) => (
+                <Tooltip key={item.barClass}>
+                  <TooltipTrigger asChild>
                     <div
                       className={cn("h-full", item.barClass)}
-                      key={item.barClass}
                       style={{ width: `${(item.count / total) * 100}%` }}
                     />
-                  ))
-              : null}
-          </div>
-        </div>
-      </TooltipTrigger>
-      <TooltipContent>
-        <div className="flex items-center gap-3">
-          {items.map((item) => (
-            <span className="flex items-center gap-1.5" key={item.barClass}>
-              <span className={cn("h-2 w-2 rounded-full", item.barClass)} />
-              {item.count} {item.text}
-            </span>
-          ))}
-        </div>
-      </TooltipContent>
-    </Tooltip>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        className={cn("h-2 w-2 rounded-full", item.barClass)}
+                      />
+                      {item.count} {item.text}
+                    </span>
+                  </TooltipContent>
+                </Tooltip>
+              ))
+          : null}
+      </div>
+    </div>
   );
 }
 
@@ -483,8 +480,8 @@ function ProjectGridCard({
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex min-w-0 items-center justify-between gap-3 px-4 pt-3">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center border border-border/60 bg-muted/40">
-              <FolderGit2 className="h-4 w-4 text-muted-foreground" />
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/40">
+              <FolderGit2 className="h-4.5 w-4.5 text-muted-foreground" />
             </span>
             <span className="min-w-0 truncate text-sm font-semibold text-foreground">
               {project.name}
@@ -564,8 +561,8 @@ function ProjectListRow({
       <ProjectCardButton onOpen={onOpen} project={project} />
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center border border-border/60 bg-muted/40">
-            <FolderGit2 className="h-4 w-4 text-muted-foreground" />
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/40">
+            <FolderGit2 className="h-4.5 w-4.5 text-muted-foreground" />
           </span>
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
@@ -901,7 +898,7 @@ export function ProjectsView() {
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="sr-only">Sort projects</span>
                   <select
-                    className="h-8 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground outline-hidden focus:ring-1 focus:ring-ring"
+                    className="h-8 rounded-md bg-transparent px-2 text-xs text-foreground outline-hidden hover:bg-muted/50 focus:ring-1 focus:ring-ring"
                     onChange={(event) =>
                       handleSortChange(event.target.value as ProjectsSort)
                     }

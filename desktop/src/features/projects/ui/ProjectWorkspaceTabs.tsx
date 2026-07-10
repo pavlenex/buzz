@@ -198,20 +198,22 @@ export function WorkspaceTabs({
 
       {selectedPullRequest ? (
         <div className="overflow-hidden rounded-xl border border-border/60 bg-card">
-          <PullRequestDetailHeader
-            profiles={profiles}
-            pullRequest={selectedPullRequest}
-          />
-          <div className="border-b border-border/60 px-4">
-            <PullRequestTabsList
-              filesCount={repoDiff?.files.length ?? files.length}
-              pullRequest={selectedPullRequest}
-            />
-          </div>
-          {(["conversation", "commits", "checks"] as const).map((mode) => (
-            <TabsContent className="m-0" key={mode} value={`pr-${mode}`}>
-              <div className="grid xl:grid-cols-[minmax(0,1fr)_18rem]">
-                <div className="min-w-0">
+          {/* Two full-height columns: the meta rail runs all the way to the
+              top of the card, alongside the header and tabs. */}
+          <div className="grid xl:grid-cols-[minmax(0,1fr)_18rem]">
+            <div className="min-w-0">
+              <PullRequestDetailHeader
+                profiles={profiles}
+                pullRequest={selectedPullRequest}
+              />
+              <div className="border-b border-border/60 px-4">
+                <PullRequestTabsList
+                  filesCount={repoDiff?.files.length ?? files.length}
+                  pullRequest={selectedPullRequest}
+                />
+              </div>
+              {(["conversation", "commits", "checks"] as const).map((mode) => (
+                <TabsContent className="m-0" key={mode} value={`pr-${mode}`}>
                   <PullRequestsPanel
                     error={pullRequestsError}
                     isLoading={pullRequestsLoading}
@@ -224,23 +226,23 @@ export function WorkspaceTabs({
                     pullRequests={pullRequests}
                     selectedPullRequestId={selectedPullRequestId}
                   />
-                </div>
-                <PullRequestMetaRail
-                  profiles={profiles}
-                  project={project}
+                </TabsContent>
+              ))}
+              <TabsContent className="m-0" value="pr-files">
+                <ProjectPullRequestFilesChangedPanel
+                  diff={repoDiff}
+                  error={repoDiffError}
+                  isLoading={repoDiffLoading}
                   pullRequest={selectedPullRequest}
                 />
-              </div>
-            </TabsContent>
-          ))}
-          <TabsContent className="m-0" value="pr-files">
-            <ProjectPullRequestFilesChangedPanel
-              diff={repoDiff}
-              error={repoDiffError}
-              isLoading={repoDiffLoading}
+              </TabsContent>
+            </div>
+            <PullRequestMetaRail
+              profiles={profiles}
+              project={project}
               pullRequest={selectedPullRequest}
             />
-          </TabsContent>
+          </div>
         </div>
       ) : null}
 

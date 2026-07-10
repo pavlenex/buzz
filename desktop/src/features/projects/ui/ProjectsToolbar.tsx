@@ -19,7 +19,7 @@ export function ProjectsViewModeToggle({
   onViewModeChange: (viewMode: ProjectsViewMode) => void;
 }) {
   return (
-    <fieldset className="flex items-center rounded-lg border border-border/60 bg-muted/30 p-0.5">
+    <fieldset className="flex items-center rounded-lg bg-muted/30 p-0.5">
       <legend className="sr-only">Project layout</legend>
       <Button
         aria-label="Grid layout"
@@ -53,18 +53,18 @@ export function ProjectsToolbar({
 }: ProjectsToolbarProps) {
   const filterOptions: Array<{ label: string; value: ProjectsFilter }> = [
     { label: "Overview", value: "all" },
+    { label: "Repositories", value: "repositories" },
+    { label: "Pull Requests", value: "prs" },
+    { label: "Issues", value: "issues" },
     { label: "Mine", value: "mine" },
     { label: "Local", value: "local" },
-    { label: "Repositories", value: "repositories" },
-    { label: "PRs", value: "prs" },
-    { label: "Issues", value: "issues" },
     { label: "Agents", value: "agents" },
     { label: "Users", value: "users" },
   ];
 
   return (
     <div
-      className="pointer-events-auto flex min-h-[3.25rem] flex-wrap items-center justify-between gap-3 px-5 py-2"
+      className="pointer-events-auto flex min-h-[3.25rem] flex-wrap items-center justify-between gap-3 px-4 py-2"
       data-tauri-drag-region
     >
       <fieldset className="flex min-w-0 flex-wrap items-center gap-0.5">
@@ -72,7 +72,7 @@ export function ProjectsToolbar({
         {filterOptions.map((option) => (
           <Button
             aria-pressed={filter === option.value}
-            className="h-8 gap-1.5 px-3 text-sm"
+            className="h-8 gap-1.5 rounded-full px-3 text-sm"
             key={option.value}
             onClick={() => onFilterChange(option.value)}
             size="sm"

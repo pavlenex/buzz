@@ -223,9 +223,9 @@ export function ProjectsOverviewPanel({
 
   return (
     <section className="-mx-4 mb-4 bg-card">
-      <div className="flex min-w-0 items-start gap-3 p-4">
-        <WorkspaceEmojiIcon className="flex h-10 w-10 shrink-0 items-center justify-center border border-border/60 bg-muted/40 text-2xl" />
-        <div className="-mt-1 min-w-0 flex-1">
+      <div className="flex min-w-0 items-center gap-3 p-4">
+        <WorkspaceEmojiIcon className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border/60 bg-muted/40 text-3xl" />
+        <div className="min-w-0 flex-1 space-y-1">
           <h2 className="text-xl font-semibold leading-6 tracking-tight text-foreground">
             {relayName} Projects
           </h2>

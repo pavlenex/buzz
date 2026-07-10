@@ -18,12 +18,15 @@ import {
   useProjectLocalRepoDiffQuery,
   useProjectLocalRepoSnapshotQuery,
   useProjectRepoDiffQuery,
-  useProjectRepoSyncStatusQuery,
-  usePushProjectLocalRepositoryMutation,
   useProjectPullRequestsQuery,
   useProjectRepoSnapshotQuery,
   useRepoStateQuery,
 } from "@/features/projects/hooks";
+import {
+  useProjectRepoSyncStatusQuery,
+  usePullProjectLocalRepositoryMutation,
+  usePushProjectLocalRepositoryMutation,
+} from "@/features/projects/repoSyncHooks";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import {
   mergeCurrentProfileIntoLookup,
@@ -64,6 +67,16 @@ import {
   useOpenProjectTerminal,
 } from "./useOpenProjectTerminal";
 import { ProfileIdentityButton } from "./ProjectProfileIdentity";
+
+/** Tooltip for the push/pull sync buttons, e.g. "Pull 2 remote commits". */
+function pushPullTitle(
+  verb: "Push" | "Pull",
+  count: number | undefined,
+  side: "local" | "remote",
+) {
+  if (!count) return `${verb} ${side} commits`;
+  return `${verb} ${count} ${side} ${count === 1 ? "commit" : "commits"}`;
+}
 
 function projectPeople(project: Project) {
   return [
@@ -235,6 +248,11 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     activeWorkspace?.reposDir,
     activeBranch,
   );
+  const pullLocalRepoMutation = usePullProjectLocalRepositoryMutation(
+    project,
+    activeWorkspace?.reposDir,
+    activeBranch,
+  );
   const hasLocalCheckout = Boolean(
     localRepoSnapshotQuery.data || repoSyncStatusQuery.data?.localPath,
   );
@@ -273,7 +291,18 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
       pushLocalRepoMutation.isPending || !repoSyncStatusQuery.data?.canPush,
     pushPending: pushLocalRepoMutation.isPending,
     pushTitle:
-      repoSyncStatusQuery.data?.pushBlockReason ?? "Push local commits",
+      repoSyncStatusQuery.data?.pushBlockReason ??
+      pushPullTitle("Push", repoSyncStatusQuery.data?.aheadCount, "local"),
+    canPull: repoSyncStatusQuery.data?.canPull ?? false,
+    onPull: () => {
+      void handlePullLocalRepo();
+    },
+    pullDisabled:
+      pullLocalRepoMutation.isPending || !repoSyncStatusQuery.data?.canPull,
+    pullPending: pullLocalRepoMutation.isPending,
+    pullTitle:
+      repoSyncStatusQuery.data?.pullBlockReason ??
+      pushPullTitle("Pull", repoSyncStatusQuery.data?.behindCount, "remote"),
   };
   const projectPending = projectQuery.isPending;
   React.useEffect(() => {
@@ -395,6 +424,28 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   }, [
     localRepoSnapshotQuery,
     pushLocalRepoMutation,
+    repoSnapshotQuery,
+    repoStateQuery,
+    repoSyncStatusQuery,
+  ]);
+  const handlePullLocalRepo = React.useCallback(async () => {
+    try {
+      const result = await pullLocalRepoMutation.mutateAsync();
+      toast.success(result.message);
+      await Promise.all([
+        repoSnapshotQuery.refetch(),
+        localRepoSnapshotQuery.refetch(),
+        repoSyncStatusQuery.refetch(),
+        repoStateQuery.refetch(),
+      ]);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to pull repository",
+      );
+    }
+  }, [
+    localRepoSnapshotQuery,
+    pullLocalRepoMutation,
     repoSnapshotQuery,
     repoStateQuery,
     repoSyncStatusQuery,

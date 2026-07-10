@@ -63,10 +63,17 @@ pub struct ProjectRepoSyncStatusInfo {
     pub has_untracked_files: bool,
     pub can_push: bool,
     pub push_block_reason: Option<String>,
+    pub can_pull: bool,
+    pub pull_block_reason: Option<String>,
 }
 #[derive(Serialize)]
 pub struct ProjectRepoPushResult {
     pub pushed: bool,
+    pub message: String,
+}
+#[derive(Serialize)]
+pub struct ProjectRepoPullResult {
+    pub pulled: bool,
     pub message: String,
 }
 #[derive(Serialize)]
@@ -568,6 +575,27 @@ fn compare_local_remote_status(
         None
     };
 
+    // Pulling is a fast-forward only merge of origin/<branch> into the
+    // current checkout, so it is blocked whenever that would not apply
+    // cleanly (diverged history, dirty worktree, branch mismatch).
+    let pull_block_reason = if local_head.is_none() {
+        Some("No local commits yet — clone instead of pulling.".to_string())
+    } else if remote_head.is_none() {
+        Some("Remote branch not found.".to_string())
+    } else if behind_count == 0 {
+        Some("Local branch is up to date.".to_string())
+    } else if local_branch.as_deref() != Some(branch.as_str()) {
+        Some(format!(
+            "Local checkout is on a different branch than {branch}."
+        ))
+    } else if has_uncommitted_changes {
+        Some("Commit or stash local changes before pulling.".to_string())
+    } else if ahead_count > 0 {
+        Some("Local and remote have diverged — reconcile in a terminal.".to_string())
+    } else {
+        None
+    };
+
     ProjectRepoSyncStatusInfo {
         local_path: Some(repo_dir.display().to_string()),
         local_branch,
@@ -582,6 +610,8 @@ fn compare_local_remote_status(
         has_untracked_files,
         can_push: push_block_reason.is_none(),
         push_block_reason,
+        can_pull: pull_block_reason.is_none(),
+        pull_block_reason,
     }
 }
 
@@ -778,6 +808,8 @@ pub async fn get_project_repo_sync_status(
                 has_untracked_files: false,
                 can_push: false,
                 push_block_reason: Some("No local checkout found.".to_string()),
+                can_pull: false,
+                pull_block_reason: Some("No local checkout found.".to_string()),
             });
         };
 
@@ -833,4 +865,49 @@ pub async fn push_project_local_repository(
     })
     .await
     .map_err(|error| format!("repo push task failed: {error}"))?
+}
+
+/// Fast-forwards the local checkout to the remote branch head. Refuses to
+/// run whenever the sync status reports the pull would not apply cleanly.
+#[tauri::command]
+pub async fn pull_project_local_repository(
+    repos_dir: Option<String>,
+    project_dtag: String,
+    clone_url: String,
+    default_branch: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<ProjectRepoPullResult, String> {
+    validate_clone_url(&clone_url)?;
+    let auth = build_git_auth_config(&state)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(repo_dir) =
+            find_local_repo_dir(repos_dir.as_deref(), &project_dtag, Some(&clone_url))?
+        else {
+            return Err("No local checkout found.".to_string());
+        };
+        let status =
+            compare_local_remote_status(&repo_dir, &clone_url, default_branch.as_deref(), &auth);
+        if !status.can_pull {
+            return Err(status
+                .pull_block_reason
+                .unwrap_or_else(|| "Local checkout cannot be pulled.".to_string()));
+        }
+        let branch = status
+            .remote_branch
+            .as_deref()
+            .ok_or_else(|| "No branch selected for pull.".to_string())?;
+        run_git(
+            &["pull", "--ff-only", "origin", branch],
+            Some(&repo_dir),
+            &auth,
+        )?;
+
+        Ok(ProjectRepoPullResult {
+            pulled: true,
+            message: format!("Pulled {branch} from remote."),
+        })
+    })
+    .await
+    .map_err(|error| format!("repo pull task failed: {error}"))?
 }

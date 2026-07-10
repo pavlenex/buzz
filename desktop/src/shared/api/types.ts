@@ -250,10 +250,17 @@ export type ProjectRepoSyncStatus = {
   hasUntrackedFiles: boolean;
   canPush: boolean;
   pushBlockReason: string | null;
+  canPull: boolean;
+  pullBlockReason: string | null;
 };
 
 export type ProjectRepoPushResult = {
   pushed: boolean;
+  message: string;
+};
+
+export type ProjectRepoPullResult = {
+  pulled: boolean;
   message: string;
 };
 

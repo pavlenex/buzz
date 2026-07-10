@@ -538,32 +538,20 @@ export function PullRequestDetailHeader({
   profiles?: UserProfileLookup;
   pullRequest: ProjectPullRequest;
 }) {
-  const authorProfile = profileForPubkey(pullRequest.author, profiles);
   const authorLabel = labelForPubkey(pullRequest.author, profiles);
 
   return (
-    <header className="min-w-0 space-y-2 p-4 pb-2">
+    <header className="min-w-0 space-y-1.5 p-4 pb-2">
+      <h3 className="line-clamp-2 min-w-0 text-base font-semibold text-foreground">
+        {pullRequest.title}{" "}
+        <span className="font-normal text-muted-foreground">
+          #{pullRequest.id.slice(0, 8)}
+        </span>
+      </h3>
       <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <GitPullRequest className="h-3.5 w-3.5" />
         Pull request from {authorLabel}
       </p>
-      <div className="flex min-w-0 items-center gap-3">
-        <ProfileIdentityButton
-          avatarClassName="shrink-0"
-          avatarSize="md"
-          avatarUrl={authorProfile?.avatarUrl ?? null}
-          isAgent={authorProfile?.isAgent === true}
-          label={authorLabel}
-          pubkey={pullRequest.author}
-          showLabel={false}
-        />
-        <h3 className="line-clamp-2 min-w-0 flex-1 text-base font-semibold text-foreground">
-          {pullRequest.title}{" "}
-          <span className="font-normal text-muted-foreground">
-            #{pullRequest.id.slice(0, 8)}
-          </span>
-        </h3>
-      </div>
     </header>
   );
 }
