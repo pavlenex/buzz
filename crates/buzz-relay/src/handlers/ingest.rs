@@ -3940,4 +3940,49 @@ mod tests {
             "got: {err}"
         );
     }
+
+    /// `Uuid::parse_str` accepts uppercase hex — the relay must reject it so the
+    /// only accepted form is the canonical lowercase-hyphenated representation.
+    #[test]
+    fn draft_wrap_rejects_uppercase_uuid_h_tag() {
+        let d = uuid::Uuid::new_v4().to_string();
+        let ch = uuid::Uuid::new_v4().to_string();
+        // Convert the canonical form to UPPERCASE — still parse-valid, non-canonical.
+        let ch_upper = ch.to_uppercase();
+        assert_ne!(ch, ch_upper, "test setup: uppercase must differ");
+        let ev = make_draft(
+            &[&["d", &d], &["k", "9"], &["h", &ch_upper]],
+            &fake_nip44_v2(),
+        );
+        let err = validate_draft_wrap_envelope(&ev).unwrap_err();
+        assert!(
+            err.contains("lowercase") || err.contains("canonical") || err.contains("UUID"),
+            "expected canonical/lowercase/UUID rejection, got: {err}"
+        );
+    }
+
+    /// `Uuid::parse_str` accepts the 32-hex-char form without hyphens — the relay
+    /// must reject it so that `h` is always the canonical `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
+    /// form and NIP-33 address derivation is unambiguous.
+    #[test]
+    fn draft_wrap_rejects_simple_hex_uuid_h_tag() {
+        let d = uuid::Uuid::new_v4().to_string();
+        let ch = uuid::Uuid::new_v4().to_string();
+        // Strip hyphens to get the 32-char simple hex form.
+        let ch_simple = ch.replace('-', "");
+        assert_eq!(
+            ch_simple.len(),
+            32,
+            "test setup: simple form is 32 hex chars"
+        );
+        let ev = make_draft(
+            &[&["d", &d], &["k", "9"], &["h", &ch_simple]],
+            &fake_nip44_v2(),
+        );
+        let err = validate_draft_wrap_envelope(&ev).unwrap_err();
+        assert!(
+            err.contains("lowercase") || err.contains("canonical") || err.contains("UUID"),
+            "expected canonical/lowercase/UUID rejection, got: {err}"
+        );
+    }
 }
