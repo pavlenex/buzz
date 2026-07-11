@@ -23,13 +23,13 @@ test("Share compute has a clear empty state and starts and stops sharing", async
 
   await expect(card).toContainText("Not sharing right now");
   await expect(card).toContainText(
-    "Choose a suggested model below, or enter a catalog name",
+    "Choose a suggested model below, or enter a model reference or local file",
   );
   await expect(toggle).toBeDisabled();
 
   await model.fill("hf://demo/SmolLM2-135M-Instruct-GGUF:Q4_K_M");
   await expect(card).toContainText(
-    "If it is not installed, Buzz downloads it when sharing starts",
+    "Buzz downloads remote models when sharing starts",
   );
   await expect(toggle).toBeEnabled();
 

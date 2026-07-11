@@ -12,14 +12,13 @@ pub const RELAY_MESH_AUTO_MODEL_ID: &str = "auto";
 #[cfg(feature = "mesh-llm")]
 pub fn apply_relay_mesh_env(
     env: &mut std::collections::BTreeMap<String, String>,
-    record: &ManagedAgentRecord,
+    provider: Option<&str>,
+    model: Option<&str>,
 ) {
-    if record.provider.as_deref() != Some(RELAY_MESH_PROVIDER_ID) {
+    if provider.map(str::trim) != Some(RELAY_MESH_PROVIDER_ID) {
         return;
     }
-    let model = record
-        .model
-        .as_deref()
+    let model = model
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(RELAY_MESH_AUTO_MODEL_ID)
@@ -193,7 +192,7 @@ mod tests {
         rec.model = Some(RELAY_MESH_AUTO_MODEL_ID.to_string());
         let mut env = BTreeMap::new();
 
-        apply_relay_mesh_env(&mut env, &rec);
+        apply_relay_mesh_env(&mut env, rec.provider.as_deref(), rec.model.as_deref());
 
         assert_eq!(
             env.get("BUZZ_AGENT_MAX_OUTPUT_TOKENS").map(String::as_str),

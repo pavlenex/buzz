@@ -22,7 +22,7 @@ import {
   SettingsOptionRow,
 } from "@/features/settings/ui/SettingsOptionGroup";
 import { SettingsSectionHeader } from "@/features/settings/ui/SettingsSectionHeader";
-import { classifyModelRef, modelRefHintLabel } from "../classifyModelRef";
+import { classifyModelRef } from "../classifyModelRef";
 import {
   downloadPercent,
   formatDownloadBytes,
@@ -57,13 +57,8 @@ function writeDraft(key: string, value: string): void {
  * Settings → Compute → Share compute.
  *
  * One toggle, one model field, an "Already installed" picklist, an Advanced
- * group. Honest copy throughout — no kind:30621, no "endpoint id", no raw
- * mesh knobs.
- *
- * The architectural-trust footer is load-bearing: it tells a privacy-aware
- * user that *not publishing* is enforced by the build, not by a default they
- * have to verify. (Source of the invariants this copy claims: Max's no-leak
- * builder defaults — publish=false, no Nostr relays, no auto-discovery.)
+ * group. User-facing copy describes the shared-compute behavior without
+ * exposing implementation protocols or raw mesh controls.
  */
 export function MeshComputeSettingsCard() {
   const { status, error, refresh } = useMeshNodeStatus();
@@ -138,7 +133,6 @@ export function MeshComputeSettingsCard() {
   const isOn = status?.state === "running" || status?.state === "starting";
   const controlsDisabled = isOn || actionInFlight;
   const refClass = classifyModelRef(modelInput);
-  const refHint = modelRefHintLabel(refClass);
   const canStart =
     refClass.kind !== "unknown" &&
     !actionInFlight &&
@@ -240,18 +234,10 @@ export function MeshComputeSettingsCard() {
               placeholder="Qwen3-8B-Q4_K_M or hf://meshllm/qwen3-8b@main"
               value={modelInput}
             />
-            {refHint ? (
-              <p className="text-sm font-normal text-muted-foreground">
-                {refHint}. If it is not installed, Buzz downloads it when
-                sharing starts.
-              </p>
-            ) : (
-              <p className="text-sm font-normal text-muted-foreground">
-                Choose a suggested model below, or enter a catalog name,
-                HuggingFace ref, or local file. Buzz downloads remote models
-                when sharing starts.
-              </p>
-            )}
+            <p className="text-sm font-normal text-muted-foreground">
+              Choose a suggested model below, or enter a model reference or
+              local file. Buzz downloads remote models when sharing starts.
+            </p>
             {catalog && catalog.entries.length > 0 ? (
               <CatalogPicker
                 catalog={catalog}
@@ -343,9 +329,7 @@ export function MeshComputeSettingsCard() {
       </SettingsOptionGroup>
 
       <p className="mt-3 rounded-lg bg-muted/30 px-3 py-2 text-sm font-normal text-muted-foreground">
-        Buzz will not publish your machine to public Nostr relays, auto-discover
-        other networks, or share your endpoint outside this relay's members.
-        Only members of this relay can dial in.
+        Only members of this relay can use this machine's shared compute.
       </p>
     </section>
   );
