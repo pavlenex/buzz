@@ -33,9 +33,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let accepting = Arc::new(AtomicBool::new(true));
     let (public, health) = router(AppState {
-        grant_keyring,
+        grant_keyring: Arc::new(grant_keyring),
         transport,
         delivery_url: c.public_delivery_url,
+        issuance_url: c.public_issuance_url,
+        max_grant_lifetime_seconds: c.max_grant_lifetime_seconds,
+        enabled_profiles: c.enabled_profiles,
+        authorized_relays: c.authorized_relays,
         accepting: accepting.clone(),
     });
     let pl = tokio::net::TcpListener::bind(c.bind_addr).await?;

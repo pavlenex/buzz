@@ -21,6 +21,7 @@ axum = { workspace = true }
 async-trait = "0.1"
 base64 = "0.22"
 chrono = { workspace = true }
+hex = { workspace = true }
 nostr = { workspace = true }
 p256 = { version = "0.14", features = ["ecdsa", "pem", "pkcs8"] }
 rand = { workspace = true }

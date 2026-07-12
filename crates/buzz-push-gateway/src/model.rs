@@ -7,7 +7,7 @@ pub const MAX_GRANT_BYTES: usize = 4096;
 pub const FALLBACK_TEXT: &str = "New activity";
 pub const WIRE_VERSION: u8 = 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AppProfile {
     BuzzIosProduction,
@@ -51,6 +51,26 @@ pub struct DeliveryRequest {
     pub class: DeliveryClass,
     pub expires_at: i64,
     pub wake: Wake,
+}
+
+/// Strict relay-supplied claims for gateway-owned endpoint grant issuance.
+/// The authenticated NIP-98 signer becomes `relay_pubkey`; callers cannot
+/// supply or override that authority-bearing field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantIssueRequest {
+    pub v: u8,
+    pub endpoint: String,
+    pub app_profile: AppProfile,
+    pub max_class: DeliveryClass,
+    pub generation: i64,
+    pub expires_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantIssueResponse {
+    pub endpoint_grant: String,
 }
 
 /// Authenticated grant plaintext. It is never accepted outside the AEAD envelope.

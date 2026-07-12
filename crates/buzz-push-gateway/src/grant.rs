@@ -185,6 +185,33 @@ mod tests {
     }
 
     #[test]
+    fn configured_route_id_is_authenticated_even_when_keys_match() {
+        let ring = GrantKeyring::new(vec![
+            GrantKey::new("current", &[7; 32]).unwrap(),
+            GrantKey::new("previous", &[7; 32]).unwrap(),
+        ])
+        .unwrap();
+        let route_tampered = ring
+            .issue(&grant())
+            .unwrap()
+            .replacen("current.", "previous.", 1);
+        assert!(ring.open(&route_tampered).is_err());
+    }
+
+    #[test]
+    fn complete_envelope_length_is_bounded_on_issue_and_open() {
+        let ring = GrantKeyring::new(vec![GrantKey::new("current", &[7; 32]).unwrap()]).unwrap();
+        let mut oversized = grant();
+        oversized.endpoint = "a".repeat(MAX_GRANT_BYTES * 2);
+        assert!(ring.issue(&oversized).is_err());
+
+        let at_limit = "a".repeat(MAX_GRANT_BYTES);
+        let over_limit = "a".repeat(MAX_GRANT_BYTES + 1);
+        assert!(ring.open(&at_limit).is_err());
+        assert!(ring.open(&over_limit).is_err());
+    }
+
+    #[test]
     fn tampering_unknown_ids_and_duplicate_configuration_fail() {
         let ring = GrantKeyring::new(vec![GrantKey::new("current", &[7; 32]).unwrap()]).unwrap();
         let sealed = ring.issue(&grant()).unwrap();

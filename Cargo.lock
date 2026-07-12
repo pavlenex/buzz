@@ -1036,6 +1036,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "hex",
  "nostr",
  "p256",
  "proptest",

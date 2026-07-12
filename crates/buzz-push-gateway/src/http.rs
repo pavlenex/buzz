@@ -18,6 +18,7 @@ use nostr::{
     Event, JsonUtil, Timestamp,
 };
 use std::{
+    collections::HashSet,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -29,9 +30,13 @@ use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub grant_keyring: GrantKeyring,
+    pub grant_keyring: Arc<GrantKeyring>,
     pub transport: Arc<dyn PushTransport>,
     pub delivery_url: url::Url,
+    pub issuance_url: url::Url,
+    pub max_grant_lifetime_seconds: i64,
+    pub enabled_profiles: HashSet<AppProfile>,
+    pub authorized_relays: HashSet<String>,
     pub accepting: Arc<AtomicBool>,
 }
 fn error(status: StatusCode, code: &'static str) -> Response {
@@ -63,6 +68,58 @@ fn valid_wake(r: &DeliveryRequest) -> bool {
             _ => r.wake.fallback.as_deref() == Some(FALLBACK_TEXT),
         }
 }
+async fn issue_grant(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let request: GrantIssueRequest = match crate::strict_json::from_slice(&body) {
+        Ok(request) => request,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "invalid_request"),
+    };
+    let auth = match headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(auth) => auth,
+        None => return error(StatusCode::UNAUTHORIZED, "invalid_auth"),
+    };
+    let relay = match verify_auth_header(
+        auth,
+        &s.issuance_url,
+        HttpMethod::POST,
+        Timestamp::now(),
+        Some(&body),
+    ) {
+        Ok(pubkey) => pubkey.to_hex(),
+        Err(_) => return error(StatusCode::UNAUTHORIZED, "invalid_auth"),
+    };
+    if !s.authorized_relays.contains(&relay) {
+        return error(StatusCode::UNAUTHORIZED, "invalid_auth");
+    }
+    let now = chrono::Utc::now().timestamp();
+    if request.v != WIRE_VERSION
+        || !valid_hex(&request.endpoint, 32)
+        || request.generation < 1
+        || request.expires_at <= now
+        || request.expires_at > now.saturating_add(s.max_grant_lifetime_seconds)
+        || !s.enabled_profiles.contains(&request.app_profile)
+    {
+        return error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let grant = EndpointGrant {
+        v: request.v,
+        endpoint: request.endpoint,
+        relay_pubkey: relay,
+        app_profile: request.app_profile,
+        max_class: request.max_class,
+        generation: request.generation,
+        expires_at: request.expires_at,
+    };
+    match s.grant_keyring.issue(&grant) {
+        Ok(endpoint_grant) => {
+            (StatusCode::OK, Json(GrantIssueResponse { endpoint_grant })).into_response()
+        }
+        Err(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "issuance_failed"),
+    }
+}
+
 async fn deliver(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     let r: DeliveryRequest = match crate::strict_json::from_slice(&body) {
         Ok(x) => x,
@@ -182,6 +239,7 @@ async fn ready(State(s): State<AppState>) -> Response {
 }
 pub fn router(state: AppState) -> (Router, Router) {
     let public = Router::new()
+        .route("/v1/grants/apns", post(issue_grant))
         .route("/v1/deliveries/apns", post(deliver))
         .with_state(state.clone())
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BYTES))
@@ -195,4 +253,182 @@ pub fn router(state: AppState) -> (Router, Router) {
         .route("/_readiness", get(ready))
         .with_state(state);
     (public, health)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use axum::{body::to_bytes, http::Request};
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+    use sha2::{Digest, Sha256};
+    use tower::ServiceExt;
+
+    struct AcceptTransport;
+
+    #[async_trait]
+    impl PushTransport for AcceptTransport {
+        async fn send(
+            &self,
+            _request: &DeliveryRequest,
+            _profile: AppProfile,
+            _endpoint: &str,
+        ) -> DeliveryOutcome {
+            DeliveryOutcome::Accepted
+        }
+    }
+
+    fn state(keys: &Keys) -> AppState {
+        AppState {
+            grant_keyring: Arc::new(
+                GrantKeyring::new(vec![
+                    crate::grant::GrantKey::new("current", &[7; 32]).unwrap()
+                ])
+                .unwrap(),
+            ),
+            transport: Arc::new(AcceptTransport),
+            delivery_url: "https://push.example/v1/deliveries/apns".parse().unwrap(),
+            issuance_url: "https://push.example/v1/grants/apns".parse().unwrap(),
+            max_grant_lifetime_seconds: 3600,
+            enabled_profiles: HashSet::from([AppProfile::BuzzIosProduction]),
+            authorized_relays: HashSet::from([keys.public_key().to_hex()]),
+            accepting: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    fn auth(keys: &Keys, url: &url::Url, body: &[u8]) -> String {
+        let tags = vec![
+            Tag::parse(["u", url.as_str()]).unwrap(),
+            Tag::parse(["method", "POST"]).unwrap(),
+            Tag::parse(["payload", &hex::encode(Sha256::digest(body))]).unwrap(),
+        ];
+        let event = EventBuilder::new(Kind::HttpAuth, "")
+            .tags(tags)
+            .sign_with_keys(keys)
+            .unwrap();
+        format!(
+            "Nostr {}",
+            STANDARD.encode(serde_json::to_vec(&event).unwrap())
+        )
+    }
+
+    async fn post(app: Router, path: &str, body: Vec<u8>, auth: Option<String>) -> Response {
+        let mut request = Request::post(path)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body))
+            .unwrap();
+        if let Some(auth) = auth {
+            request
+                .headers_mut()
+                .insert(axum::http::header::AUTHORIZATION, auth.parse().unwrap());
+        }
+        app.oneshot(request).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn issuance_is_strict_bounded_and_uses_the_delivery_keyring() {
+        let keys = Keys::generate();
+        let state = state(&keys);
+        let (app, _) = router(state.clone());
+        let expires_at = chrono::Utc::now().timestamp() + 60;
+        let issue_body = serde_json::to_vec(&serde_json::json!({
+            "v": 1,
+            "endpoint": "00".repeat(32),
+            "app_profile": "buzz-ios-production",
+            "max_class": "default",
+            "generation": 2,
+            "expires_at": expires_at,
+        }))
+        .unwrap();
+        let issue_response = post(
+            app.clone(),
+            "/v1/grants/apns",
+            issue_body.clone(),
+            Some(auth(&keys, &state.issuance_url, &issue_body)),
+        )
+        .await;
+        assert_eq!(issue_response.status(), StatusCode::OK);
+        let body = to_bytes(issue_response.into_body(), MAX_REQUEST_BYTES)
+            .await
+            .unwrap();
+        let issued: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let endpoint_grant = issued["endpoint_grant"].as_str().unwrap();
+        let grant = state.grant_keyring.open(endpoint_grant).unwrap();
+        assert_eq!(grant.relay_pubkey, keys.public_key().to_hex());
+
+        let delivery_body = serde_json::to_vec(&serde_json::json!({
+            "v": 1,
+            "endpoint_grant": endpoint_grant,
+            "request_id": uuid::Uuid::new_v4(),
+            "class": "default",
+            "expires_at": expires_at,
+            "wake": {"v": 1, "fallback": FALLBACK_TEXT},
+        }))
+        .unwrap();
+        let delivery_response = post(
+            app,
+            "/v1/deliveries/apns",
+            delivery_body.clone(),
+            Some(auth(&keys, &state.delivery_url, &delivery_body)),
+        )
+        .await;
+        assert_eq!(delivery_response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn issuance_rejects_authority_override_wrong_url_and_invalid_claims() {
+        let keys = Keys::generate();
+        let state = state(&keys);
+        let (app, _) = router(state.clone());
+        let now = chrono::Utc::now().timestamp();
+        let cases = [
+            serde_json::json!({
+                "v": 1, "endpoint": "00".repeat(32),
+                "relay_pubkey": "11".repeat(32),
+                "app_profile": "buzz-ios-production", "max_class": "default",
+                "generation": 1, "expires_at": now + 60,
+            }),
+            serde_json::json!({
+                "v": 1, "endpoint": "00".repeat(32),
+                "app_profile": "buzz-ios-sandbox", "max_class": "default",
+                "generation": 1, "expires_at": now + 60,
+            }),
+            serde_json::json!({
+                "v": 1, "endpoint": "00".repeat(32),
+                "app_profile": "buzz-ios-production", "max_class": "default",
+                "generation": 1, "expires_at": now,
+            }),
+            serde_json::json!({
+                "v": 1, "endpoint": "00".repeat(32),
+                "app_profile": "buzz-ios-production", "max_class": "default",
+                "generation": 1, "expires_at": now + 3601,
+            }),
+        ];
+        for value in cases {
+            let body = serde_json::to_vec(&value).unwrap();
+            let response = post(
+                app.clone(),
+                "/v1/grants/apns",
+                body.clone(),
+                Some(auth(&keys, &state.issuance_url, &body)),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+
+        let body = serde_json::to_vec(&serde_json::json!({
+            "v": 1, "endpoint": "00".repeat(32),
+            "app_profile": "buzz-ios-production", "max_class": "default",
+            "generation": 1, "expires_at": now + 60,
+        }))
+        .unwrap();
+        let response = post(
+            app,
+            "/v1/grants/apns",
+            body.clone(),
+            Some(auth(&keys, &state.delivery_url, &body)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }
