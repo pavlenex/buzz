@@ -565,6 +565,7 @@ test("sends the first message from the new direct message composer", async ({
 test("creates the DM before preparing a persona mention", async ({ page }) => {
   await installMockBridge(page, {
     activePersonaIds: ["builtin:fizz"],
+    createManagedAgentDelayMs: 1_000,
   });
   await page.goto("/");
   await openNewMessagePage(page);
@@ -597,6 +598,11 @@ test("creates the DM before preparing a persona mention", async ({ page }) => {
   await expect
     .poll(async () => commandCount(await readCommandLog(page), "open_dm"))
     .toBeGreaterThan(baselineOpenDmCount);
+  await expect(
+    page.getByTestId(`new-dm-selected-${TEST_IDENTITIES.charlie.pubkey}`),
+  ).toBeDisabled();
+  await expect(page.getByTestId("new-dm-search")).toBeDisabled();
+  await expect(page.getByTestId("new-message-recipient-popover")).toBeHidden();
   await expect
     .poll(async () =>
       commandCount(await readCommandLog(page), "create_managed_agent"),

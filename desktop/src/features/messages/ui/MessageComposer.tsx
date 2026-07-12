@@ -110,6 +110,7 @@ type MessageComposerProps = {
   } | null;
   /** Resolves the channel required to prepare mentions before sending. */
   onPrepareSendChannel?: () => Promise<string | null>;
+  onPreparingMentionSendChange?: (isPreparing: boolean) => void;
   onSend: (
     content: string,
     mentionPubkeys: string[],
@@ -150,6 +151,7 @@ function MessageComposerImpl({
   onEditLastOwnMessage,
   onEditSave,
   onPrepareSendChannel,
+  onPreparingMentionSendChange,
   onSend,
   placeholder,
   profiles,
@@ -607,8 +609,6 @@ function MessageComposerImpl({
     }
 
     const capturedThreadContext = onCaptureSendContext?.() ?? null;
-    // If a thread-reply composer reported no reply target at submit time,
-    // bail here rather than discovering the null later after async awaits.
     if (
       capturedThreadContext !== null &&
       !capturedThreadContext.parentEventId
@@ -616,22 +616,22 @@ function MessageComposerImpl({
       return;
     }
 
-    await mentionSendFlow.sendMessageWithMentionFlow({
-      capturedChannelId: channelId,
-      capturedThreadContext,
-      pendingImeta: currentPendingImeta,
-      // resolveSentDraftKey checks at submit time (synchronously, before any
-      // await) whether a draft was actually persisted. If not — fast/
-      // never-persisted send — it returns null so the active draft is not
-      // cleared (nothing to clear). The function is exported and tested directly
-      // in MessageComposerDraftPredicate.test.mjs.
-      sentDraftKey: resolveSentDraftKey(
-        effectiveDraftKeyRef.current,
-        drafts.loadDraft,
-      ),
-      spoileredAttachmentUrls,
-      trimmed,
-    });
+    onPreparingMentionSendChange?.(true);
+    try {
+      await mentionSendFlow.sendMessageWithMentionFlow({
+        capturedChannelId: channelId,
+        capturedThreadContext,
+        pendingImeta: currentPendingImeta,
+        sentDraftKey: resolveSentDraftKey(
+          effectiveDraftKeyRef.current,
+          drafts.loadDraft,
+        ),
+        spoileredAttachmentUrls,
+        trimmed,
+      });
+    } finally {
+      onPreparingMentionSendChange?.(false);
+    }
   }, [
     channelId,
     channelLinks.clearChannels,
@@ -649,6 +649,7 @@ function MessageComposerImpl({
     spoileredAttachmentUrls,
     syncComposerContentFromEditor,
     onCaptureSendContext,
+    onPreparingMentionSendChange,
   ]);
   submitMessageRef.current = submitMessage;
 

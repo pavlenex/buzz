@@ -42,10 +42,15 @@ export function NewMessageScreen() {
   const [submitErrorMessage, setSubmitErrorMessage] = React.useState<
     string | null
   >(null);
+  const [isPreparingMentionSend, setIsPreparingMentionSend] =
+    React.useState(false);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const toFieldRef = React.useRef<HTMLDivElement>(null);
   const preparedDirectMessageRef = React.useRef<Channel | null>(null);
-  const isPending = openDmMutation.isPending || sendMessageMutation.isPending;
+  const isPending =
+    isPreparingMentionSend ||
+    openDmMutation.isPending ||
+    sendMessageMutation.isPending;
 
   const {
     deferredSearchQuery,
@@ -514,6 +519,7 @@ export function NewMessageScreen() {
         disabled={isPending || selectedUsers.length === 0}
         isSending={isPending}
         onPrepareSendChannel={prepareSendChannel}
+        onPreparingMentionSendChange={setIsPreparingMentionSend}
         onSend={sendFirstMessage}
         placeholder={composerPlaceholder}
       />
