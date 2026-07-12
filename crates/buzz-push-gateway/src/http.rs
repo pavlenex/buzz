@@ -1,7 +1,7 @@
 //! Stateless delivery API and health routers.
 use crate::{
     apns::{DeliveryOutcome, PushTransport},
-    grant::GrantKey,
+    grant::GrantKeyring,
     model::*,
 };
 use axum::{
@@ -29,7 +29,7 @@ use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub grant_key: GrantKey,
+    pub grant_keyring: GrantKeyring,
     pub transport: Arc<dyn PushTransport>,
     pub delivery_url: url::Url,
     pub accepting: Arc<AtomicBool>,
@@ -92,7 +92,7 @@ async fn deliver(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
         Ok(x) => x.to_hex(),
         Err(_) => return error(StatusCode::UNAUTHORIZED, "invalid_auth"),
     };
-    let grant = match s.grant_key.open(&r.endpoint_grant) {
+    let grant = match s.grant_keyring.open(&r.endpoint_grant) {
         Ok(x) => x,
         Err(_) => return error(StatusCode::NOT_FOUND, "invalid_grant"),
     };

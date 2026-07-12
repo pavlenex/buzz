@@ -1,12 +1,20 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantKeyConfig {
+    pub id: String,
+    pub key: Vec<u8>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind_addr: SocketAddr,
     pub health_addr: SocketAddr,
     pub public_delivery_url: url::Url,
-    pub grant_key: Vec<u8>,
+    /// Ordered current key first, followed by decrypt-only predecessors.
+    pub grant_keys: Vec<GrantKeyConfig>,
     pub apns_key_path: PathBuf,
     pub apns_key_id: String,
     pub apns_team_id: String,
@@ -33,11 +41,27 @@ impl Config {
                 .filter(|v| !v.is_empty())
                 .ok_or(ConfigError::Missing(k))
         }
-        let grant_key = STANDARD
-            .decode(req(e, "BUZZ_PUSH_GRANT_KEY")?)
-            .map_err(|_| ConfigError::Invalid("BUZZ_PUSH_GRANT_KEY"))?;
-        if grant_key.len() != 32 {
-            return Err(ConfigError::Invalid("BUZZ_PUSH_GRANT_KEY"));
+        let grant_keys = req(e, "BUZZ_PUSH_GRANT_KEYS")?
+            .split(',')
+            .map(|entry| {
+                let (id, encoded) = entry
+                    .split_once(':')
+                    .filter(|(id, encoded)| !id.is_empty() && !encoded.is_empty())
+                    .ok_or(ConfigError::Invalid("BUZZ_PUSH_GRANT_KEYS"))?;
+                let key = STANDARD
+                    .decode(encoded)
+                    .map_err(|_| ConfigError::Invalid("BUZZ_PUSH_GRANT_KEYS"))?;
+                if key.len() != 32 {
+                    return Err(ConfigError::Invalid("BUZZ_PUSH_GRANT_KEYS"));
+                }
+                Ok(GrantKeyConfig {
+                    id: id.to_owned(),
+                    key,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if grant_keys.is_empty() {
+            return Err(ConfigError::Invalid("BUZZ_PUSH_GRANT_KEYS"));
         }
         let public_delivery_url = req(e, "BUZZ_PUSH_PUBLIC_DELIVERY_URL")?
             .parse::<url::Url>()
@@ -61,11 +85,53 @@ impl Config {
                 .parse()
                 .map_err(|_| ConfigError::Invalid("BUZZ_PUSH_HEALTH_ADDR"))?,
             public_delivery_url,
-            grant_key,
+            grant_keys,
             apns_key_path: req(e, "BUZZ_PUSH_APNS_KEY_PATH")?.into(),
             apns_key_id: req(e, "BUZZ_PUSH_APNS_KEY_ID")?.to_owned(),
             apns_team_id: req(e, "BUZZ_PUSH_APNS_TEAM_ID")?.to_owned(),
             apns_topic: req(e, "BUZZ_PUSH_APNS_TOPIC")?.to_owned(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> HashMap<String, String> {
+        HashMap::from([
+            (
+                "BUZZ_PUSH_GRANT_KEYS".into(),
+                format!(
+                    "current:{},old:{}",
+                    STANDARD.encode([1; 32]),
+                    STANDARD.encode([2; 32])
+                ),
+            ),
+            (
+                "BUZZ_PUSH_PUBLIC_DELIVERY_URL".into(),
+                "https://push.example/v1/deliveries/apns".into(),
+            ),
+            ("BUZZ_PUSH_APNS_KEY_PATH".into(), "/key.p8".into()),
+            ("BUZZ_PUSH_APNS_KEY_ID".into(), "key".into()),
+            ("BUZZ_PUSH_APNS_TEAM_ID".into(), "team".into()),
+            ("BUZZ_PUSH_APNS_TOPIC".into(), "app".into()),
+        ])
+    }
+
+    #[test]
+    fn grant_keys_preserve_current_then_predecessor_order() {
+        let config = Config::from_map(&base()).unwrap();
+        assert_eq!(config.grant_keys[0].id, "current");
+        assert_eq!(config.grant_keys[1].id, "old");
+    }
+
+    #[test]
+    fn malformed_or_empty_keyrings_fail_startup() {
+        for value in ["", "missing_separator", "id:bad-base64"] {
+            let mut env = base();
+            env.insert("BUZZ_PUSH_GRANT_KEYS".into(), value.into());
+            assert!(Config::from_map(&env).is_err());
+        }
     }
 }

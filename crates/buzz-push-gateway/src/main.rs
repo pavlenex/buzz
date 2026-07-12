@@ -1,4 +1,9 @@
-use buzz_push_gateway::{apns::ApnsTransport, config::Config, grant::GrantKey, router, AppState};
+use buzz_push_gateway::{
+    apns::ApnsTransport,
+    config::Config,
+    grant::{GrantKey, GrantKeyring},
+    router, AppState,
+};
 use std::{
     fs,
     sync::{
@@ -20,9 +25,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &c.apns_team_id,
         c.apns_topic,
     )?);
+    let grant_keyring = GrantKeyring::new(
+        c.grant_keys
+            .iter()
+            .map(|key| GrantKey::new(&key.id, &key.key))
+            .collect::<Result<_, _>>()?,
+    )?;
     let accepting = Arc::new(AtomicBool::new(true));
     let (public, health) = router(AppState {
-        grant_key: GrantKey::new(&c.grant_key)?,
+        grant_keyring,
         transport,
         delivery_url: c.public_delivery_url,
         accepting: accepting.clone(),
