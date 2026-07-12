@@ -66,6 +66,7 @@ type UseMentionSendFlowOptions = {
   drafts: Pick<UseDraftsResult, "markDraftSent">;
   emojiAutocomplete: Pick<UseEmojiAutocompleteResult, "clearEmojis">;
   mentions: UseMentionsResult;
+  onPrepareSendChannel?: () => Promise<string | null>;
   onSendRef: React.MutableRefObject<
     (
       content: string,
@@ -127,6 +128,7 @@ export function useMentionSendFlow({
   drafts,
   emojiAutocomplete,
   mentions,
+  onPrepareSendChannel,
   onSendRef,
   richText,
   setContent,
@@ -469,9 +471,17 @@ export function useMentionSendFlow({
       isMentionSendPendingRef.current = true;
       setIsMentionSendPending(true);
       try {
+        let effectiveChannelId = capturedChannelId;
+        if (!effectiveChannelId && onPrepareSendChannel) {
+          effectiveChannelId = await onPrepareSendChannel();
+          if (!effectiveChannelId) {
+            return;
+          }
+        }
+
         const personaMentionResult = await createMentionedPersonaAgents(
           trimmed,
-          capturedChannelId ?? "",
+          effectiveChannelId ?? "",
         );
         if (personaMentionResult.errors.length > 0) {
           const message =
@@ -522,7 +532,7 @@ export function useMentionSendFlow({
         }
 
         const pendingDraft: PendingNonMemberMentionSend = {
-          capturedChannelId,
+          capturedChannelId: effectiveChannelId,
           capturedThreadContext,
           finalContent,
           mentionPubkeys: pubkeys,
@@ -555,6 +565,7 @@ export function useMentionSendFlow({
       getNonMemberMentionPubkeys,
       mentions.extractMentionPubkeys,
       mentions.isManagedAgentPubkey,
+      onPrepareSendChannel,
     ],
   );
 

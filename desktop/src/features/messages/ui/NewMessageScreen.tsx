@@ -3,6 +3,7 @@ import * as React from "react";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useOpenDmMutation } from "@/features/channels/hooks";
+import type { Channel } from "@/shared/api/types";
 import { useSendMessageMutation } from "@/features/messages/hooks";
 import { getKeyboardSearchSelection } from "@/features/profile/lib/userCandidateSearch";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -43,6 +44,7 @@ export function NewMessageScreen() {
   >(null);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const toFieldRef = React.useRef<HTMLDivElement>(null);
+  const preparedDirectMessageRef = React.useRef<Channel | null>(null);
   const isPending = openDmMutation.isPending || sendMessageMutation.isPending;
 
   const {
@@ -112,6 +114,7 @@ export function NewMessageScreen() {
 
   const handleRemoveUser = React.useCallback(
     (pubkey: string) => {
+      preparedDirectMessageRef.current = null;
       removeUser(pubkey);
     },
     [removeUser],
@@ -119,6 +122,7 @@ export function NewMessageScreen() {
 
   const handleSelectUser = React.useCallback(
     (user: Parameters<typeof selectUser>[0]) => {
+      preparedDirectMessageRef.current = null;
       selectUser(user);
       setHighlightedRecipientPubkey(null);
       setSubmitErrorMessage(null);
@@ -129,6 +133,10 @@ export function NewMessageScreen() {
   );
 
   const openDirectMessage = React.useCallback(async () => {
+    if (preparedDirectMessageRef.current) {
+      return preparedDirectMessageRef.current;
+    }
+
     if (isPending || selectedUsers.length === 0) {
       return null;
     }
@@ -136,9 +144,11 @@ export function NewMessageScreen() {
     setSubmitErrorMessage(null);
 
     try {
-      return await openDmMutation.mutateAsync({
+      const directMessage = await openDmMutation.mutateAsync({
         pubkeys: selectedUsers.map((user) => user.pubkey),
       });
+      preparedDirectMessageRef.current = directMessage;
+      return directMessage;
     } catch (error) {
       setSubmitErrorMessage(
         error instanceof Error
@@ -148,6 +158,11 @@ export function NewMessageScreen() {
       return null;
     }
   }, [isPending, openDmMutation, selectedUsers]);
+
+  const prepareSendChannel = React.useCallback(async () => {
+    const directMessage = await openDirectMessage();
+    return directMessage?.id ?? null;
+  }, [openDirectMessage]);
 
   const sendFirstMessage = React.useCallback(
     async (
@@ -498,6 +513,7 @@ export function NewMessageScreen() {
         containerClassName="px-5"
         disabled={isPending || selectedUsers.length === 0}
         isSending={isPending}
+        onPrepareSendChannel={prepareSendChannel}
         onSend={sendFirstMessage}
         placeholder={composerPlaceholder}
       />

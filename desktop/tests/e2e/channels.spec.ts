@@ -216,6 +216,10 @@ async function readCommandLog(page: import("@playwright/test").Page) {
   });
 }
 
+function commandCount(commands: string[], command: string) {
+  return commands.filter((entry) => entry === command).length;
+}
+
 async function readCommandPayloadLog(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
     return (
@@ -556,6 +560,67 @@ test("sends the first message from the new direct message composer", async ({
 
   await expect(page.getByTestId("chat-title")).toHaveText("charlie");
   await expect(page.getByTestId("message-timeline")).toContainText(message);
+});
+
+test("creates the DM before preparing a persona mention", async ({ page }) => {
+  await installMockBridge(page, {
+    activePersonaIds: ["builtin:fizz"],
+  });
+  await page.goto("/");
+  await openNewMessagePage(page);
+
+  await page.getByTestId("new-dm-search").fill("charlie");
+  await page
+    .getByTestId(`new-dm-result-${TEST_IDENTITIES.charlie.pubkey}`)
+    .click();
+
+  const input = page.getByTestId("message-input");
+  await input.fill("Ask @fi");
+  await expect(
+    page
+      .getByTestId("message-composer")
+      .getByTestId("mention-autocomplete")
+      .locator("button", { hasText: "Fizz" }),
+  ).toBeVisible();
+  await input.press("Enter");
+  await page.keyboard.type(" for a hand");
+
+  const baselineCommands = await readCommandLog(page);
+  const baselineOpenDmCount = commandCount(baselineCommands, "open_dm");
+  const baselineCreateCount = commandCount(
+    baselineCommands,
+    "create_managed_agent",
+  );
+
+  await page.getByTestId("send-message").click();
+
+  await expect
+    .poll(async () => commandCount(await readCommandLog(page), "open_dm"))
+    .toBeGreaterThan(baselineOpenDmCount);
+  await expect
+    .poll(async () =>
+      commandCount(await readCommandLog(page), "create_managed_agent"),
+    )
+    .toBeGreaterThan(baselineCreateCount);
+  await expect(page.getByTestId("chat-title")).toContainText("charlie");
+  await expect(page.getByTestId("chat-title")).toContainText("Fizz");
+
+  const sendCommands = (await readCommandLog(page)).slice(
+    baselineCommands.length,
+  );
+  expect(sendCommands.indexOf("open_dm")).toBeLessThan(
+    sendCommands.indexOf("create_managed_agent"),
+  );
+  expect(commandCount(sendCommands, "open_dm")).toBe(1);
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "for a hand",
+  );
+  await expect(
+    page
+      .getByTestId("message-row")
+      .last()
+      .locator("[data-mention].agent-mention-highlight", { hasText: "Fizz" }),
+  ).toBeVisible();
 });
 
 test("closes direct message results while opening", async ({ page }) => {
