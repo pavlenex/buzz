@@ -471,7 +471,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 6);
+        assert_eq!(migrations.len(), 7);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -555,6 +555,23 @@ mod tests {
             );
         }
         assert!(!migrations[0].sql.as_str().contains("moderation_reports"));
+
+        // Push leases and their durable outbox are relay-owned and structurally
+        // community-scoped; the public gateway remains stateless.
+        assert_eq!(migrations[6].version, 7);
+        assert!(migrations[6]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE push_leases"));
+        assert!(migrations[6]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE push_wake_outbox"));
+        assert!(migrations[6]
+            .sql
+            .as_str()
+            .contains("PRIMARY KEY (community_id, author, installation_id)"));
+        assert!(!migrations[0].sql.as_str().contains("push_leases"));
     }
 
     #[test]
