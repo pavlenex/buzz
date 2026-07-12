@@ -4,6 +4,7 @@
 //! origins never select rows in this module.
 
 use buzz_core::CommunityId;
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{PgPool, Row as _};
 use uuid::Uuid;
@@ -75,6 +76,40 @@ pub struct NewWake<'a> {
     pub expires_at: i64,
 }
 
+/// One exclusively claimed wake, already revalidated against its current lease.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimedWake {
+    /// Durable job id; this is also the stable gateway/APNs request id.
+    pub id: Uuid,
+    /// Claim fencing token required by every completion operation.
+    pub claim_id: Uuid,
+    /// Lease author whose read authorization must be rechecked by the relay.
+    pub author: Vec<u8>,
+    /// Installation address within the community.
+    pub installation_id: String,
+    /// Generation captured when the job was enqueued.
+    pub lease_generation: i64,
+    /// Opaque endpoint capability for the stateless gateway.
+    pub endpoint_grant: String,
+    /// Wake class sent to the gateway.
+    pub class: String,
+    /// Closed, privacy-safe wake object.
+    pub wake: Value,
+    /// Delivery deadline, in Unix seconds.
+    pub expires_at: i64,
+    /// Attempt number, starting at one for the first claim.
+    pub attempt: i32,
+}
+
+/// Outcome when a worker performs the final, load-bearing send-time check.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RevalidateWakeOutcome {
+    /// The claim and current lease still authorize delivery.
+    Deliver(ClaimedWake),
+    /// The claim was lost or the lease rotated, revoked, expired, or disabled.
+    Suppressed,
+}
+
 /// Create or rotate an active lease if both ordering gates win atomically.
 #[allow(clippy::too_many_arguments)]
 pub async fn replace_active_lease(
@@ -143,6 +178,7 @@ async fn replace_lease(
             source_created_at = EXCLUDED.source_created_at,
             generation = EXCLUDED.generation,
             active = EXCLUDED.active,
+            endpoint_enabled = true,
             app_profile = EXCLUDED.app_profile,
             endpoint_hash = EXCLUDED.endpoint_hash,
             endpoint_grant = EXCLUDED.endpoint_grant,
@@ -228,6 +264,7 @@ pub async fn enqueue_wake(
           AND installation_id = $3
           AND generation = $4
           AND active
+          AND endpoint_enabled
           AND expires_at > EXTRACT(EPOCH FROM now())::bigint
         FOR UPDATE
         "#,
@@ -283,6 +320,232 @@ pub async fn enqueue_wake(
     };
     tx.commit().await?;
     Ok(outcome)
+}
+
+/// Claim due jobs for one community, recovering expired worker leases.
+///
+/// Claiming performs an early lease check, but callers MUST invoke
+/// [`revalidate_wake_for_send`] immediately before the transport call.
+pub async fn claim_due_wakes(
+    pool: &PgPool,
+    community: CommunityId,
+    limit: i64,
+    lease_until: DateTime<Utc>,
+) -> Result<Vec<ClaimedWake>> {
+    let claim_id = Uuid::new_v4();
+    let rows = sqlx::query(
+        r#"
+        WITH candidates AS (
+            SELECT o.id
+            FROM push_wake_outbox o
+            JOIN push_leases l
+              ON l.community_id = o.community_id
+             AND l.author = o.author
+             AND l.installation_id = o.installation_id
+             AND l.generation = o.lease_generation
+             AND l.endpoint_hash = o.endpoint_hash
+            WHERE o.community_id = $1
+              AND o.expires_at > EXTRACT(EPOCH FROM now())::bigint
+              AND o.next_attempt_at <= now()
+              AND (o.state = 'pending' OR (o.state = 'sending' AND o.lease_until < now()))
+              AND l.active
+              AND l.endpoint_enabled
+              AND l.expires_at > EXTRACT(EPOCH FROM now())::bigint
+            ORDER BY o.next_attempt_at, o.created_at, o.id
+            FOR UPDATE OF o SKIP LOCKED
+            LIMIT $2
+        )
+        UPDATE push_wake_outbox o
+        SET state = 'sending', claim_id = $3, lease_until = $4, attempts = attempts + 1
+        FROM candidates c, push_leases l
+        WHERE o.community_id = $1
+          AND o.id = c.id
+          AND l.community_id = o.community_id
+          AND l.author = o.author
+          AND l.installation_id = o.installation_id
+          AND l.generation = o.lease_generation
+          AND l.endpoint_hash = o.endpoint_hash
+        RETURNING o.id, o.claim_id, o.author, o.installation_id,
+                  o.lease_generation, l.endpoint_grant, o.class, o.wake,
+                  o.expires_at, o.attempts
+        "#,
+    )
+    .bind(community.as_uuid())
+    .bind(limit)
+    .bind(claim_id)
+    .bind(lease_until)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter().map(row_to_claimed_wake).collect()
+}
+
+/// Revalidate a fenced claim immediately before sending it.
+///
+/// This exact community + generation + endpoint join is the load-bearing RF1
+/// gate. Claim-time eligibility and replacement-time cancellation are only
+/// optimizations; neither can replace this send-time check.
+pub async fn revalidate_wake_for_send(
+    pool: &PgPool,
+    community: CommunityId,
+    id: Uuid,
+    claim_id: Uuid,
+) -> Result<RevalidateWakeOutcome> {
+    let row = sqlx::query(
+        r#"
+        SELECT o.id, o.claim_id, o.author, o.installation_id,
+               o.lease_generation, l.endpoint_grant, o.class, o.wake,
+               o.expires_at, o.attempts
+        FROM push_wake_outbox o
+        JOIN push_leases l
+          ON l.community_id = o.community_id
+         AND l.author = o.author
+         AND l.installation_id = o.installation_id
+         AND l.generation = o.lease_generation
+         AND l.endpoint_hash = o.endpoint_hash
+        WHERE o.community_id = $1
+          AND o.id = $2
+          AND o.claim_id = $3
+          AND o.state = 'sending'
+          AND o.lease_until >= now()
+          AND o.expires_at > EXTRACT(EPOCH FROM now())::bigint
+          AND l.active
+          AND l.endpoint_enabled
+          AND l.expires_at > EXTRACT(EPOCH FROM now())::bigint
+        "#,
+    )
+    .bind(community.as_uuid())
+    .bind(id)
+    .bind(claim_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_claimed_wake)
+        .transpose()?
+        .map_or(Ok(RevalidateWakeOutcome::Suppressed), |wake| {
+            Ok(RevalidateWakeOutcome::Deliver(wake))
+        })
+}
+
+/// Mark a fenced claim delivered. Stale workers cannot complete a newer claim.
+pub async fn complete_wake(
+    pool: &PgPool,
+    community: CommunityId,
+    id: Uuid,
+    claim_id: Uuid,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE push_wake_outbox \
+         SET state = 'delivered', claim_id = NULL, lease_until = NULL \
+         WHERE community_id = $1 AND id = $2 AND claim_id = $3 AND state = 'sending'",
+    )
+    .bind(community.as_uuid())
+    .bind(id)
+    .bind(claim_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Return a fenced claim to the pending queue for a bounded retry.
+pub async fn retry_wake(
+    pool: &PgPool,
+    community: CommunityId,
+    id: Uuid,
+    claim_id: Uuid,
+    next_attempt_at: DateTime<Utc>,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE push_wake_outbox \
+         SET state = 'pending', next_attempt_at = $4, claim_id = NULL, lease_until = NULL \
+         WHERE community_id = $1 AND id = $2 AND claim_id = $3 AND state = 'sending'",
+    )
+    .bind(community.as_uuid())
+    .bind(id)
+    .bind(claim_id)
+    .bind(next_attempt_at)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Permanently fail one fenced claim without affecting its lease or siblings.
+pub async fn fail_wake(
+    pool: &PgPool,
+    community: CommunityId,
+    id: Uuid,
+    claim_id: Uuid,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE push_wake_outbox \
+         SET state = 'failed', claim_id = NULL, lease_until = NULL \
+         WHERE community_id = $1 AND id = $2 AND claim_id = $3 AND state = 'sending'",
+    )
+    .bind(community.as_uuid())
+    .bind(id)
+    .bind(claim_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Disable exactly the current endpoint generation after a permanent response.
+///
+/// Strict generation monotonicity is the underlying safety invariant. The
+/// current-generation predicate makes stale responses clean no-ops.
+pub async fn disable_endpoint_generation(
+    pool: &PgPool,
+    community: CommunityId,
+    author: &[u8],
+    installation_id: &str,
+    generation: i64,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE push_leases SET endpoint_enabled = false, updated_at = now() \
+         WHERE community_id = $1 AND author = $2 AND installation_id = $3 \
+           AND generation = $4 AND active AND endpoint_enabled",
+    )
+    .bind(community.as_uuid())
+    .bind(author)
+    .bind(installation_id)
+    .bind(generation)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Delete terminal/expired outbox rows older than a retention cutoff.
+pub async fn prune_wake_outbox(
+    pool: &PgPool,
+    community: CommunityId,
+    before: DateTime<Utc>,
+) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM push_wake_outbox \
+         WHERE community_id = $1 AND created_at < $2 \
+           AND (state IN ('delivered', 'failed') \
+                OR expires_at <= EXTRACT(EPOCH FROM now())::bigint)",
+    )
+    .bind(community.as_uuid())
+    .bind(before)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+fn row_to_claimed_wake(row: sqlx::postgres::PgRow) -> Result<ClaimedWake> {
+    Ok(ClaimedWake {
+        id: row.try_get("id")?,
+        claim_id: row.try_get("claim_id")?,
+        author: row.try_get("author")?,
+        installation_id: row.try_get("installation_id")?,
+        lease_generation: row.try_get("lease_generation")?,
+        endpoint_grant: row.try_get("endpoint_grant")?,
+        class: row.try_get("class")?,
+        wake: row.try_get("wake")?,
+        expires_at: row.try_get("expires_at")?,
+        attempt: row.try_get("attempts")?,
+    })
 }
 
 #[cfg(test)]
@@ -488,5 +751,177 @@ mod tests {
         .await
         .expect("count all jobs");
         assert_eq!(total, 2, "same dedup key is independent per community");
+    }
+
+    async fn enqueue_one(
+        pool: &PgPool,
+        community: CommunityId,
+        author: &[u8],
+        event: &[u8],
+        generation: i64,
+    ) -> Uuid {
+        match enqueue_wake(
+            pool,
+            community,
+            author,
+            "install",
+            NewWake {
+                lease_generation: generation,
+                event_id: event,
+                class: "default",
+                wake: &serde_json::json!({"v": 1}),
+                expires_at: i64::MAX / 2,
+            },
+        )
+        .await
+        .expect("enqueue wake")
+        {
+            EnqueueWakeOutcome::Enqueued(id) => id,
+            other => panic!("expected fresh enqueue, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn send_revalidation_suppresses_rotated_claim_and_retry_preserves_id() {
+        let pool = setup_pool().await;
+        let community = make_community(&pool).await;
+        let author = [12; 32];
+        activate(&pool, community, &author, "install", &[13; 32], 1).await;
+        let id = enqueue_one(&pool, community, &author, &[14; 32], 1).await;
+        let claim = claim_due_wakes(
+            &pool,
+            community,
+            1,
+            Utc::now() + chrono::Duration::minutes(1),
+        )
+        .await
+        .expect("claim")
+        .pop()
+        .expect("claimed job");
+        assert_eq!(claim.id, id);
+        assert_eq!(claim.attempt, 1);
+
+        activate(&pool, community, &author, "install", &[15; 32], 2).await;
+        assert_eq!(
+            revalidate_wake_for_send(&pool, community, id, claim.claim_id)
+                .await
+                .expect("revalidate after rotate"),
+            RevalidateWakeOutcome::Suppressed
+        );
+
+        let event = [16; 32];
+        let retry_id = enqueue_one(&pool, community, &author, &event, 2).await;
+        let first = claim_due_wakes(
+            &pool,
+            community,
+            1,
+            Utc::now() + chrono::Duration::minutes(1),
+        )
+        .await
+        .expect("first claim")
+        .into_iter()
+        .find(|wake| wake.id == retry_id)
+        .expect("retry job claimed");
+        assert!(
+            retry_wake(&pool, community, retry_id, first.claim_id, Utc::now())
+                .await
+                .expect("schedule retry")
+        );
+        let second = claim_due_wakes(
+            &pool,
+            community,
+            10,
+            Utc::now() + chrono::Duration::minutes(1),
+        )
+        .await
+        .expect("second claim")
+        .into_iter()
+        .find(|wake| wake.id == retry_id)
+        .expect("retry reclaimed");
+        assert_eq!(second.id, first.id, "durable request id must be stable");
+        assert_eq!(second.attempt, 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn endpoint_invalidation_is_scoped_to_community_and_generation() {
+        let pool = setup_pool().await;
+        let a = make_community(&pool).await;
+        let b = make_community(&pool).await;
+        let author = [17; 32];
+        let endpoint = [18; 32];
+        activate(&pool, a, &author, "install", &endpoint, 1).await;
+        activate(&pool, b, &author, "install", &endpoint, 1).await;
+
+        assert!(disable_endpoint_generation(&pool, a, &author, "install", 1)
+            .await
+            .expect("disable A generation 1"));
+        assert!(
+            !disable_endpoint_generation(&pool, a, &author, "install", 1)
+                .await
+                .expect("duplicate disable is a no-op")
+        );
+        assert!(matches!(
+            enqueue_wake(
+                &pool,
+                a,
+                &author,
+                "install",
+                NewWake {
+                    lease_generation: 1,
+                    event_id: &[19; 32],
+                    class: "default",
+                    wake: &serde_json::json!({"v": 1}),
+                    expires_at: i64::MAX / 2,
+                },
+            )
+            .await
+            .expect("enqueue disabled A"),
+            EnqueueWakeOutcome::InactiveLease
+        ));
+        assert!(matches!(
+            enqueue_wake(
+                &pool,
+                b,
+                &author,
+                "install",
+                NewWake {
+                    lease_generation: 1,
+                    event_id: &[19; 32],
+                    class: "default",
+                    wake: &serde_json::json!({"v": 1}),
+                    expires_at: i64::MAX / 2,
+                },
+            )
+            .await
+            .expect("enqueue healthy B"),
+            EnqueueWakeOutcome::Enqueued(_)
+        ));
+
+        activate(&pool, a, &author, "install", &[20; 32], 2).await;
+        assert!(
+            !disable_endpoint_generation(&pool, a, &author, "install", 1)
+                .await
+                .expect("stale response")
+        );
+        assert!(matches!(
+            enqueue_wake(
+                &pool,
+                a,
+                &author,
+                "install",
+                NewWake {
+                    lease_generation: 2,
+                    event_id: &[21; 32],
+                    class: "default",
+                    wake: &serde_json::json!({"v": 1}),
+                    expires_at: i64::MAX / 2,
+                },
+            )
+            .await
+            .expect("new generation stays enabled"),
+            EnqueueWakeOutcome::Enqueued(_)
+        ));
     }
 }

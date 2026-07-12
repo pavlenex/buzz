@@ -471,7 +471,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 7);
+        assert_eq!(migrations.len(), 8);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -572,6 +572,12 @@ mod tests {
             .as_str()
             .contains("PRIMARY KEY (community_id, author, installation_id)"));
         assert!(!migrations[0].sql.as_str().contains("push_leases"));
+
+        assert_eq!(migrations[7].version, 8);
+        assert!(migrations[7]
+            .sql
+            .as_str()
+            .contains("ADD COLUMN endpoint_enabled"));
     }
 
     #[test]

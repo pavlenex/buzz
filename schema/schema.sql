@@ -754,6 +754,7 @@ CREATE TABLE push_leases (
     source_created_at BIGINT NOT NULL,
     generation BIGINT NOT NULL CHECK (generation > 0),
     active BOOLEAN NOT NULL,
+    endpoint_enabled BOOLEAN NOT NULL DEFAULT true,
     app_profile TEXT,
     endpoint_hash BYTEA CHECK (endpoint_hash IS NULL OR length(endpoint_hash) = 32),
     endpoint_grant TEXT,
