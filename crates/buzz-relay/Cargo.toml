@@ -70,6 +70,7 @@ rand            = { workspace = true }
 hex             = { workspace = true }
 url             = { workspace = true }
 moka            = { workspace = true }
+reqwest = { workspace = true }
 metrics         = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 

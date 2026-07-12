@@ -6,6 +6,7 @@
 use buzz_core::CommunityId;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 use sqlx::{PgPool, Row as _};
 use uuid::Uuid;
 
@@ -108,6 +109,226 @@ pub enum RevalidateWakeOutcome {
     Deliver(ClaimedWake),
     /// The claim was lost or the lease rotated, revoked, expired, or disabled.
     Suppressed,
+}
+
+/// Result of atomically accepting a signed push lease and its effective state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcceptLeaseOutcome {
+    /// The source event and effective lease committed together.
+    Accepted,
+    /// The incoming event lost NIP-01 addressable ordering.
+    StaleEvent,
+    /// The incoming generation did not exceed the durable watermark.
+    StaleGeneration,
+    /// Another active address already owns this endpoint tuple.
+    EndpointAlreadyLeased,
+    /// The author already has the configured maximum active leases.
+    LeaseQuotaExceeded,
+    /// The source event id is already bound to another lease address.
+    SourceEventCollision,
+    /// A validated lease still violated a database integrity constraint.
+    ConstraintViolation,
+}
+
+/// Atomically persist one validated kind:30350 event and its effective lease.
+///
+/// All policy inputs must already be validated. The transaction serializes both
+/// the lease address and author-wide quota/endpoint namespace before changing
+/// either the public source event or effective state.
+#[allow(clippy::too_many_arguments)]
+pub async fn accept_lease_event(
+    pool: &PgPool,
+    community: CommunityId,
+    event: &nostr::Event,
+    installation_id: &str,
+    version: LeaseVersion<'_>,
+    active: Option<ActiveLease<'_>>,
+    max_active_leases: i64,
+) -> Result<AcceptLeaseOutcome> {
+    let author = event.pubkey.as_bytes();
+    let mut tx = pool.begin().await?;
+    let mut address_lock = Vec::with_capacity(16 + author.len() + installation_id.len());
+    address_lock.extend_from_slice(community.as_uuid().as_bytes());
+    address_lock.extend_from_slice(author);
+    address_lock.extend_from_slice(installation_id.as_bytes());
+    let address_lock = i64::from_le_bytes(Sha256::digest(&address_lock)[..8].try_into().unwrap());
+    let mut author_lock = Vec::with_capacity(16 + author.len());
+    author_lock.extend_from_slice(community.as_uuid().as_bytes());
+    author_lock.extend_from_slice(author);
+    let author_lock = i64::from_le_bytes(Sha256::digest(&author_lock)[..8].try_into().unwrap());
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(address_lock)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(author_lock)
+        .execute(&mut *tx)
+        .await?;
+
+    if let Some(row) = sqlx::query(
+        "SELECT author, installation_id FROM push_leases WHERE community_id=$1 AND source_event_id=$2",
+    )
+    .bind(community.as_uuid())
+    .bind(version.source_event_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    {
+        let existing_author: Vec<u8> = row.try_get("author")?;
+        let existing_installation: String = row.try_get("installation_id")?;
+        if existing_author.as_slice() != author || existing_installation != installation_id {
+            return Ok(AcceptLeaseOutcome::SourceEventCollision);
+        }
+        return Ok(AcceptLeaseOutcome::StaleEvent);
+    }
+
+    if let Some(row) = sqlx::query(
+        "SELECT source_event_id, source_created_at, generation FROM push_leases          WHERE community_id=$1 AND author=$2 AND installation_id=$3 FOR UPDATE",
+    )
+    .bind(community.as_uuid())
+    .bind(author)
+    .bind(installation_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    {
+        let current_created_at: i64 = row.try_get("source_created_at")?;
+        let current_event_id: Vec<u8> = row.try_get("source_event_id")?;
+        let current_generation: i64 = row.try_get("generation")?;
+        let wins_event = version.source_created_at > current_created_at
+            || (version.source_created_at == current_created_at
+                && version.source_event_id < current_event_id.as_slice());
+        if !wins_event {
+            return Ok(AcceptLeaseOutcome::StaleEvent);
+        }
+        if version.generation <= current_generation {
+            return Ok(AcceptLeaseOutcome::StaleGeneration);
+        }
+    }
+
+    // Expired leases are ineffective and must not consume quota or endpoint
+    // uniqueness forever. The author lock makes this cleanup atomic with the
+    // subsequent author-wide checks and replacement.
+    sqlx::query(
+        "UPDATE push_leases SET active=false, endpoint_enabled=false, updated_at=now() \
+         WHERE community_id=$1 AND author=$2 AND active \
+           AND expires_at <= EXTRACT(EPOCH FROM now())::bigint",
+    )
+    .bind(community.as_uuid())
+    .bind(author)
+    .execute(&mut *tx)
+    .await?;
+
+    if let Some(active) = active {
+        let active_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM push_leases WHERE community_id=$1 AND author=$2              AND active AND installation_id<>$3",
+        )
+        .bind(community.as_uuid())
+        .bind(author)
+        .bind(installation_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if active_count >= max_active_leases {
+            return Ok(AcceptLeaseOutcome::LeaseQuotaExceeded);
+        }
+        let duplicate: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM push_leases WHERE community_id=$1 AND author=$2              AND installation_id<>$3 AND active AND app_profile=$4 AND endpoint_hash=$5)",
+        )
+        .bind(community.as_uuid())
+        .bind(author)
+        .bind(installation_id)
+        .bind(active.app_profile)
+        .bind(active.endpoint_hash)
+        .fetch_one(&mut *tx)
+        .await?;
+        if duplicate {
+            return Ok(AcceptLeaseOutcome::EndpointAlreadyLeased);
+        }
+    }
+
+    sqlx::query(
+        "UPDATE events SET deleted_at=now() WHERE community_id=$1 AND kind=30350          AND pubkey=$2 AND d_tag=$3 AND deleted_at IS NULL",
+    )
+    .bind(community.as_uuid())
+    .bind(author)
+    .bind(installation_id)
+    .execute(&mut *tx)
+    .await?;
+    let created_at = DateTime::from_timestamp(version.source_created_at, 0)
+        .ok_or(crate::DbError::InvalidTimestamp(version.source_created_at))?;
+    if let Err(error) = sqlx::query(
+        "INSERT INTO events (community_id,id,pubkey,created_at,kind,tags,content,sig,received_at,channel_id,d_tag)          VALUES ($1,$2,$3,$4,30350,$5,$6,$7,now(),NULL,$8)",
+    )
+    .bind(community.as_uuid())
+    .bind(event.id.as_bytes().as_slice())
+    .bind(author)
+    .bind(created_at)
+    .bind(serde_json::to_value(&event.tags)?)
+    .bind(&event.content)
+    .bind(event.sig.serialize().as_slice())
+    .bind(installation_id)
+    .execute(&mut *tx)
+    .await
+    {
+        if let Some(outcome) = constraint_acceptance_outcome(&error) {
+            return Ok(outcome);
+        }
+        return Err(error.into());
+    }
+
+    let (is_active, app_profile, endpoint_hash, endpoint_grant, max_class, subscriptions) = active
+        .map_or((false, None, None, None, None, None), |active| {
+            (
+                true,
+                Some(active.app_profile),
+                Some(active.endpoint_hash),
+                Some(active.endpoint_grant),
+                Some(active.max_class),
+                Some(active.subscriptions),
+            )
+        });
+    if let Err(error) = sqlx::query(
+        r#"INSERT INTO push_leases (community_id,author,installation_id,source_event_id,
+            source_created_at,generation,active,app_profile,endpoint_hash,endpoint_grant,max_class,
+            subscriptions,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        ON CONFLICT (community_id,author,installation_id) DO UPDATE SET
+            source_event_id=EXCLUDED.source_event_id, source_created_at=EXCLUDED.source_created_at,
+            generation=EXCLUDED.generation, active=EXCLUDED.active, endpoint_enabled=true,
+            app_profile=EXCLUDED.app_profile, endpoint_hash=EXCLUDED.endpoint_hash,
+            endpoint_grant=EXCLUDED.endpoint_grant, max_class=EXCLUDED.max_class,
+            subscriptions=EXCLUDED.subscriptions, expires_at=EXCLUDED.expires_at, updated_at=now()"#,
+    )
+    .bind(community.as_uuid()).bind(author).bind(installation_id)
+    .bind(version.source_event_id).bind(version.source_created_at).bind(version.generation)
+    .bind(is_active).bind(app_profile).bind(endpoint_hash).bind(endpoint_grant)
+    .bind(max_class).bind(subscriptions).bind(version.expires_at)
+    .execute(&mut *tx).await
+    {
+        if let Some(outcome) = constraint_acceptance_outcome(&error) {
+            return Ok(outcome);
+        }
+        return Err(error.into());
+    }
+    tx.commit().await?;
+    Ok(AcceptLeaseOutcome::Accepted)
+}
+
+fn constraint_acceptance_outcome(error: &sqlx::Error) -> Option<AcceptLeaseOutcome> {
+    let sqlx::Error::Database(error) = error else {
+        return None;
+    };
+    match error.code().as_deref() {
+        Some("23505") if error.constraint() == Some("push_leases_endpoint_unique") => {
+            Some(AcceptLeaseOutcome::EndpointAlreadyLeased)
+        }
+        Some("23505")
+            if error.constraint() == Some("push_leases_community_id_source_event_id_key") =>
+        {
+            Some(AcceptLeaseOutcome::SourceEventCollision)
+        }
+        // Every integrity violation is a protocol-invalid lease, even if a
+        // future migration renames/adds a constraint that validation missed.
+        Some(code) if code.starts_with("23") => Some(AcceptLeaseOutcome::ConstraintViolation),
+        _ => None,
+    }
 }
 
 /// Create or rotate an active lease if both ordering gates win atomically.
@@ -568,6 +789,14 @@ mod tests {
         pool
     }
 
+    fn lease_event(keys: &nostr::Keys, installation: &str, created_at: u64) -> nostr::Event {
+        nostr::EventBuilder::new(nostr::Kind::Custom(30_350), "ciphertext")
+            .tag(nostr::Tag::parse(["d", installation]).expect("d tag"))
+            .custom_created_at(nostr::Timestamp::from(created_at))
+            .sign_with_keys(keys)
+            .expect("sign lease event")
+    }
+
     async fn make_community(pool: &PgPool) -> CommunityId {
         let id = Uuid::new_v4();
         sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
@@ -615,6 +844,118 @@ mod tests {
             .expect("activate lease"),
             ReplaceLeaseOutcome::Accepted
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn acceptance_constraint_failure_rolls_back_source_event() {
+        let pool = setup_pool().await;
+        let community = make_community(&pool).await;
+        let keys = nostr::Keys::generate();
+        let event = lease_event(&keys, "install", 100);
+        let endpoint = [42; 32];
+        let subscriptions = serde_json::json!([]);
+
+        let outcome = accept_lease_event(
+            &pool,
+            community,
+            &event,
+            "install",
+            LeaseVersion {
+                source_event_id: event.id.as_bytes(),
+                source_created_at: 100,
+                generation: 1,
+                expires_at: 200,
+            },
+            Some(ActiveLease {
+                app_profile: "ios-production",
+                endpoint_hash: &endpoint,
+                endpoint_grant: "opaque-grant",
+                max_class: "not-a-class",
+                subscriptions: &subscriptions,
+            }),
+            16,
+        )
+        .await
+        .expect("constraint maps to an acceptance outcome");
+        assert_eq!(outcome, AcceptLeaseOutcome::ConstraintViolation);
+
+        let event_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM events WHERE community_id=$1 AND id=$2")
+                .bind(community.as_uuid())
+                .bind(event.id.as_bytes().as_slice())
+                .fetch_one(&pool)
+                .await
+                .expect("count source events");
+        let lease_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM push_leases WHERE community_id=$1 AND author=$2 AND installation_id=$3",
+        )
+        .bind(community.as_uuid())
+        .bind(event.pubkey.as_bytes())
+        .bind("install")
+        .fetch_one(&pool)
+        .await
+        .expect("count leases");
+        assert_eq!((event_count, lease_count), (0, 0));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn source_event_collision_is_protocol_outcome_without_event_insert() {
+        let pool = setup_pool().await;
+        let community = make_community(&pool).await;
+        let keys = nostr::Keys::generate();
+        let event = lease_event(&keys, "incoming", 100);
+        let author = event.pubkey.to_bytes();
+        let endpoint = [43; 32];
+        let subscriptions = serde_json::json!([]);
+        replace_active_lease(
+            &pool,
+            community,
+            &author,
+            "existing",
+            LeaseVersion {
+                source_event_id: event.id.as_bytes(),
+                source_created_at: 90,
+                generation: 1,
+                expires_at: 200,
+            },
+            ActiveLease {
+                app_profile: "ios-production",
+                endpoint_hash: &endpoint,
+                endpoint_grant: "opaque-grant",
+                max_class: "default",
+                subscriptions: &subscriptions,
+            },
+        )
+        .await
+        .expect("seed colliding lease");
+
+        let outcome = accept_lease_event(
+            &pool,
+            community,
+            &event,
+            "incoming",
+            LeaseVersion {
+                source_event_id: event.id.as_bytes(),
+                source_created_at: 100,
+                generation: 2,
+                expires_at: 200,
+            },
+            None,
+            16,
+        )
+        .await
+        .expect("collision is not an internal error");
+        assert_eq!(outcome, AcceptLeaseOutcome::SourceEventCollision);
+        let event_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM events WHERE community_id=$1 AND id=$2")
+                .bind(community.as_uuid())
+                .bind(event.id.as_bytes().as_slice())
+                .fetch_one(&pool)
+                .await
+                .expect("count source events");
+        assert_eq!(event_count, 0);
     }
 
     #[tokio::test]
@@ -823,11 +1164,19 @@ mod tests {
         .into_iter()
         .find(|wake| wake.id == retry_id)
         .expect("retry job claimed");
-        assert!(
-            retry_wake(&pool, community, retry_id, first.claim_id, Utc::now())
-                .await
-                .expect("schedule retry")
-        );
+        let database_now: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+            .fetch_one(&pool)
+            .await
+            .expect("read database clock");
+        assert!(retry_wake(
+            &pool,
+            community,
+            retry_id,
+            first.claim_id,
+            database_now - chrono::Duration::seconds(1),
+        )
+        .await
+        .expect("schedule retry"));
         let second = claim_due_wakes(
             &pool,
             community,

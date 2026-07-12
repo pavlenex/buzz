@@ -471,7 +471,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 8);
+        assert_eq!(migrations.len(), 9);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -578,6 +578,14 @@ mod tests {
             .sql
             .as_str()
             .contains("ADD COLUMN endpoint_enabled"));
+
+        // Kind 30350 is author-only encrypted data, so its ciphertext is never
+        // indexed for NIP-50 search. Preserve the 0001 checksum and extend the
+        // generated expression additively.
+        assert_eq!(migrations[8].version, 9);
+        assert!(migrations[8].sql.as_str().contains("30350"));
+        assert!(migrations[8].sql.as_str().contains("search_tsv"));
+        assert!(!migrations[0].sql.as_str().contains("30350"));
     }
 
     #[test]
