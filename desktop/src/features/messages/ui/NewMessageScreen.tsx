@@ -13,6 +13,7 @@ import {
   POOF_TRIGGER_CLASS,
 } from "@/shared/ui/PoofBurstProvider";
 import { Popover, PopoverAnchor, PopoverContent } from "@/shared/ui/popover";
+import { Skeleton } from "@/shared/ui/skeleton";
 
 import { MessageComposer } from "./MessageComposer";
 import { NewMessageResultRow } from "./NewMessageResultRow";
@@ -58,10 +59,12 @@ export function NewMessageScreen() {
     setSearchQuery,
   } = useNewMessageRecipients({ active: true, currentPubkey });
 
+  const isSearchTransitionPending = searchQuery.trim() !== deferredSearchQuery;
+  const visibleSearchResults = isSearchTransitionPending ? [] : searchResults;
   const showRecipientPicker =
     isRecipientPickerOpen && !isPending && !hasReachedRecipientLimit;
   const highlightedRecipientIndex = React.useMemo(() => {
-    if (!showRecipientPicker || searchResults.length === 0) {
+    if (!showRecipientPicker || visibleSearchResults.length === 0) {
       return -1;
     }
 
@@ -69,20 +72,28 @@ export function NewMessageScreen() {
       return 0;
     }
 
-    return searchResults.findIndex(
+    return visibleSearchResults.findIndex(
       (user) => user.pubkey === highlightedRecipientPubkey,
     );
-  }, [highlightedRecipientPubkey, searchResults, showRecipientPicker]);
+  }, [highlightedRecipientPubkey, showRecipientPicker, visibleSearchResults]);
   const highlightedRecipient =
     highlightedRecipientIndex < 0
       ? null
-      : (searchResults[highlightedRecipientIndex] ?? null);
+      : (visibleSearchResults[highlightedRecipientIndex] ?? null);
 
   React.useEffect(() => {
-    if (highlightedRecipientPubkey && highlightedRecipientIndex < 0) {
+    if (
+      highlightedRecipientPubkey &&
+      !isSearchTransitionPending &&
+      highlightedRecipientIndex < 0
+    ) {
       setHighlightedRecipientPubkey(null);
     }
-  }, [highlightedRecipientIndex, highlightedRecipientPubkey]);
+  }, [
+    highlightedRecipientIndex,
+    highlightedRecipientPubkey,
+    isSearchTransitionPending,
+  ]);
 
   React.useEffect(() => {
     if (!highlightedRecipient || !showRecipientPicker) {
@@ -289,7 +300,7 @@ export function NewMessageScreen() {
 
                     if (
                       (event.key === "ArrowDown" || event.key === "ArrowUp") &&
-                      searchResults.length > 0
+                      visibleSearchResults.length > 0
                     ) {
                       event.preventDefault();
                       setIsRecipientPickerOpen(true);
@@ -299,15 +310,17 @@ export function NewMessageScreen() {
                           const initialIndex =
                             event.key === "ArrowDown"
                               ? 0
-                              : searchResults.length - 1;
-                          return searchResults[initialIndex]?.pubkey ?? null;
+                              : visibleSearchResults.length - 1;
+                          return (
+                            visibleSearchResults[initialIndex]?.pubkey ?? null
+                          );
                         }
 
                         const direction = event.key === "ArrowDown" ? 1 : -1;
                         const nextIndex =
-                          (current + direction + searchResults.length) %
-                          searchResults.length;
-                        return searchResults[nextIndex]?.pubkey ?? null;
+                          (current + direction + visibleSearchResults.length) %
+                          visibleSearchResults.length;
+                        return visibleSearchResults[nextIndex]?.pubkey ?? null;
                       });
                       return;
                     }
@@ -352,7 +365,7 @@ export function NewMessageScreen() {
                       getKeyboardSearchSelection({
                         currentQuery: searchQuery,
                         rankedQuery: deferredSearchQuery,
-                        results: searchResults,
+                        results: visibleSearchResults,
                       });
                     if (!keyboardSelection) {
                       return;
@@ -385,9 +398,9 @@ export function NewMessageScreen() {
                 onScroll={handleDirectoryScroll}
                 role="listbox"
               >
-                {searchResults.length > 0 ? (
+                {visibleSearchResults.length > 0 ? (
                   <div>
-                    {searchResults.map((user) => (
+                    {visibleSearchResults.map((user) => (
                       <NewMessageResultRow
                         currentPubkey={currentPubkey}
                         disabled={isPending || hasReachedRecipientLimit}
@@ -401,12 +414,24 @@ export function NewMessageScreen() {
                       />
                     ))}
                   </div>
-                ) : isDirectoryLoading ? (
-                  <p className="px-4 py-3 text-sm text-muted-foreground">
-                    {deferredSearchQuery.length === 0
-                      ? "Loading people and agents…"
-                      : "Searching…"}
-                  </p>
+                ) : isDirectoryLoading || isSearchTransitionPending ? (
+                  <div
+                    aria-busy="true"
+                    aria-label="Loading people and agents"
+                    className="space-y-3 px-4 py-3"
+                    data-testid="new-dm-loading"
+                    role="status"
+                  >
+                    {["w-40", "w-32", "w-48"].map((nameWidth) => (
+                      <div className="flex items-center gap-3" key={nameWidth}>
+                        <Skeleton className="h-9 w-9 shrink-0 rounded-full" />
+                        <div className="flex min-w-0 flex-1 flex-col gap-2">
+                          <Skeleton className={`h-4 ${nameWidth}`} />
+                          <Skeleton className="h-3 w-24" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
                   <p
                     className="px-4 py-3 text-sm text-muted-foreground"
