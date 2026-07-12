@@ -1961,6 +1961,37 @@ test("members sidebar pages add-member search beyond the first 50 people", async
   );
 });
 
+test("shows loading skeletons without stale recipient results", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    managedAgents: [],
+    relayAgents: [],
+    userSearchDelayMs: 1_000,
+  });
+  await page.goto("/");
+  await openNewMessagePage(page);
+
+  const search = page.getByTestId("new-dm-search");
+  await search.fill("Alex");
+
+  await expect(page.getByTestId("new-dm-loading")).toBeVisible();
+  await expect(
+    page.locator("[data-testid^='new-dm-result-']:visible"),
+  ).toHaveCount(0);
+  await expect(search).not.toHaveAttribute("aria-activedescendant");
+  await search.press("Enter");
+  await expect(
+    page.locator("button[data-testid^='new-dm-selected-']"),
+  ).toHaveCount(0);
+
+  await expect(page.getByTestId("new-dm-loading")).toBeHidden();
+  await expect(page.locator("[data-testid^='new-dm-result-']")).toHaveCount(0);
+  await expect(page.getByTestId("new-dm-empty")).toContainText(
+    "No matching users.",
+  );
+});
+
 test("new DM picker pages people search beyond the first 50 results", async ({
   page,
 }) => {
