@@ -1,4 +1,4 @@
-import { LayoutGrid, List } from "lucide-react";
+import { LayoutGrid, List, Search } from "lucide-react";
 
 import type {
   ProjectsFilter,
@@ -9,6 +9,8 @@ import { Button } from "@/shared/ui/button";
 type ProjectsToolbarProps = {
   filter: ProjectsFilter;
   onFilterChange: (filter: ProjectsFilter) => void;
+  searchOpen: boolean;
+  onSearchOpenChange: (open: boolean) => void;
 };
 
 export function ProjectsViewModeToggle({
@@ -50,6 +52,8 @@ export function ProjectsViewModeToggle({
 export function ProjectsToolbar({
   filter,
   onFilterChange,
+  searchOpen,
+  onSearchOpenChange,
 }: ProjectsToolbarProps) {
   const filterOptions: Array<{ label: string; value: ProjectsFilter }> = [
     { label: "Overview", value: "all" },
@@ -67,22 +71,35 @@ export function ProjectsToolbar({
       className="pointer-events-auto flex min-h-[3.25rem] flex-wrap items-center justify-between gap-3 px-4 py-2"
       data-tauri-drag-region
     >
-      <fieldset className="flex min-w-0 flex-wrap items-center gap-0.5">
-        <legend className="sr-only">Project owner filter</legend>
-        {filterOptions.map((option) => (
-          <Button
-            aria-pressed={filter === option.value}
-            className="h-8 gap-1.5 rounded-full px-3 text-sm"
-            key={option.value}
-            onClick={() => onFilterChange(option.value)}
-            size="sm"
-            type="button"
-            variant={filter === option.value ? "secondary" : "ghost"}
-          >
-            {option.label}
-          </Button>
-        ))}
-      </fieldset>
+      <div className="flex min-w-0 flex-wrap items-center gap-0.5">
+        <Button
+          aria-expanded={searchOpen}
+          aria-label="Ask an agent about your projects"
+          className="h-8 w-8 rounded-full px-0"
+          onClick={() => onSearchOpenChange(!searchOpen)}
+          size="sm"
+          type="button"
+          variant={searchOpen ? "secondary" : "ghost"}
+        >
+          <Search className="h-4 w-4" />
+        </Button>
+        <fieldset className="flex min-w-0 flex-wrap items-center gap-0.5">
+          <legend className="sr-only">Project owner filter</legend>
+          {filterOptions.map((option) => (
+            <Button
+              aria-pressed={filter === option.value}
+              className="h-8 gap-1.5 rounded-full px-3 text-sm"
+              key={option.value}
+              onClick={() => onFilterChange(option.value)}
+              size="sm"
+              type="button"
+              variant={filter === option.value ? "secondary" : "ghost"}
+            >
+              {option.label}
+            </Button>
+          ))}
+        </fieldset>
+      </div>
     </div>
   );
 }

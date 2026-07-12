@@ -303,6 +303,14 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     pullTitle:
       repoSyncStatusQuery.data?.pullBlockReason ??
       pushPullTitle("Pull", repoSyncStatusQuery.data?.behindCount, "remote"),
+    aheadCount: repoSyncStatusQuery.data?.aheadCount ?? null,
+    behindCount: repoSyncStatusQuery.data?.behindCount ?? null,
+    onFetch: () => {
+      void repoSyncStatusQuery.refetch();
+    },
+    fetchPending: repoSyncStatusQuery.isFetching,
+    fetchTitle:
+      repoSyncStatusQuery.data?.pullBlockReason ?? "Check for remote changes",
   };
   const projectPending = projectQuery.isPending;
   React.useEffect(() => {
