@@ -67,6 +67,20 @@ function sortChannels(channels: Channel[]) {
   });
 }
 
+/**
+ * Adds or replaces a relay-returned channel in a possibly stale channel list.
+ * Exported for focused cache race regression coverage.
+ */
+export function upsertCachedChannel(
+  current: Channel[] | undefined,
+  channel: Channel,
+): Channel[] {
+  return sortChannels([
+    ...(current ?? []).filter((candidate) => candidate.id !== channel.id),
+    channel,
+  ]);
+}
+
 async function invalidateChannelState(
   queryClient: ReturnType<typeof useQueryClient>,
   channelId: string | null | undefined,
@@ -142,11 +156,8 @@ export function useCreateChannelMutation() {
   return useMutation({
     mutationFn: (input: CreateChannelInput) => createChannel(input),
     onSuccess: (createdChannel) => {
-      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current = []) =>
-        sortChannels([
-          ...current.filter((channel) => channel.id !== createdChannel.id),
-          createdChannel,
-        ]),
+      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) =>
+        upsertCachedChannel(current, createdChannel),
       );
     },
     onSettled: () => {
@@ -167,17 +178,32 @@ export function useOpenDmMutation() {
   return useMutation({
     mutationFn: (input: OpenDmInput) => openDm(input),
     onSuccess: (openedChannel) => {
-      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current = []) =>
-        sortChannels([
-          ...current.filter((channel) => channel.id !== openedChannel.id),
-          openedChannel,
-        ]),
+      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) =>
+        upsertCachedChannel(current, openedChannel),
       );
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
     },
   });
+}
+
+/**
+ * Cancels any in-flight channel-list read and restores a relay-returned channel
+ * to the shared cache before a caller depends on it for navigation.
+ */
+export function useUpsertCachedChannel() {
+  const queryClient = useQueryClient();
+
+  return React.useCallback(
+    async (channel: Channel) => {
+      await queryClient.cancelQueries({ queryKey: channelsQueryKey });
+      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) =>
+        upsertCachedChannel(current, channel),
+      );
+    },
+    [queryClient],
+  );
 }
 
 export function useHideDmMutation() {

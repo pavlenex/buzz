@@ -2,7 +2,10 @@ import { Bot, X } from "lucide-react";
 import * as React from "react";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
-import { useOpenDmMutation } from "@/features/channels/hooks";
+import {
+  useOpenDmMutation,
+  useUpsertCachedChannel,
+} from "@/features/channels/hooks";
 import type { Channel } from "@/shared/api/types";
 import { useSendMessageMutation } from "@/features/messages/hooks";
 import { getKeyboardSearchSelection } from "@/features/profile/lib/userCandidateSearch";
@@ -33,6 +36,7 @@ export function NewMessageScreen() {
   const identityQuery = useIdentityQuery();
   const currentPubkey = identityQuery.data?.pubkey;
   const openDmMutation = useOpenDmMutation();
+  const upsertCachedChannel = useUpsertCachedChannel();
   const sendMessageMutation = useSendMessageMutation(null, identityQuery.data);
   const { goChannel } = useAppNavigation();
 
@@ -231,9 +235,16 @@ export function NewMessageScreen() {
         return;
       }
 
+      await upsertCachedChannel(directMessage);
       await goChannel(directMessage.id, { replace: true });
     },
-    [goChannel, openDirectMessage, sendMessageMutation, submitErrorMessage],
+    [
+      goChannel,
+      openDirectMessage,
+      sendMessageMutation,
+      submitErrorMessage,
+      upsertCachedChannel,
+    ],
   );
 
   const composerPlaceholder =
