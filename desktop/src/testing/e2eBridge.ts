@@ -6,7 +6,7 @@ import { parse as yamlParse } from "yaml";
 
 import { relayClient } from "@/shared/api/relayClient";
 import type { ConnectionState } from "@/shared/api/relayClientShared";
-import type { RelayEvent } from "@/shared/api/types";
+import type { McpServerConfig, RelayEvent } from "@/shared/api/types";
 import { getMarkdownParseCount } from "@/shared/ui/markdown/nodeCache";
 import { syncAgentTurnsFromEvents } from "@/features/agents/activeAgentTurnsStore";
 import { recordTimeoutFromRejection } from "@/features/moderation/lib/timeoutStore";
@@ -208,11 +208,13 @@ type E2eConfig = {
     identityLocked?: boolean;
     /**
      * Global agent config returned by `get_global_agent_config`. Defaults to
-     * an empty config (no provider, model, or env vars) if not specified.
-     * Pass a config with a provider to test Inherit-from-global behavior.
+     * an empty config (no provider, model, env vars, or MCP servers) if not
+     * specified. Pass a config with a provider to test Inherit-from-global
+     * behavior.
      */
     globalAgentConfig?: {
       env_vars: Record<string, string>;
+      mcp_servers?: McpServerConfig[];
       provider: string | null;
       model: string | null;
     };
@@ -528,6 +530,7 @@ type RawManagedAgent = {
   avatar_url: string | null;
   model: string | null;
   env_vars?: Record<string, string>;
+  mcp_servers?: McpServerConfig[];
   status: "running" | "stopped" | "deployed" | "not_deployed";
   pid: number | null;
   created_at: string;
@@ -599,6 +602,7 @@ type RawPersona = {
   is_active: boolean;
   source_team?: string | null;
   env_vars?: Record<string, string>;
+  mcp_servers?: McpServerConfig[];
   respond_to?: string | null;
   respond_to_allowlist?: string[];
   parallelism?: number | null;
@@ -1170,6 +1174,14 @@ function cloneRelayAgent(agent: RawRelayAgent): RawRelayAgent {
   };
 }
 
+function cloneMcpServer(server: McpServerConfig): McpServerConfig {
+  return {
+    ...server,
+    args: [...server.args],
+    env: server.env.map((envVar) => ({ ...envVar })),
+  };
+}
+
 function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
   return {
     pubkey: agent.pubkey,
@@ -1188,6 +1200,7 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     avatar_url: agent.avatar_url ?? null,
     model: agent.model,
     env_vars: { ...(agent.env_vars ?? {}) },
+    mcp_servers: (agent.mcp_servers ?? []).map(cloneMcpServer),
     status: agent.status,
     pid: agent.pid,
     created_at: agent.created_at,
@@ -1266,6 +1279,7 @@ function buildMockConfigSurface(pubkey: string): {
   normalized: Record<string, unknown>;
   advanced: unknown[];
   extensions: unknown[];
+  buzzAgentMcpServers: McpServerConfig[];
   sources: Record<string, unknown>;
 } {
   // Goose running — mixed origins, override on model
@@ -1331,6 +1345,7 @@ function buildMockConfigSurface(pubkey: string): {
       { name: "web_search", kind: "stdio", enabled: true },
       { name: "memory", kind: "stdio", enabled: false },
     ],
+    buzzAgentMcpServers: [],
     sources: {
       acpNative: "available",
       acpConfigOptions: "available",
@@ -1395,6 +1410,7 @@ function buildMockConfigSurface(pubkey: string): {
       { name: "filesystem", kind: "mcp", enabled: true },
       { name: "github", kind: "mcp", enabled: true },
     ],
+    buzzAgentMcpServers: [],
     sources: {
       acpNative: "available",
       acpConfigOptions: "available",
@@ -1452,6 +1468,7 @@ function buildMockConfigSurface(pubkey: string): {
     },
     advanced: [],
     extensions: [{ name: "developer", kind: "stdio", enabled: true }],
+    buzzAgentMcpServers: [],
     sources: {
       acpNative: "pending",
       acpConfigOptions: "pending",
@@ -1531,6 +1548,7 @@ function buildMockConfigSurface(pubkey: string): {
       { name: "filesystem", kind: "mcp", enabled: true },
       { name: "github", kind: "mcp", enabled: true },
     ],
+    buzzAgentMcpServers: [],
     sources: {
       acpNative: "notApplicable",
       acpConfigOptions: "notApplicable",
@@ -1590,6 +1608,7 @@ function buildMockConfigSurface(pubkey: string): {
     },
     advanced: [],
     extensions: [{ name: "web_search", kind: "stdio", enabled: true }],
+    buzzAgentMcpServers: [],
     sources: {
       acpNative: "available",
       acpConfigOptions: "available",
@@ -1650,6 +1669,7 @@ function buildMockConfigSurface(pubkey: string): {
     },
     advanced: [],
     extensions: [],
+    buzzAgentMcpServers: [],
     sources: {
       acpNative: "available",
       acpConfigOptions: "available",
@@ -1666,6 +1686,17 @@ function buildMockConfigSurface(pubkey: string): {
     runtimeLabel: "Buzz Agent",
     advanced: [],
     extensions: [],
+    // Effective merged (global < definition < agent, enabled-only) servers —
+    // "what runs." Exercises the WYSIWYG read-only display by default.
+    buzzAgentMcpServers: [
+      {
+        name: "filesystem",
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+        env: [],
+        enabled: true,
+      },
+    ] satisfies McpServerConfig[],
     sources: {
       ...gooseSurface.sources,
       configFilePath: null,
@@ -6549,6 +6580,7 @@ async function handleCreatePersona(args: {
     avatarUrl?: string;
     systemPrompt: string;
     envVars?: Record<string, string>;
+    mcpServers?: McpServerConfig[];
     behavior?: PersonaBehaviorInput;
   };
 }): Promise<RawPersona> {
@@ -6562,6 +6594,7 @@ async function handleCreatePersona(args: {
     is_active: true,
     source_team: null,
     env_vars: { ...(args.input.envVars ?? {}) },
+    mcp_servers: (args.input.mcpServers ?? []).map(cloneMcpServer),
     created_at: now,
     updated_at: now,
   };
@@ -6577,6 +6610,7 @@ async function handleUpdatePersona(args: {
     avatarUrl?: string;
     systemPrompt: string;
     envVars?: Record<string, string>;
+    mcpServers?: McpServerConfig[];
     behavior?: PersonaBehaviorInput;
   };
 }): Promise<RawPersona> {
@@ -6596,6 +6630,10 @@ async function handleUpdatePersona(args: {
   if (args.input.envVars !== undefined) {
     // Absent = preserve; present = replace entirely (matches Rust handler).
     persona.env_vars = { ...args.input.envVars };
+  }
+  if (args.input.mcpServers !== undefined) {
+    // Same absent-vs-present contract as envVars.
+    persona.mcp_servers = args.input.mcpServers.map(cloneMcpServer);
   }
   applyMockPersonaBehavior(persona, args.input.behavior);
   persona.updated_at = new Date().toISOString();
@@ -6840,6 +6878,7 @@ async function handleCreateManagedAgent(
       avatarUrl?: string;
       model?: string;
       envVars?: Record<string, string>;
+      mcpServers?: McpServerConfig[];
       spawnAfterCreate?: boolean;
       startOnAppLaunch?: boolean;
       backend?:
@@ -6913,6 +6952,7 @@ async function handleCreateManagedAgent(
     avatar_url: avatarUrl,
     model: args.input.model?.trim() || null,
     env_vars: { ...(args.input.envVars ?? {}) },
+    mcp_servers: (args.input.mcpServers ?? []).map(cloneMcpServer),
     status: args.input.spawnAfterCreate ? "running" : "stopped",
     pid: args.input.spawnAfterCreate ? 42000 + mockManagedAgents.length : null,
     created_at: now,
@@ -7103,6 +7143,7 @@ async function handleUpdateManagedAgent(args: {
     model?: string | null;
     systemPrompt?: string | null;
     envVars?: Record<string, string>;
+    mcpServers?: McpServerConfig[];
     respondTo?: "owner-only" | "allowlist" | "anyone";
     respondToAllowlist?: string[];
   };
@@ -7119,6 +7160,10 @@ async function handleUpdateManagedAgent(args: {
   }
   if (args.input.envVars !== undefined) {
     agent.env_vars = { ...args.input.envVars };
+  }
+  if (args.input.mcpServers !== undefined) {
+    // Same absent-vs-present contract as envVars.
+    agent.mcp_servers = args.input.mcpServers.map(cloneMcpServer);
   }
   if (args.input.respondTo !== undefined) {
     agent.respond_to = args.input.respondTo;
@@ -9057,10 +9102,11 @@ export function maybeInstallE2eTauriMocks() {
       }
       case "get_global_agent_config": {
         // Return the mock global agent config if provided; otherwise return
-        // an empty config (no global provider, model, or env vars).
+        // an empty config (no global provider, model, env vars, or MCP servers).
         return (
           config?.mock?.globalAgentConfig ?? {
             env_vars: {},
+            mcp_servers: [],
             provider: null,
             model: null,
           }
@@ -9074,6 +9120,7 @@ export function maybeInstallE2eTauriMocks() {
           payload as {
             config: {
               env_vars: Record<string, string>;
+              mcp_servers?: McpServerConfig[];
               provider: string | null;
               model: string | null;
             };

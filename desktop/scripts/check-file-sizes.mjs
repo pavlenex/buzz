@@ -199,7 +199,10 @@ const overrides = new Map([
   // RawInstallRuntimeResult + fromRawInstallRuntimeResult mapper (+2).
   // Git Bash Doctor discovery adds the raw Tauri response and its camelCase
   // mapper. This is the existing API boundary; split remains queued.
-  ["src/shared/api/tauri.ts", 1304],
+  // buzz-agent-mcp-servers PR3 P1: mcp_servers field on RawManagedAgent +
+  // McpServerConfig import + mcpServers wiring in fromRawManagedAgent/
+  // createManagedAgent (+4 lines). Load-bearing FE plumbing; queued to split.
+  ["src/shared/api/tauri.ts", 1308],
   // doctor-npm-eacces-preflight: hint field added to InstallStepResult (+1 line).
   // codex-acp-package-swap: "adapter_outdated" variant added to AcpAvailabilityStatus (+1 line).
   // doctor-install-reliability: AuthStatus tagged union + nodeRequired/authStatus/
@@ -209,7 +212,12 @@ const overrides = new Map([
   // mcp-readonly-view rebase: PR2 MCP config surface FE-type fields force +1 over the grandfathered ceiling.
   // Git Bash prerequisite payload adds four fields to the shared Tauri API
   // contract. This is the canonical type location; split remains queued.
-  ["src/shared/api/types.ts", 1038],
+  // buzz-agent-mcp-servers PR3 P1: McpServerConfig/McpServerEnvVar types +
+  // mcpServers fields on ManagedAgent/AgentPersona/GlobalAgentConfig/Create-
+  // and UpdateManagedAgentInput/CreateAndUpdatePersonaInput + the new
+  // buzzAgentMcpServers surface field (+38 lines). Load-bearing FE type
+  // additions for the editable MCP servers feature; queued to split.
+  ["src/shared/api/types.ts", 1076],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
