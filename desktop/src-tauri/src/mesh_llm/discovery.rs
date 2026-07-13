@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use sha2::{Digest, Sha256};
 
 use super::{dedupe_models, MeshAvailability, MeshModelOption, MeshServeTarget, MESH_STATUS_KIND};
 
@@ -64,13 +66,30 @@ fn latest_membership_list(events: &[nostr::Event]) -> Option<BTreeSet<String>> {
 
 fn owner_id_from_status_event(event: &nostr::Event) -> Option<String> {
     let content = serde_json::from_str::<serde_json::Value>(&event.content).ok()?;
-    content
+    let owner_id = content
         .get("ownerId")
-        .or_else(|| content.get("owner_id"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(ToString::to_string)
+        .or_else(|| content.get("owner_id"))?
+        .as_str()?
+        .trim();
+    let verifying_key_bytes: [u8; 32] =
+        hex::decode(content.get("ownerVerifyingKey")?.as_str()?.trim())
+            .ok()?
+            .try_into()
+            .ok()?;
+    let derived_owner = hex::encode(Sha256::digest(verifying_key_bytes));
+    if owner_id != derived_owner {
+        return None;
+    }
+    let signature_bytes = hex::decode(content.get("ownerBindingSig")?.as_str()?.trim()).ok()?;
+    let signature = Signature::from_slice(&signature_bytes).ok()?;
+    let verifying_key = VerifyingKey::from_bytes(&verifying_key_bytes).ok()?;
+    verifying_key
+        .verify(
+            &super::identity::member_binding_bytes(&event.pubkey.to_hex()),
+            &signature,
+        )
+        .ok()?;
+    Some(owner_id.to_string())
 }
 
 pub fn availability_from_events(events: Vec<nostr::Event>) -> MeshAvailability {

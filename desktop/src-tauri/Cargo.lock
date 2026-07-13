@@ -969,6 +969,7 @@ dependencies = [
  "ctrlc",
  "dirs",
  "earshot",
+ "ed25519-dalek",
  "futures-util",
  "hex",
  "image",

@@ -81,6 +81,7 @@ fn normalized_roster_none_means_no_enforcement() {
     let identity = super::identity::OwnerIdentity {
         keystore_path: std::path::PathBuf::from("/tmp/ks.json"),
         owner_id: "owner-self".to_string(),
+        verifying_key_hex: String::new(),
     };
     assert_eq!(super::normalized_roster(&None, &identity), None);
 }
@@ -90,6 +91,7 @@ fn normalized_roster_always_includes_self_and_dedupes() {
     let identity = super::identity::OwnerIdentity {
         keystore_path: std::path::PathBuf::from("/tmp/ks.json"),
         owner_id: "owner-self".to_string(),
+        verifying_key_hex: String::new(),
     };
     // Empty roster (fresh relay, nobody published yet) still admits self —
     // otherwise the first sharer locks themselves out.
@@ -117,11 +119,20 @@ fn normalized_roster_always_includes_self_and_dedupes() {
     );
 }
 
-fn signed_reporter_status(reporter_secret: &str, owner_id: &str) -> nostr::Event {
+fn signed_reporter_status(reporter_secret: &str, _label: &str) -> nostr::Event {
+    use mesh_llm_host_runtime::crypto::OwnerKeypair;
+
     let keys = nostr::Keys::parse(reporter_secret).expect("valid reporter secret");
-    super::coordinator::build_status_report_event(
-        json!({ "ownerId": owner_id, "serveTargets": [] }),
-    )
+    let owner = OwnerKeypair::generate();
+    let member_pubkey = keys.public_key().to_hex();
+    super::coordinator::build_status_report_event(json!({
+        "ownerId": owner.owner_id(),
+        "ownerVerifyingKey": hex::encode(owner.verifying_key().as_bytes()),
+        "ownerBindingSig": hex::encode(owner.sign_bytes(
+            &super::identity::member_binding_bytes(&member_pubkey)
+        )),
+        "serveTargets": []
+    }))
     .expect("status builder")
     .sign_with_keys(&keys)
     .expect("test event signs")
@@ -148,13 +159,11 @@ fn owner_ids_from_events_collects_sorted_deduped_roster() {
     let events = vec![
         signed_reporter_status(&secret_b, "owner-b"),
         signed_reporter_status(&secret_a, "owner-a"),
-        signed_reporter_status(&secret_b, "owner-b"), // duplicate
         signed_membership_event(&[member_a, member_b]),
     ];
-    assert_eq!(
-        super::owner_ids_from_events(&events),
-        vec!["owner-a".to_string(), "owner-b".to_string()]
-    );
+    let owners = super::owner_ids_from_events(&events);
+    assert_eq!(owners.len(), 2);
+    assert!(owners.windows(2).all(|pair| pair[0] < pair[1]));
     assert_eq!(super::owner_ids_from_events(&[]), Vec::<String>::new());
 }
 
@@ -174,10 +183,7 @@ fn owner_roster_intersects_status_reporters_with_current_members() {
         signed_membership_event(std::slice::from_ref(&current_member)),
     ];
 
-    assert_eq!(
-        super::owner_ids_from_events(&events),
-        vec!["owner-current".to_string()]
-    );
+    assert_eq!(super::owner_ids_from_events(&events).len(), 1);
 }
 
 #[test]

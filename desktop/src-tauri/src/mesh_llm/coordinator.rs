@@ -116,35 +116,53 @@ pub(crate) async fn publish_stopped_status_once(app: &AppHandle, reason: &str) {
 }
 
 async fn publish_current_status_for_state(state: &AppState) -> Result<(), String> {
-    let owner_id = super::ensure_owner_identity()
-        .map_err(|error| format!("failed to load mesh owner identity: {error}"))?
-        .owner_id;
-    let payload = {
+    let identity = super::ensure_owner_identity()
+        .map_err(|error| format!("failed to load mesh owner identity: {error}"))?;
+    let mut payload = {
         let runtime = state.mesh_llm_runtime.lock().await;
         match runtime.as_ref() {
             Some(runtime) => runtime
                 .status_report_payload()
                 .await
                 .map_err(|error| error.to_string())?,
-            None => stopped_status_payload(&owner_id),
+            None => stopped_status_payload(&identity),
         }
     };
+    bind_payload_to_member(state, &identity, &mut payload)?;
     publish_status_report(state, payload).await
 }
 
 async fn publish_stopped_status_for_state(state: &AppState) -> Result<(), String> {
-    let owner_id = super::ensure_owner_identity()
-        .map_err(|error| format!("failed to load mesh owner identity: {error}"))?
-        .owner_id;
-    publish_status_report(state, stopped_status_payload(&owner_id)).await
+    let identity = super::ensure_owner_identity()
+        .map_err(|error| format!("failed to load mesh owner identity: {error}"))?;
+    let mut payload = stopped_status_payload(&identity);
+    bind_payload_to_member(state, &identity, &mut payload)?;
+    publish_status_report(state, payload).await
 }
 
-fn stopped_status_payload(owner_id: &str) -> serde_json::Value {
+fn stopped_status_payload(identity: &super::identity::OwnerIdentity) -> serde_json::Value {
     serde_json::json!({
-        "ownerId": owner_id,
+        "ownerId": identity.owner_id,
+        "ownerVerifyingKey": identity.verifying_key_hex,
         "serveTargets": [],
         "models": [],
     })
+}
+
+fn bind_payload_to_member(
+    state: &AppState,
+    identity: &super::identity::OwnerIdentity,
+    payload: &mut serde_json::Value,
+) -> Result<(), String> {
+    let member_pubkey = state.signing_keys()?.public_key().to_hex();
+    payload["ownerId"] = serde_json::Value::String(identity.owner_id.clone());
+    payload["ownerVerifyingKey"] = serde_json::Value::String(identity.verifying_key_hex.clone());
+    payload["ownerBindingSig"] = serde_json::Value::String(
+        identity
+            .sign_member_binding(&member_pubkey)
+            .map_err(|error| error.to_string())?,
+    );
+    Ok(())
 }
 
 pub(crate) fn build_status_report_event(
@@ -176,10 +194,16 @@ mod tests {
 
     #[test]
     fn stopped_status_advertises_identity_without_targets() {
+        let identity = super::super::identity::OwnerIdentity {
+            keystore_path: "/tmp/unused".into(),
+            owner_id: "owner-test".into(),
+            verifying_key_hex: "verify-test".into(),
+        };
         assert_eq!(
-            stopped_status_payload("owner-test"),
+            stopped_status_payload(&identity),
             serde_json::json!({
                 "ownerId": "owner-test",
+                "ownerVerifyingKey": "verify-test",
                 "serveTargets": [],
                 "models": [],
             })
