@@ -173,14 +173,32 @@ test("selected new-DM recipient can be verified again through search", async ({
   const charlieChip = page.getByTestId(
     `new-dm-selected-${TEST_IDENTITIES.charlie.pubkey}`,
   );
+  const charlieNameTrigger = page.getByTestId(
+    `new-dm-recipient-name-${TEST_IDENTITIES.charlie.pubkey}`,
+  );
+  const charlieKeyPopover = page.getByTestId(
+    `new-dm-selected-key-popover-${TEST_IDENTITIES.charlie.pubkey}`,
+  );
+  const charliePubkey = page.getByTestId(
+    `new-dm-selected-pubkey-${TEST_IDENTITIES.charlie.pubkey}`,
+  );
   await expect(charlieChip).toBeVisible();
   await expect(page.getByTestId("new-message-recipient-popover")).toBeVisible();
   await expect(search).toHaveValue("");
   await expect(charlieResult).toHaveCount(0);
+  await expect(charlieKeyPopover).toHaveCount(0);
   await charlieChip.hover();
-  await expect(
-    charlieChip.locator("[data-testid^='new-dm-npub-']"),
-  ).toHaveCount(0);
+  await expect(charlieKeyPopover).toHaveCount(0);
+  await charlieNameTrigger.click();
+  await expect(charlieKeyPopover).toBeVisible();
+  await expect(charliePubkey).toContainText("npub1");
+  await expect(charlieKeyPopover).toContainText(TEST_IDENTITIES.charlie.pubkey);
+  await waitForAnimations(page);
+  await page.getByTestId("new-message-page").screenshot({
+    path: `${SHOTS}/new-dm-selected-recipient-key.png`,
+  });
+  await page.keyboard.press("Escape");
+  await expect(charlieKeyPopover).toHaveCount(0);
 
   await search.fill("charlie");
   await expect(charlieResult).toBeVisible();
@@ -205,6 +223,7 @@ test("selected new-DM recipient can be verified again through search", async ({
   ).toHaveCount(1);
   await page.mouse.move(1_100, 500);
   await expect(charlieNpub).toHaveCount(0);
+  await expect(charlieKeyPopover).toHaveCount(0);
 
   await waitForAnimations(page);
   await page.getByTestId("new-message-page").screenshot({

@@ -13,6 +13,7 @@ import {
   POOF_ORIGIN_CLASS,
   POOF_TRIGGER_CLASS,
 } from "@/shared/ui/PoofBurstProvider";
+import { PubKey } from "@/shared/ui/PubKey";
 import { Popover, PopoverAnchor, PopoverContent } from "@/shared/ui/popover";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -38,6 +39,8 @@ export function NewMessageScreen() {
   const [isRecipientPickerOpen, setIsRecipientPickerOpen] =
     React.useState(true);
   const [highlightedRecipientPubkey, setHighlightedRecipientPubkey] =
+    React.useState<string | null>(null);
+  const [inspectedRecipientPubkey, setInspectedRecipientPubkey] =
     React.useState<string | null>(null);
   const [submitErrorMessage, setSubmitErrorMessage] = React.useState<
     string | null
@@ -126,6 +129,9 @@ export function NewMessageScreen() {
   const handleRemoveUser = React.useCallback(
     (pubkey: string) => {
       preparedDirectMessageRef.current = null;
+      setInspectedRecipientPubkey((current) =>
+        current === pubkey ? null : current,
+      );
       removeUser(pubkey);
     },
     [removeUser],
@@ -249,7 +255,11 @@ export function NewMessageScreen() {
       >
         <div className="flex min-h-9 min-w-0 items-center">
           <Popover
-            onOpenChange={setIsRecipientPickerOpen}
+            onOpenChange={(open) => {
+              setIsRecipientPickerOpen(
+                open || inspectedRecipientPubkey !== null,
+              );
+            }}
             open={showRecipientPicker}
           >
             <PopoverAnchor asChild>
@@ -268,55 +278,95 @@ export function NewMessageScreen() {
                   To:
                 </span>
                 {selectedUsers.map((user) => (
-                  <button
-                    aria-label={`Remove ${formatRecipientName(user)}`}
-                    className={cn(
-                      "group/selected-recipient inline-flex h-7 max-w-44 items-center gap-1.5 rounded-full bg-muted px-1.5 pr-2.5 text-sm transition-colors hover:bg-muted/80 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
-                      POOF_TRIGGER_CLASS,
-                      POOF_ORIGIN_CLASS,
-                    )}
-                    data-testid={`new-dm-selected-${user.pubkey}`}
-                    disabled={isPending}
+                  <div
+                    className="inline-flex h-7 max-w-56 items-center gap-1.5 rounded-full bg-muted px-1.5 pr-2.5 text-sm transition-colors hover:bg-muted/80"
                     key={user.pubkey}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleRemoveUser(user.pubkey);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        handleRemoveUser(user.pubkey);
-                      }
-                    }}
-                    onPointerDown={(event) => {
-                      if (event.button !== 0) {
-                        return;
-                      }
-                      event.stopPropagation();
-                      handleRemoveUser(user.pubkey);
-                    }}
-                    type="button"
                   >
-                    <span className="relative h-5 w-5 shrink-0">
+                    <button
+                      aria-label={`Remove ${formatRecipientName(user)}`}
+                      className={cn(
+                        "group/remove-recipient relative h-5 w-5 shrink-0 rounded-full focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
+                        POOF_TRIGGER_CLASS,
+                        POOF_ORIGIN_CLASS,
+                      )}
+                      data-testid={`new-dm-selected-${user.pubkey}`}
+                      disabled={isPending}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleRemoveUser(user.pubkey);
+                      }}
+                      onPointerDown={(event) => {
+                        if (event.button !== 0) {
+                          return;
+                        }
+                        event.stopPropagation();
+                        handleRemoveUser(user.pubkey);
+                      }}
+                      type="button"
+                    >
                       <ProfileAvatar
                         avatarUrl={user.avatarUrl}
-                        className="h-5 w-5 text-3xs shadow-none transition-opacity group-hover/selected-recipient:opacity-0 group-focus-visible/selected-recipient:opacity-0"
+                        className="h-5 w-5 text-3xs shadow-none transition-opacity group-hover/remove-recipient:opacity-0 group-focus-visible/remove-recipient:opacity-0"
                         iconClassName="h-2.5 w-2.5"
                         label={formatRecipientName(user)}
                       />
-                      <span className="absolute inset-0 flex items-center justify-center rounded-full bg-foreground text-background opacity-0 transition-opacity group-hover/selected-recipient:opacity-100 group-focus-visible/selected-recipient:opacity-100">
+                      <span className="absolute inset-0 flex items-center justify-center rounded-full bg-foreground text-background opacity-0 transition-opacity group-hover/remove-recipient:opacity-100 group-focus-visible/remove-recipient:opacity-100">
                         <X aria-hidden="true" className="h-3 w-3" />
                       </span>
-                    </span>
-                    <span className="truncate font-medium">
-                      {formatRecipientName(user)}
-                    </span>
+                    </button>
+                    <Popover
+                      onOpenChange={(open) => {
+                        setInspectedRecipientPubkey(open ? user.pubkey : null);
+                      }}
+                      open={inspectedRecipientPubkey === user.pubkey}
+                    >
+                      <PopoverAnchor asChild>
+                        <button
+                          aria-expanded={
+                            inspectedRecipientPubkey === user.pubkey
+                          }
+                          aria-haspopup="dialog"
+                          aria-label={`Verify ${formatRecipientName(user)} public key`}
+                          className="min-w-0 cursor-pointer truncate rounded font-medium hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                          data-testid={`new-dm-recipient-name-${user.pubkey}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setInspectedRecipientPubkey((current) =>
+                              current === user.pubkey ? null : user.pubkey,
+                            );
+                          }}
+                          type="button"
+                        >
+                          {formatRecipientName(user)}
+                        </button>
+                      </PopoverAnchor>
+                      <PopoverContent
+                        align="start"
+                        className="w-96 max-w-[90vw] space-y-2"
+                        data-new-dm-key-popover=""
+                        data-testid={`new-dm-selected-key-popover-${user.pubkey}`}
+                        onOpenAutoFocus={(event) => event.preventDefault()}
+                      >
+                        <p className="text-sm font-medium">
+                          Verify {formatRecipientName(user)}
+                        </p>
+                        <PubKey
+                          pubkey={user.pubkey}
+                          testId={`new-dm-selected-pubkey-${user.pubkey}`}
+                          variant="full"
+                        />
+                        <p className="break-all font-mono text-xs text-muted-foreground">
+                          {user.pubkey}
+                        </p>
+                      </PopoverContent>
+                    </Popover>
                     {user.isAgent ? (
                       <Bot
                         aria-label="agent"
                         className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
                       />
                     ) : null}
-                  </button>
+                  </div>
                 ))}
                 <input
                   aria-activedescendant={
@@ -344,6 +394,10 @@ export function NewMessageScreen() {
                   onKeyDown={(event) => {
                     if (event.key === "Escape") {
                       event.preventDefault();
+                      if (inspectedRecipientPubkey) {
+                        setInspectedRecipientPubkey(null);
+                        return;
+                      }
                       setHighlightedRecipientPubkey(null);
                       setIsRecipientPickerOpen(false);
                       return;
@@ -441,8 +495,9 @@ export function NewMessageScreen() {
               onInteractOutside={(event) => {
                 const target = event.detail.originalEvent.target;
                 if (
-                  target instanceof Node &&
-                  toFieldRef.current?.contains(target)
+                  target instanceof Element &&
+                  (toFieldRef.current?.contains(target) ||
+                    Boolean(target.closest("[data-new-dm-key-popover]")))
                 ) {
                   event.preventDefault();
                 }
