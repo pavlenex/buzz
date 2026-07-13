@@ -701,7 +701,7 @@ fn disabled_mask_requires_only_a_name() {
         env: vec![],
         enabled: false,
     };
-    validate_mcp_servers(&[mask.clone()]).unwrap();
+    validate_mcp_servers(std::slice::from_ref(&mask)).unwrap();
     assert!(
         merge_mcp_servers(&[mcp_server("shared", "global", true)], &[], &[mask])
             .unwrap()
