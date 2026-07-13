@@ -1265,6 +1265,7 @@ function buildMockConfigSurface(pubkey: string): {
   isPreSpawn: boolean;
   normalized: Record<string, unknown>;
   advanced: unknown[];
+  extensions: unknown[];
   sources: Record<string, unknown>;
 } {
   // Goose running — mixed origins, override on model
@@ -1350,12 +1351,18 @@ function buildMockConfigSurface(pubkey: string): {
         },
       },
     ],
+    extensions: [
+      { name: "developer", kind: "stdio", enabled: true },
+      { name: "web_search", kind: "stdio", enabled: true },
+      { name: "memory", kind: "stdio", enabled: false },
+    ],
     sources: {
       acpNative: "available",
       acpConfigOptions: "available",
       envVars: "available",
       configFile: "available",
       configFilePath: "~/.config/goose/config.yaml",
+      mcpConfigFilePath: "~/.config/goose/config.yaml",
     },
   };
 
@@ -1409,12 +1416,17 @@ function buildMockConfigSurface(pubkey: string): {
       systemPrompt: null,
     },
     advanced: [],
+    extensions: [
+      { name: "filesystem", kind: "mcp", enabled: true },
+      { name: "github", kind: "mcp", enabled: true },
+    ],
     sources: {
       acpNative: "available",
       acpConfigOptions: "available",
       envVars: "notApplicable",
       configFile: "available",
       configFilePath: "~/.claude/settings.json",
+      mcpConfigFilePath: "~/.claude.json",
     },
   };
 
@@ -1464,12 +1476,14 @@ function buildMockConfigSurface(pubkey: string): {
       systemPrompt: null,
     },
     advanced: [],
+    extensions: [{ name: "developer", kind: "stdio", enabled: true }],
     sources: {
       acpNative: "pending",
       acpConfigOptions: "pending",
       envVars: "available",
       configFile: "available",
       configFilePath: "~/.config/goose/config.yaml",
+      mcpConfigFilePath: "~/.config/goose/config.yaml",
     },
   };
 
@@ -1538,12 +1552,17 @@ function buildMockConfigSurface(pubkey: string): {
         writeVia: { type: "respawnWithEnvVar", envKey: "GOOSE_SANDBOX_MODE" },
       },
     ],
+    extensions: [
+      { name: "filesystem", kind: "mcp", enabled: true },
+      { name: "github", kind: "mcp", enabled: true },
+    ],
     sources: {
       acpNative: "notApplicable",
       acpConfigOptions: "notApplicable",
       envVars: "available",
       configFile: "available",
       configFilePath: "~/.codex/config.toml",
+      mcpConfigFilePath: "~/.codex/config.toml",
     },
   };
 
@@ -1595,12 +1614,14 @@ function buildMockConfigSurface(pubkey: string): {
       systemPrompt: null,
     },
     advanced: [],
+    extensions: [{ name: "web_search", kind: "stdio", enabled: true }],
     sources: {
       acpNative: "available",
       acpConfigOptions: "available",
       envVars: "available",
       configFile: "available",
       configFilePath: "~/.config/goose/config.yaml",
+      mcpConfigFilePath: "~/.config/goose/config.yaml",
     },
   };
 
@@ -1653,12 +1674,14 @@ function buildMockConfigSurface(pubkey: string): {
       systemPrompt: null,
     },
     advanced: [],
+    extensions: [],
     sources: {
       acpNative: "available",
       acpConfigOptions: "available",
       envVars: "available",
       configFile: "available",
       configFilePath: "~/.config/goose/config.yaml",
+      mcpConfigFilePath: "~/.config/goose/config.yaml",
     },
   };
 
