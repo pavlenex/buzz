@@ -63,7 +63,8 @@ resolves to the bundled `buzz-agent`. No API key is required.
 ## 4. Start the real Fizz path
 
 1. Find the **Fizz** card on the Agents screen.
-2. Click its start/play control.
+2. If Fizz is stopped, click the small play badge over its avatar. If it is
+   running, the badge is a green status dot instead of a stop control.
 3. Wait for its runtime indicator to become active.
 4. Add Fizz to a channel if it is not already a channel member.
 5. In that channel, send:
@@ -76,6 +77,17 @@ resolves to the bundled `buzz-agent`. No API key is required.
 
 That channel response is the end-to-end proof. A green Compute card alone proves
 only model serving; it does not prove the Fizz harness and provider inheritance.
+
+To stop a running agent, click the body/name of its card to open its profile,
+then click **Stop** near the top. The green avatar badge is status-only while the
+agent is running. Once stopped, the profile action becomes **Respawn** and the
+avatar badge becomes a play button.
+
+To create a separate test agent, choose **New agent → New agent**, use
+**buzz-agent** as the runtime, **Buzz shared compute** as the LLM provider,
+**Default (auto)** as the model, and **This computer** under **Run on**. Shared
+compute is an LLM provider; do not select a remote compute backend as the run
+location merely because its name mentions mesh.
 
 ## 5. Optional diagnostics
 

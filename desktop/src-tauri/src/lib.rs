@@ -501,10 +501,10 @@ pub fn run() {
                 *guard = Some(app_handle.clone());
             }
 
-            // Bring up the runtime-owned relay-mesh call-me-now listener now,
-            // before any saved agent restore can request a connection. Its
-            // lifetime is tied to the runtime, not a UI mount — this is what
-            // closes the cold-launch hole-punch race.
+            // Bring up the runtime-owned shared-compute coordinator before
+            // saved agents are restored. Its lifetime is tied to the app, not
+            // a UI mount; it publishes discovery and reconciles membership for
+            // MeshLLM's native admission and transport.
             #[cfg(feature = "mesh-llm")]
             {
                 // Route mesh-llm's download progress (model weights, runtime)
