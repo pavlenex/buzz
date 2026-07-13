@@ -187,7 +187,9 @@ fn orchestrate() -> anyhow::Result<()> {
     // real HOME would share a node identity and clobber each other's
     // attestations. The native runtime cache must still point at the real
     // one (it resolves via HOME otherwise).
-    let real_cache = dirs_cache_dir()?.join("mesh-llm/native-runtimes");
+    let real_cache = std::env::var_os("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or(dirs_cache_dir()?.join("mesh-llm/native-runtimes"));
     let role_home = |name: &str| -> anyhow::Result<String> {
         let home = scratch.join(format!("{name}-home"));
         std::fs::create_dir_all(&home)?;
