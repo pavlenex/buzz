@@ -39,7 +39,7 @@ class AvatarImage extends StatelessWidget {
 }
 
 /// Image content for avatar surfaces whose shape is supplied by their parent.
-class AvatarImageContent extends StatelessWidget {
+class AvatarImageContent extends StatefulWidget {
   final String? imageUrl;
   final Widget fallback;
   final BoxFit fit;
@@ -52,25 +52,39 @@ class AvatarImageContent extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final source = _AvatarSource.parse(imageUrl);
-    final centeredFallback = Center(child: fallback);
+  State<AvatarImageContent> createState() => _AvatarImageContentState();
+}
 
-    return switch (source) {
+class _AvatarImageContentState extends State<AvatarImageContent> {
+  late _AvatarSource? _source = _AvatarSource.parse(widget.imageUrl);
+
+  @override
+  void didUpdateWidget(AvatarImageContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.imageUrl != oldWidget.imageUrl) {
+      _source = _AvatarSource.parse(widget.imageUrl);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final centeredFallback = Center(child: widget.fallback);
+
+    return switch (_source) {
       _SvgAvatarSource(:final svg) => SvgPicture.string(
         svg,
-        fit: fit,
+        fit: widget.fit,
         placeholderBuilder: (_) => centeredFallback,
         errorBuilder: (_, _, _) => centeredFallback,
       ),
       _RasterDataAvatarSource(:final bytes) => Image.memory(
         bytes,
-        fit: fit,
+        fit: widget.fit,
         errorBuilder: (_, _, _) => centeredFallback,
       ),
       _NetworkAvatarSource(:final url) => Image.network(
         url,
-        fit: fit,
+        fit: widget.fit,
         errorBuilder: (_, _, _) => centeredFallback,
       ),
       null => centeredFallback,

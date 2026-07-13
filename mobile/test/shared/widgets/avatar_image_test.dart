@@ -52,4 +52,21 @@ void main() {
 
     expect(find.text('R'), findsOneWidget);
   });
+
+  testWidgets('reuses parsed raster bytes across parent rebuilds', (
+    tester,
+  ) async {
+    const png =
+        'data:image/png;base64,'
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    await tester.pumpWidget(subject(png));
+    final firstBytes = tester.widget<Image>(find.byType(Image)).image;
+
+    await tester.pumpWidget(subject(png));
+    final rebuiltBytes = tester.widget<Image>(find.byType(Image)).image;
+
+    final firstMemory = firstBytes as MemoryImage;
+    final rebuiltMemory = rebuiltBytes as MemoryImage;
+    expect(rebuiltMemory.bytes, same(firstMemory.bytes));
+  });
 }
