@@ -187,6 +187,42 @@ fn owner_roster_intersects_status_reporters_with_current_members() {
 }
 
 #[test]
+fn owner_roster_rejects_spoofed_owner_id_and_cross_member_binding() {
+    use mesh_llm_host_runtime::crypto::OwnerKeypair;
+
+    let member_secret = "4".repeat(64);
+    let other_secret = "5".repeat(64);
+    let member_keys = nostr::Keys::parse(&member_secret).unwrap();
+    let other_keys = nostr::Keys::parse(&other_secret).unwrap();
+    let member_pubkey = member_keys.public_key().to_hex();
+    let owner = OwnerKeypair::generate();
+    let verifying_key = hex::encode(owner.verifying_key().as_bytes());
+
+    let sign_status = |owner_id: String, binding_pubkey: &str| {
+        super::coordinator::build_status_report_event(json!({
+            "ownerId": owner_id,
+            "ownerVerifyingKey": verifying_key,
+            "ownerBindingSig": hex::encode(owner.sign_bytes(
+                &super::identity::member_binding_bytes(binding_pubkey)
+            )),
+            "serveTargets": []
+        }))
+        .unwrap()
+        .sign_with_keys(&member_keys)
+        .unwrap()
+    };
+
+    let spoofed_owner = sign_status("0".repeat(64), &member_pubkey);
+    let cross_member_binding = sign_status(owner.owner_id(), &other_keys.public_key().to_hex());
+    let membership = signed_membership_event(std::slice::from_ref(&member_pubkey));
+
+    assert!(
+        super::owner_ids_from_events(&[spoofed_owner, cross_member_binding, membership]).is_empty(),
+        "a Buzz member must not be able to advertise an unproven MeshLLM owner identity"
+    );
+}
+
+#[test]
 fn owner_roster_without_membership_list_fails_closed() {
     let events = vec![
         signed_reporter_status(&"1".repeat(64), "owner-a"),
