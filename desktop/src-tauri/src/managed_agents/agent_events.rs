@@ -18,6 +18,7 @@
 //! - `private_key_nsec` — the agent's secret key.
 //! - `auth_tag` — the NIP-OA owner attestation.
 //! - `env_vars` — may hold API keys / credentials.
+//! - `mcp_servers` — env entries may hold API keys / credentials.
 //! - `backend` — `Provider { config }` is an opaque blob that may hold secrets.
 //! - any runtime field (`runtime_pid`, `last_*`, `backend_agent_id`, …) — these
 //!   mutate on every start/stop and describe transient process state.

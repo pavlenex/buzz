@@ -3362,48 +3362,47 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
 
 fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
     let mut servers = Vec::new();
-    if config.mcp_command.is_empty() {
-        return servers;
-    }
-    servers.push(McpServer {
-        name: std::path::Path::new(&config.mcp_command)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("mcp")
-            .to_string(),
-        command: config.mcp_command.clone(),
-        args: vec![],
-        env: {
-            let mut env = vec![
-                EnvVar {
-                    name: "BUZZ_RELAY_URL".into(),
-                    value: config.relay_url.clone(),
-                },
-                EnvVar {
-                    name: "BUZZ_PRIVATE_KEY".into(),
-                    // bech32 encoding of a valid secret key is infallible.
-                    // Panic here is correct: injecting a bogus secret would cause
-                    // delayed, hard-to-diagnose agent failures downstream.
-                    value: config
-                        .keys
-                        .secret_key()
-                        .to_bech32()
-                        .expect("secret key bech32 encoding should never fail"),
-                },
-            ];
-            // Forward BUZZ_AUTH_TAG (NIP-OA owner attestation credential)
-            // so the MCP server can attach it to every signed event.
-            if let Ok(auth_tag) = std::env::var("BUZZ_AUTH_TAG") {
-                if !auth_tag.is_empty() {
-                    env.push(EnvVar {
-                        name: "BUZZ_AUTH_TAG".into(),
-                        value: auth_tag,
-                    });
+    if !config.mcp_command.is_empty() {
+        servers.push(McpServer {
+            name: std::path::Path::new(&config.mcp_command)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("mcp")
+                .to_string(),
+            command: config.mcp_command.clone(),
+            args: vec![],
+            env: {
+                let mut env = vec![
+                    EnvVar {
+                        name: "BUZZ_RELAY_URL".into(),
+                        value: config.relay_url.clone(),
+                    },
+                    EnvVar {
+                        name: "BUZZ_PRIVATE_KEY".into(),
+                        // bech32 encoding of a valid secret key is infallible.
+                        // Panic here is correct: injecting a bogus secret would cause
+                        // delayed, hard-to-diagnose agent failures downstream.
+                        value: config
+                            .keys
+                            .secret_key()
+                            .to_bech32()
+                            .expect("secret key bech32 encoding should never fail"),
+                    },
+                ];
+                // Forward BUZZ_AUTH_TAG (NIP-OA owner attestation credential)
+                // so the MCP server can attach it to every signed event.
+                if let Ok(auth_tag) = std::env::var("BUZZ_AUTH_TAG") {
+                    if !auth_tag.is_empty() {
+                        env.push(EnvVar {
+                            name: "BUZZ_AUTH_TAG".into(),
+                            value: auth_tag,
+                        });
+                    }
                 }
-            }
-            env
-        },
-    });
+                env
+            },
+        });
+    }
     servers.extend(
         config
             .configured_mcp_servers
@@ -3966,7 +3965,7 @@ mod build_mcp_servers_tests {
     }
 
     #[test]
-    fn empty_mcp_command_returns_no_servers_even_when_user_servers_are_configured() {
+    fn empty_mcp_command_omits_builtin_but_includes_user_servers() {
         let mut config = test_config();
         config.mcp_command = "".into();
         config.configured_mcp_servers = vec![config::ConfiguredMcpServer {
@@ -3976,9 +3975,22 @@ mod build_mcp_servers_tests {
             env: vec![],
         }];
 
+        let servers = build_mcp_servers(&config);
+        // The built-in slot is omitted (mcp_command is empty), but user-configured
+        // servers are always included — they do not depend on the built-in server.
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "github");
+    }
+
+    #[test]
+    fn empty_mcp_command_with_no_user_servers_returns_empty() {
+        let mut config = test_config();
+        config.mcp_command = "".into();
+        config.configured_mcp_servers = vec![];
+
         assert!(
             build_mcp_servers(&config).is_empty(),
-            "without the built-in MCP server, user servers must not reach an invalid ACP invocation"
+            "no built-in and no user servers should yield an empty list"
         );
     }
 

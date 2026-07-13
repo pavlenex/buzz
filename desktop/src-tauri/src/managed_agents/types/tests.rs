@@ -745,3 +745,50 @@ fn validate_mcp_servers_rejects_empty_duplicate_and_reserved_env_inputs() {
     });
     assert!(validate_mcp_servers(&[server]).is_err());
 }
+
+#[test]
+fn validate_mcp_servers_rejects_invalid_name_characters() {
+    // Space, slash, dot — not in the buzz-agent grammar.
+    for bad_name in &["bad name", "bad/name", "bad.name", "bad@name"] {
+        assert!(
+            validate_mcp_servers(&[mcp_server(bad_name, "cmd", true)]).is_err(),
+            "expected error for name {bad_name:?}"
+        );
+    }
+}
+
+#[test]
+fn validate_mcp_servers_rejects_double_underscore_in_name() {
+    assert!(validate_mcp_servers(&[mcp_server("bad__name", "cmd", true)]).is_err());
+}
+
+#[test]
+fn validate_mcp_servers_rejects_reserved_name() {
+    assert!(validate_mcp_servers(&[mcp_server("buzz-dev-mcp", "cmd", true)]).is_err());
+}
+
+#[test]
+fn validate_mcp_servers_accepts_valid_grammar() {
+    // Alphanumeric, hyphens, underscores (but not double) are all OK.
+    assert!(validate_mcp_servers(&[mcp_server("github", "cmd", true)]).is_ok());
+    assert!(validate_mcp_servers(&[mcp_server("my-server", "cmd", true)]).is_ok());
+    assert!(validate_mcp_servers(&[mcp_server("my_server", "cmd", true)]).is_ok());
+    assert!(validate_mcp_servers(&[mcp_server("Server123", "cmd", true)]).is_ok());
+}
+
+#[test]
+fn validate_mcp_servers_rejects_more_than_fifteen_enabled_in_one_layer() {
+    let servers: Vec<_> = (0..=MAX_USER_MCP_SERVERS)
+        .map(|i| mcp_server(&format!("server-{i}"), "cmd", true))
+        .collect();
+    let err = validate_mcp_servers(&servers).expect_err("layer cap must fire at 16 enabled");
+    assert!(err.contains("enabled servers"), "error: {err}");
+}
+
+#[test]
+fn validate_mcp_servers_allows_fifteen_enabled_in_one_layer() {
+    let servers: Vec<_> = (0..MAX_USER_MCP_SERVERS)
+        .map(|i| mcp_server(&format!("server-{i}"), "cmd", true))
+        .collect();
+    assert!(validate_mcp_servers(&servers).is_ok());
+}

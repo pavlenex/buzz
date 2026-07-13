@@ -6,6 +6,15 @@ use serde::{Deserialize, Serialize};
 /// `buzz-dev-mcp` occupies the sixteenth `buzz-agent` MCP slot.
 pub(crate) const MAX_USER_MCP_SERVERS: usize = 15;
 
+/// Maximum byte length of an MCP server name. Mirrors `MAX_NAME_LEN` in
+/// `buzz-agent/src/mcp.rs`.
+const MAX_SERVER_NAME_LEN: usize = 128;
+
+/// The built-in MCP server name reserved by the buzz-dev-mcp sidecar.
+/// User-configured servers must not use this name — buzz-acp always appends
+/// the built-in after user servers, making it a duplicate at spawn time.
+const RESERVED_SERVER_NAME: &str = "buzz-dev-mcp";
+
 /// An environment variable passed to an MCP subprocess.
 ///
 /// This deliberately mirrors the ACP `EnvVar` wire shape so the effective
@@ -67,18 +76,66 @@ fn default_mcp_server_enabled() -> bool {
 }
 
 /// Validate one persisted MCP layer at every IPC save boundary.
+///
+/// Checks:
+/// - Names match the buzz-agent grammar: 1–128 bytes, ASCII alphanumeric,
+///   `_`, or `-` only, no `__` substring. This mirrors `valid_name` in
+///   `buzz-agent/src/mcp.rs` so save-time rejection matches spawn-time
+///   rejection.
+/// - Names must not be `buzz-dev-mcp` — that slot is reserved for the
+///   bundled sidecar and would become a duplicate when buzz-acp appends it.
+/// - No duplicate names within the layer.
+/// - Enabled servers must have a non-empty command.
+/// - No NUL bytes; individual values under the length ceiling.
+/// - Total payload under the overall byte budget.
+/// - At most `MAX_USER_MCP_SERVERS` enabled entries (layer-level cap;
+///   the merged effective-server cap is enforced separately in
+///   `merge_mcp_servers`).
 pub(crate) fn validate_mcp_servers(servers: &[McpServerConfig]) -> Result<(), String> {
     let mut names = HashSet::new();
+    let mut enabled_count = 0usize;
     let mut total_bytes = 0usize;
     for server in servers {
-        if server.name.trim().is_empty() {
+        // Grammar validation — must match buzz-agent's `valid_name` exactly.
+        if server.name.is_empty() {
             return Err("MCP server name is required".to_string());
         }
+        if server.name.len() > MAX_SERVER_NAME_LEN {
+            return Err(format!(
+                "MCP server name `{}` exceeds the maximum length ({MAX_SERVER_NAME_LEN} bytes)",
+                server.name
+            ));
+        }
+        if !server
+            .name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(format!(
+                "MCP server name `{}` contains invalid characters (only ASCII alphanumeric, `_`, and `-` are allowed)",
+                server.name
+            ));
+        }
+        if server.name.contains("__") {
+            return Err(format!(
+                "MCP server name `{}` cannot contain `__`",
+                server.name
+            ));
+        }
+        if server.name == RESERVED_SERVER_NAME {
+            return Err(format!(
+                "MCP server name `{RESERVED_SERVER_NAME}` is reserved"
+            ));
+        }
+
         if !names.insert(server.name.as_str()) {
             return Err(format!("MCP server names must be unique: {}", server.name));
         }
         if server.enabled && server.command.trim().is_empty() {
             return Err(format!("MCP server `{}` command is required", server.name));
+        }
+        if server.enabled {
+            enabled_count += 1;
         }
 
         for (field, value) in std::iter::once(("name", &server.name))
@@ -121,6 +178,11 @@ pub(crate) fn validate_mcp_servers(servers: &[McpServerConfig]) -> Result<(), St
         );
     }
 
+    if enabled_count > MAX_USER_MCP_SERVERS {
+        return Err(format!(
+            "MCP server layer has {enabled_count} enabled servers; limit is {MAX_USER_MCP_SERVERS}"
+        ));
+    }
     if total_bytes > crate::managed_agents::env_vars::MAX_ENV_TOTAL_BYTES {
         return Err(format!(
             "total MCP server payload is {total_bytes} bytes; limit is {}",
