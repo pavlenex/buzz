@@ -121,6 +121,10 @@ desktop-test:
 desktop-typecheck:
     cd {{desktop_dir}} && pnpm typecheck
 
+# Query the latest npm releases of the bundled ACP bridge tools and update desktop/acp-tools.lock.json
+bump-acp-tools *ARGS:
+    node desktop/scripts/update-acp-tools-lock.mjs {{ARGS}}
+
 # Build desktop frontend assets
 desktop-build:
     cd {{desktop_dir}} && pnpm build
@@ -206,6 +210,7 @@ desktop-release-build target="aarch64-apple-darwin":
     touch "desktop/src-tauri/binaries/buzz-dev-mcp-$TARGET"
     touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
     touch "desktop/src-tauri/binaries/buzz-$TARGET"
+    ./desktop/scripts/prepare-acp-tools-resource.sh "$TARGET"
     pnpm install
     cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target {{target}}
 
@@ -327,6 +332,11 @@ dev *ARGS: bootstrap _ensure-sidecar-stubs _ensure-migrations
         done
     fi
     cargo build -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p buzz-cli -p git-credential-nostr -p buzz-relay
+    # Stage the pinned ACP bridge tools and point the app at the staged dir so
+    # dev builds resolve the same bundled bridges as packaged builds.
+    ./desktop/scripts/prepare-acp-tools-resource.sh
+    export BUZZ_ACP_TOOLS_DIR="{{justfile_directory()}}/desktop/src-tauri/resources/acp/bin"
+    echo "Using ACP tools dir: ${BUZZ_ACP_TOOLS_DIR}"
     ./target/debug/buzz-relay &
     RELAY_PID=$!
     sleep 1
@@ -355,6 +365,11 @@ staging *ARGS: bootstrap _ensure-sidecar-stubs
     export PATH="{{justfile_directory()}}/bin:$PATH"
     pnpm install  # unconditional: staging must always start with a clean dep tree
     cargo build --release -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p buzz-cli -p git-credential-nostr
+    # Stage the pinned ACP bridge tools and point the app at the staged dir so
+    # staging builds resolve the same bundled bridges as packaged builds.
+    ./desktop/scripts/prepare-acp-tools-resource.sh
+    export BUZZ_ACP_TOOLS_DIR="{{justfile_directory()}}/desktop/src-tauri/resources/acp/bin"
+    echo "Using ACP tools dir: ${BUZZ_ACP_TOOLS_DIR}"
     FEATURES=()
     if [[ -n "{{mesh}}" ]]; then
         FEATURES=(--features mesh-llm)
