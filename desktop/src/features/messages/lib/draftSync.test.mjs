@@ -383,10 +383,12 @@ test("test_unuploaded_attachment_cancels_stale_text_publish", async () => {
 
 function deferred() {
   let resolve;
-  const promise = new Promise((complete) => {
+  let reject;
+  const promise = new Promise((complete, fail) => {
     resolve = complete;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 test("test_newer_edit_during_inflight_publish_survives", async () => {
@@ -468,4 +470,78 @@ test("test_deletion_during_inflight_publish_wins", async () => {
   );
   assert.ok(rebasedTombstone);
   assert.equal(loadDraftEntry(channelA), undefined);
+});
+
+test("test_stale_tombstone_completion_preserves_rebased_delete", async () => {
+  setup();
+  const published = [];
+  const draftPublish = deferred();
+  const staleTombstone = deferred();
+  const rebasedTombstone = deferred();
+  const rebasedTombstoneStarted = deferred();
+  const manager = new DraftSyncManager(pubkey, "wss://relay.example", {
+    deriveAddress: async () => "address-a",
+    encrypt: async (content) => content,
+    fetchEvents: async () => [],
+    sign: async (input) => ({
+      id: `signed-${published.length}`,
+      created_at:
+        input.content === "" && published.length === 1
+          ? (input.createdAt ?? 0) - 1
+          : (input.createdAt ?? 0),
+      kind: input.kind,
+      pubkey,
+      content: input.content,
+      sig: "",
+      tags: input.tags,
+    }),
+    publishEvent: async (event) => {
+      const publishIndex = published.push(event);
+      if (publishIndex === 1) await draftPublish.promise;
+      if (publishIndex === 2) await staleTombstone.promise;
+      if (publishIndex === 3) {
+        rebasedTombstoneStarted.resolve();
+        await rebasedTombstone.promise;
+      }
+    },
+  });
+
+  const local = draft(channelA, "draft to delete");
+  saveDraftEntry(channelA, local);
+  manager.queuePublish(channelA, local);
+  const flush = manager.flushPublishes();
+  while (published.length === 0) await Promise.resolve();
+  const deletion = manager.queueDeletion(channelA, channelA);
+  removeRemoteDraftEntry(channelA);
+  while (published.length < 2) await Promise.resolve();
+  draftPublish.resolve();
+  const draftEvent = published[0];
+  staleTombstone.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await rebasedTombstoneStarted.promise;
+  rebasedTombstone.reject(new Error("offline"));
+  await flush;
+  await deletion;
+
+  const retried = [];
+  const retryManager = new DraftSyncManager(pubkey, "wss://relay.example", {
+    deriveAddress: async () => "address-a",
+    publishEvent: async (event) => retried.push(event),
+    sign: async (input) => ({
+      id: "retry",
+      created_at: input.createdAt ?? 0,
+      kind: input.kind,
+      pubkey,
+      content: input.content,
+      sig: "",
+      tags: input.tags,
+    }),
+  });
+  retryManager.start();
+  await Promise.resolve();
+  await retryManager.destroy();
+  await manager.destroy();
+
+  assert.ok(retried.some((event) => event.content === ""));
+  assert.ok(retried.every((event) => event.created_at > draftEvent.created_at));
 });

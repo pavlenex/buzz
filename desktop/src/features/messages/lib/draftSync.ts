@@ -327,9 +327,13 @@ export class DraftSyncManager {
         "Timed out deleting draft.",
         "Failed to delete draft.",
       );
-      if (state.pendingDeletion?.address === pending.address) {
-        state.pendingDeletion = undefined;
-        state.remoteHead = event;
+      const current = this.state.get(pending.address) ?? state;
+      if (
+        current.pendingDeletion?.address === pending.address &&
+        (!current.remoteHead || compareHeads(event, current.remoteHead) >= 0)
+      ) {
+        current.pendingDeletion = undefined;
+        current.remoteHead = event;
         this.writeSidecar();
       }
     } catch (error) {
