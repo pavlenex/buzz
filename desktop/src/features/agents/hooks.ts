@@ -10,6 +10,7 @@ import { channelsQueryKey } from "@/features/channels/hooks";
 import { resolveSnapshotAvatarPng } from "@/features/agents/ui/snapshotAvatarPng";
 import { evictUsersBatchEntries } from "@/features/profile/hooks";
 import {
+  checkAcpNodeRuntime,
   createManagedAgent,
   deleteManagedAgent,
   discoverAcpRuntimes,
@@ -91,6 +92,7 @@ export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const personasQueryKey = ["personas"] as const;
 export const teamsQueryKey = ["teams"] as const;
 export const acpRuntimesQueryKey = ["acp-runtimes"] as const;
+export const nodeRuntimeCheckQueryKey = ["node-runtime-check"] as const;
 export const managedAgentPrereqsQueryKey = ["managed-agent-prereqs"] as const;
 export const backendProvidersQueryKey = ["backend-providers"] as const;
 export const gitBashPrerequisiteQueryKey = ["git-bash-prerequisite"] as const;
@@ -144,6 +146,15 @@ export function useAcpRuntimesQuery(options?: { enabled?: boolean }) {
     enabled: options?.enabled ?? true,
     queryKey: acpRuntimesQueryKey,
     queryFn: discoverAcpRuntimes,
+    staleTime: 60_000,
+  });
+}
+
+export function useNodeRuntimeCheckQuery(options?: { enabled?: boolean }) {
+  return useQuery({
+    enabled: options?.enabled ?? true,
+    queryKey: nodeRuntimeCheckQueryKey,
+    queryFn: checkAcpNodeRuntime,
     staleTime: 60_000,
   });
 }

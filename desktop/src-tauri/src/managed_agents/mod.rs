@@ -13,6 +13,7 @@ mod env_vars;
 mod git_bash;
 pub(crate) mod global_config;
 mod nest;
+pub(crate) mod node_runtime;
 mod persona_avatars;
 mod persona_card;
 pub(crate) mod persona_events;

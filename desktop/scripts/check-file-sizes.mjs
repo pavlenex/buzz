@@ -196,7 +196,11 @@ const overrides = new Map([
   // RawInstallRuntimeResult + fromRawInstallRuntimeResult mapper (+2).
   // Git Bash Doctor discovery adds the raw Tauri response and its camelCase
   // mapper. This is the existing API boundary; split remains queued.
-  ["src/shared/api/tauri.ts", 1304],
+  // bundle-acps: RawNodeRuntimeCheck type + fromRawNodeRuntimeCheck mapper +
+  // checkAcpNodeRuntime wrapper for the bundled-bridge Node.js doctor check
+  // (+35 lines on rebase union with Git Bash Doctor discovery). Queued to
+  // split with the rest of this file.
+  ["src/shared/api/tauri.ts", 1339],
   // doctor-npm-eacces-preflight: hint field added to InstallStepResult (+1 line).
   // codex-acp-package-swap: "adapter_outdated" variant added to AcpAvailabilityStatus (+1 line).
   // doctor-install-reliability: AuthStatus tagged union + nodeRequired/authStatus/
@@ -206,7 +210,10 @@ const overrides = new Map([
   // mcp-readonly-view rebase: PR2 MCP config surface FE-type fields force +1 over the grandfathered ceiling.
   // Git Bash prerequisite payload adds four fields to the shared Tauri API
   // contract. This is the canonical type location; split remains queued.
-  ["src/shared/api/types.ts", 1038],
+  // bundle-acps: NodeRuntimeCheck + NodeRuntimeRequirement types for the
+  // bundled-bridge Node.js doctor check (+23 lines on rebase union with
+  // main's Git Bash prerequisite type growth).
+  ["src/shared/api/types.ts", 1061],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
@@ -398,7 +405,9 @@ const overrides = new Map([
   // Git Bash Doctor discovery exposes a narrow async Tauri command at the
   // existing discovery boundary. The ten-line addition preserves the platform
   // neutral frontend contract; split remains queued.
-  ["src-tauri/src/commands/agent_discovery.rs", 1357],
+  // bundle-acps: node runtime check wiring for the bundled-bridge Doctor
+  // requirement (+9 lines on rebase union with Git Bash Doctor discovery).
+  ["src-tauri/src/commands/agent_discovery.rs", 1366],
   // draft-persistence predicate: submit-time `loadDraft` check + inline comment
   // + deps-array entry in submitMessage closes the never-persisted-boundary
   // defect (Thufir Pass-3 finding). Load-bearing correctness fix; queued to
