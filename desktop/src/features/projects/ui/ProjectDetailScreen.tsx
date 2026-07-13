@@ -353,10 +353,24 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
       (pullRequest) => [
         pullRequest.author,
         ...pullRequest.updates.map((update) => update.author),
+        ...pullRequest.comments.map((comment) => comment.author),
+        ...pullRequest.reviewers,
+        ...pullRequest.approvals.map((approval) => approval.author),
       ],
     );
-    return [...new Set([...projectPeople(project), ...pullRequestPubkeys])];
-  }, [project, pullRequestsQuery.data]);
+    const issuePubkeys = (issuesQuery.data ?? []).flatMap((issue) => [
+      issue.author,
+      ...issue.recipients,
+      ...issue.comments.map((comment) => comment.author),
+    ]);
+    return [
+      ...new Set([
+        ...projectPeople(project),
+        ...pullRequestPubkeys,
+        ...issuePubkeys,
+      ]),
+    ];
+  }, [issuesQuery.data, project, pullRequestsQuery.data]);
   const profilesQuery = useUsersBatchQuery(peoplePubkeys, {
     enabled: peoplePubkeys.length > 0,
   });

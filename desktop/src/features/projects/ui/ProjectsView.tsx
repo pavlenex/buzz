@@ -119,10 +119,20 @@ export function ProjectsView() {
             ...pullRequest.recipients,
             ...pullRequest.comments.map((comment) => comment.author),
           ]) ?? []),
+          ...(projectIssuesQuery.data?.flatMap(({ issue }) => [
+            issue.author,
+            ...issue.recipients,
+            ...issue.comments.map((comment) => comment.author),
+          ]) ?? []),
         ].map(normalizePubkey),
       ),
     ],
-    [activitySummariesQuery.data, projectPullRequestsQuery.data, projects],
+    [
+      activitySummariesQuery.data,
+      projectIssuesQuery.data,
+      projectPullRequestsQuery.data,
+      projects,
+    ],
   );
   const profilesQuery = useUsersBatchQuery(projectPubkeys, {
     enabled: projectPubkeys.length > 0,

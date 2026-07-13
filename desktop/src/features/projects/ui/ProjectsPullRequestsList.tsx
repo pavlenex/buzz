@@ -144,7 +144,7 @@ function PullRequestGridCard({
             <span className="font-medium text-foreground">
               {pullRequest.status}
             </span>
-            <span>opened {formatRelativeTime(pullRequest.createdAt)}</span>
+            <span>created {formatRelativeTime(pullRequest.createdAt)}</span>
             <span>by {authorLabel}</span>
             {pullRequest.comments.length > 0 ? (
               <span className="flex items-center gap-1">
@@ -220,7 +220,7 @@ function PullRequestListRow({
             <span className="font-mono text-foreground">
               #{pullRequest.id.slice(0, 8)}
             </span>
-            <span>opened {formatRelativeTime(pullRequest.createdAt)}</span>
+            <span>created {formatRelativeTime(pullRequest.createdAt)}</span>
             <span>by {authorLabel}</span>
             <span>·</span>
             <span>{pullRequest.status}</span>

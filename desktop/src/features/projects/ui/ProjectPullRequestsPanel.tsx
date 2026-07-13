@@ -64,7 +64,7 @@ function labelForPubkey(pubkey: string, profiles?: UserProfileLookup) {
   );
 }
 
-function relativeOpenedAt(createdAt: number) {
+function relativeCreatedAt(createdAt: number) {
   const elapsedSeconds = Math.max(
     1,
     Math.floor(Date.now() / 1_000 - createdAt),
@@ -182,7 +182,7 @@ function PullRequestRow({
           <span className="truncate font-medium text-foreground/80">
             {authorLabel}
           </span>
-          <span>opened {relativeOpenedAt(pullRequest.createdAt)}</span>
+          <span>created {relativeCreatedAt(pullRequest.createdAt)}</span>
           <span className="rounded-full border border-border/60 px-1.5 py-0.5 text-2xs">
             Member
           </span>
@@ -550,14 +550,14 @@ export function PullRequestDetailHeader({
       </h3>
       <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <GitPullRequest className="h-3.5 w-3.5" />
-        Pull request from {authorLabel}
+        Created {compactDate(pullRequest.createdAt)} by {authorLabel}
       </p>
     </header>
   );
 }
 
 /** Right-hand meta column for the PR detail view: status, author, branches,
- * dates, and review actions — keeps the conversation column focused. */
+ * and dates. Review actions live inline in the conversation column. */
 export function PullRequestMetaRail({
   profiles,
   project,
@@ -614,7 +614,7 @@ export function PullRequestMetaRail({
       <OverviewRailSection title="Activity">
         <dl className="space-y-1.5 text-xs text-muted-foreground">
           <div className="flex items-center justify-between gap-3">
-            <dt>Opened</dt>
+            <dt>Created</dt>
             <dd className="font-medium text-foreground">
               {compactDate(pullRequest.createdAt)}
             </dd>
@@ -626,13 +626,6 @@ export function PullRequestMetaRail({
             </dd>
           </div>
         </dl>
-      </OverviewRailSection>
-      <OverviewRailSection title="Review">
-        <PullRequestReviewCard
-          profiles={profiles}
-          project={project}
-          pullRequest={pullRequest}
-        />
       </OverviewRailSection>
     </aside>
   );
@@ -774,6 +767,14 @@ function PullRequestDetail({
           ))}
         </section>
       ) : null}
+
+      <section className="p-4">
+        <PullRequestReviewCard
+          profiles={profiles}
+          project={project}
+          pullRequest={pullRequest}
+        />
+      </section>
 
       <section className="space-y-3 p-4">
         <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">

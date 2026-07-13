@@ -1,4 +1,4 @@
-import { TerminalSquare } from "lucide-react";
+import { Terminal } from "lucide-react";
 import * as React from "react";
 
 import type {
@@ -191,7 +191,9 @@ export function WorkspaceTabs({
             title={terminalTitle ?? "Open terminal"}
             variant="ghost"
           >
-            <TerminalSquare className="h-3.5 w-3.5" />
+            <span className="flex h-4 w-4 items-center justify-center rounded-[3px] bg-current">
+              <Terminal className="h-3 w-3 text-background" />
+            </span>
           </Button>
         ) : null}
       </div>
