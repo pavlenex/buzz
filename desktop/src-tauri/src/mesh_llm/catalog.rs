@@ -84,7 +84,6 @@ pub fn model_catalog() -> MeshModelCatalog {
         survey.vram_bytes,
         vram_gb,
         &installed_names(),
-        &incomplete_layer_package_files(),
     )
 }
 
@@ -104,73 +103,17 @@ fn installed_names() -> Vec<(String, String)> {
         .collect()
 }
 
-/// Primary GGUF file names of models whose meshllm layer package on disk is
-/// *incomplete*. mesh-llm serves such models from the layer package and will
-/// resume a multi-GB download on first serve — so "the GGUF is cached" does
-/// not mean "starts instantly". mesh-llm's own `scan_installed_models` marks
-/// a package installed if any single layer file exists (no completeness
-/// check — upstream gap), so we verify against the package's own
-/// `model-package.json` manifest: every listed layer file must exist.
-fn incomplete_layer_package_files() -> Vec<String> {
-    let cache = default_huggingface_cache_dir();
-    let mut incomplete = Vec::new();
-    let Ok(repos) = std::fs::read_dir(&cache) else {
-        return incomplete;
-    };
-    for repo in repos.flatten() {
-        let name = repo.file_name().to_string_lossy().into_owned();
-        if !(name.starts_with("models--meshllm--") && name.ends_with("-layers")) {
-            continue;
-        }
-        let Ok(snapshots) = std::fs::read_dir(repo.path().join("snapshots")) else {
-            continue;
-        };
-        for snapshot in snapshots.flatten() {
-            let manifest_path = snapshot.path().join("model-package.json");
-            let Ok(raw) = std::fs::read_to_string(&manifest_path) else {
-                continue;
-            };
-            let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&raw) else {
-                continue;
-            };
-            let Some(primary_file) = manifest["source_model"]["primary_file"].as_str() else {
-                continue;
-            };
-            let layers = manifest["layers"].as_array().cloned().unwrap_or_default();
-            let complete = !layers.is_empty()
-                && layers.iter().all(|layer| {
-                    layer["path"]
-                        .as_str()
-                        .map(|p| snapshot.path().join(p).exists())
-                        .unwrap_or(false)
-                });
-            if !complete {
-                incomplete.push(primary_file.to_string());
-            }
-        }
-    }
-    incomplete
-}
-
 fn build_catalog(
     gpu_name: Option<String>,
     vram_bytes: u64,
     vram_gb: f64,
     installed: &[(String, String)],
-    incomplete_layer_files: &[String],
 ) -> MeshModelCatalog {
     let is_installed = |file: &str, name: &str| {
         installed
             .iter()
             .any(|(f, model_ref)| f == file || model_ref.contains(name))
     };
-    // "Installed" for recommendation purposes means *ready to serve now*:
-    // if the model's layer package exists but is incomplete, first serve
-    // resumes a multi-GB download — that's not an instant-start pick.
-    let is_ready = |file: &str, name: &str| {
-        is_installed(file, name) && !incomplete_layer_files.iter().any(|f| f == file)
-    };
-
     let mut entries: Vec<MeshCatalogEntry> = MODEL_CATALOG
         .iter()
         .filter(|m| !is_draft_only(&m.name))
@@ -188,25 +131,7 @@ fn build_catalog(
         })
         .collect();
 
-    // Recommendation: prefer what's already on disk. The largest installed
-    // general-purpose model that fits comfortably starts instantly — a far
-    // better first-run than upstream's pack, which optimizes for a fresh
-    // machine and would trigger a multi-GB download. Coder-specialized
-    // models are skipped (a shared chat/agent model should be general).
-    // Fall back to upstream `auto_model_pack` when nothing suitable is
-    // installed.
-    let installed_pick = MODEL_CATALOG
-        .iter()
-        .filter(|m| !is_draft_only(&m.name))
-        .filter(|m| is_ready(&m.file, &m.name))
-        .filter(|m| {
-            let size_gb = parse_size_gb(&m.size);
-            fit_code(size_gb, vram_gb) == ModelFit::Comfortable
-                && !m.name.to_ascii_lowercase().contains("coder")
-        })
-        .max_by(|a, b| parse_size_gb(&a.size).total_cmp(&parse_size_gb(&b.size)))
-        .map(|m| m.name.clone());
-    let recommended = installed_pick.or_else(|| auto_model_pack(vram_gb).into_iter().next());
+    let recommended = auto_model_pack(vram_gb).into_iter().next();
     for entry in &mut entries {
         entry.recommended = recommended.as_deref() == Some(entry.name.as_str());
     }
@@ -254,7 +179,7 @@ mod tests {
 
     #[test]
     fn catalog_ranks_recommended_first_then_fit() {
-        let catalog = build_catalog(Some("Test GPU".into()), 24_000_000_000, 24.0, &[], &[]);
+        let catalog = build_catalog(Some("Test GPU".into()), 24_000_000_000, 24.0, &[]);
         assert!(
             !catalog.entries.is_empty(),
             "curated catalog must not be empty"
@@ -280,63 +205,12 @@ mod tests {
     }
 
     #[test]
-    fn recommendation_prefers_largest_installed_comfortable_general_model() {
-        // M4 Max 64GB shape: Qwen3-30B-A3B (17GB) and Qwen2.5-3B cached.
-        // The installed 30B MoE must win over upstream's download-something
-        // pack, and over the smaller installed model. Coder models never
-        // win even when installed and larger.
-        let installed = vec![
-            (
-                "Qwen3-30B-A3B-Q4_K_M.gguf".to_string(),
-                "unsloth/Qwen3-30B-A3B-GGUF:Q4_K_M".to_string(),
-            ),
-            (
-                "qwen2.5-3b-instruct-q4_k_m.gguf".to_string(),
-                "Qwen/Qwen2.5-3B-Instruct-GGUF:q4_k_m".to_string(),
-            ),
-            (
-                "Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf".to_string(),
-                "Qwen/Qwen2.5-Coder-32B-Instruct-GGUF:q4_k_m".to_string(),
-            ),
-        ];
-        let catalog = build_catalog(None, 64_000_000_000, 64.0, &installed, &[]);
+    fn recommendation_uses_mesh_llm_auto_selection() {
+        let catalog = build_catalog(None, 62_000_000_000, 62.0, &[]);
         assert_eq!(
-            catalog.recommended.as_deref(),
-            Some("Qwen3-30B-A3B-Q4_K_M"),
-            "largest installed comfortable non-coder model must be recommended"
+            catalog.recommended,
+            auto_model_pack(62.0).into_iter().next()
         );
-        // Nothing installed -> upstream pack fallback still recommends.
-        let fresh = build_catalog(None, 64_000_000_000, 64.0, &[], &[]);
-        assert!(fresh.recommended.is_some());
-    }
-
-    #[test]
-    fn recommendation_skips_incomplete_layer_packages() {
-        // Regression: Qwen3-30B-A3B's GGUF was cached but its meshllm layer
-        // package was 7/48 layers — recommending it meant a surprise ~7GB
-        // download on first serve. An incomplete package must lose to a
-        // smaller fully-ready model; it stays listed as installed, just not
-        // recommended.
-        let installed = vec![
-            (
-                "Qwen3-30B-A3B-Q4_K_M.gguf".to_string(),
-                "unsloth/Qwen3-30B-A3B-GGUF:Q4_K_M".to_string(),
-            ),
-            (
-                "Qwen3-8B-Q4_K_M.gguf".to_string(),
-                "unsloth/Qwen3-8B-GGUF:Q4_K_M".to_string(),
-            ),
-        ];
-        let incomplete = vec!["Qwen3-30B-A3B-Q4_K_M.gguf".to_string()];
-        let catalog = build_catalog(None, 64_000_000_000, 64.0, &installed, &incomplete);
-        assert_eq!(
-            catalog.recommended.as_deref(),
-            Some("Qwen3-8B-Q4_K_M"),
-            "incomplete layer package must not be the instant-start pick"
-        );
-        // Same cache with the 30B package complete -> 30B wins again.
-        let catalog = build_catalog(None, 64_000_000_000, 64.0, &installed, &[]);
-        assert_eq!(catalog.recommended.as_deref(), Some("Qwen3-30B-A3B-Q4_K_M"));
     }
 
     #[test]
@@ -345,13 +219,13 @@ mod tests {
             "Qwen3-8B-Q4_K_M.gguf".to_string(),
             "unsloth/Qwen3-8B-GGUF:Q4_K_M".to_string(),
         )];
-        let catalog = build_catalog(None, 96_000_000_000, 96.0, &installed, &[]);
+        let catalog = build_catalog(None, 96_000_000_000, 96.0, &installed);
         let qwen8b = catalog.entries.iter().find(|e| e.name == "Qwen3-8B-Q4_K_M");
         if let Some(entry) = qwen8b {
             assert!(entry.installed, "cached file must mark entry installed");
         }
         // A machine with nothing installed marks nothing installed.
-        let empty = build_catalog(None, 96_000_000_000, 96.0, &[], &[]);
+        let empty = build_catalog(None, 96_000_000_000, 96.0, &[]);
         assert!(empty.entries.iter().all(|e| !e.installed));
     }
 }
