@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -318,6 +319,33 @@ class ComposeBar extends HookConsumerWidget {
       }
     }
 
+    Widget buildContextMenu(
+      BuildContext context,
+      EditableTextState editableTextState,
+    ) {
+      final buttonItems = [...editableTextState.contextMenuButtonItems];
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        buttonItems.insert(
+          0,
+          ContextMenuButtonItem(
+            label: 'Paste Image',
+            onPressed: () {
+              ContextMenuController.removeAny();
+              pickAndUpload(
+                ref
+                    .read(mediaUploadServiceProvider)
+                    .readAndUploadClipboardImage,
+              );
+            },
+          ),
+        );
+      }
+      return AdaptiveTextSelectionToolbar.buttonItems(
+        anchors: editableTextState.contextMenuAnchors,
+        buttonItems: buttonItems,
+      );
+    }
+
     void uploadPastedImage(KeyboardInsertedContent content) {
       final bytes = content.data;
       if (bytes == null || bytes.isEmpty) {
@@ -463,6 +491,7 @@ class ComposeBar extends HookConsumerWidget {
                 controller: controller,
                 focusNode: focusNode,
                 textInputAction: TextInputAction.send,
+                contextMenuBuilder: buildContextMenu,
                 contentInsertionConfiguration: ContentInsertionConfiguration(
                   allowedMimeTypes: _pastedImageMimeTypes,
                   onContentInserted: uploadPastedImage,

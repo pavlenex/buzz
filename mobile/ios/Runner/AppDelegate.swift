@@ -118,9 +118,31 @@ import UserNotifications
         return
       }
       transcodeVideoToMp4(sourcePath: sourcePath, result: result)
+    case "readClipboardImage":
+      guard let imageData = Self.clipboardImageData(from: UIPasteboard.general) else {
+        result(nil)
+        return
+      }
+      result(FlutterStandardTypedData(bytes: imageData))
     default:
       result(FlutterMethodNotImplemented)
     }
+  }
+
+  static func clipboardImageData(from pasteboard: UIPasteboard) -> Data? {
+    if let pngData = pasteboard.data(forPasteboardType: "public.png") {
+      return pngData
+    }
+    if let jpegData = pasteboard.data(forPasteboardType: "public.jpeg") {
+      return jpegData
+    }
+    if let gifData = pasteboard.data(forPasteboardType: "com.compuserve.gif") {
+      return gifData
+    }
+    guard let image = pasteboard.image else {
+      return nil
+    }
+    return image.pngData()
   }
 
   private func transcodeVideoToMp4(
