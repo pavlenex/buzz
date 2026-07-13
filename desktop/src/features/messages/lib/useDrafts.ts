@@ -12,7 +12,9 @@ import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota"
 // so any component consuming `useDraftsSnapshot()` re-renders immediately.
 
 type Subscriber = () => void;
+type RemoteDraftRemovalSubscriber = (draftKey: string) => void;
 const _subscribers = new Set<Subscriber>();
+const _remoteDraftRemovalSubscribers = new Set<RemoteDraftRemovalSubscriber>();
 let _version = 0;
 
 /** Notify all active subscribers. Called by every write path. */
@@ -27,6 +29,16 @@ function subscribeToStore(callback: Subscriber): () => void {
   _subscribers.add(callback);
   return () => {
     _subscribers.delete(callback);
+  };
+}
+
+/** Subscribe to explicit remote NIP-37 tombstone removals. */
+export function subscribeToRemoteDraftRemovals(
+  callback: RemoteDraftRemovalSubscriber,
+): () => void {
+  _remoteDraftRemovalSubscribers.add(callback);
+  return () => {
+    _remoteDraftRemovalSubscribers.delete(callback);
   };
 }
 
@@ -272,6 +284,9 @@ export function removeRemoteDraftEntry(draftKey: string): void {
   if (!map.delete(draftKey)) return;
   flushStore(map);
   notifySubscribers();
+  for (const subscriber of _remoteDraftRemovalSubscribers) {
+    subscriber(draftKey);
+  }
 }
 
 export function clearDraftEntry(draftKey: string): void {

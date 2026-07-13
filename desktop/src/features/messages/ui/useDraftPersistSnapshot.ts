@@ -2,7 +2,10 @@ import * as React from "react";
 
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import { syncDraftChannel } from "@/features/messages/lib/draftSync";
-import type { DraftState } from "@/features/messages/lib/useDrafts";
+import {
+  subscribeToRemoteDraftRemovals,
+  type DraftState,
+} from "@/features/messages/lib/useDrafts";
 
 type UseDraftPersistLifecycleParams = {
   effectiveDraftKey: string | null | undefined;
@@ -121,4 +124,24 @@ export function useDraftPersistLifecycle({
       }
     };
   }, [effectiveDraftKey]);
+
+  // Remote tombstones are an explicit delete-wins signal. Do not infer this
+  // from store absence: an unsaved composer may legitimately have no entry.
+  React.useEffect(() => {
+    if (!effectiveDraftKey) return;
+    return subscribeToRemoteDraftRemovals((draftKey) => {
+      if (draftKey !== effectiveDraftKey) return;
+      clearContent();
+      pendingImetaForPersistRef.current = [];
+      setPendingImeta([]);
+      spoileredAttachmentUrlsRef.current = new Set();
+      setSpoileredAttachmentUrls(new Set());
+    });
+  }, [
+    effectiveDraftKey,
+    clearContent,
+    setPendingImeta,
+    setSpoileredAttachmentUrls,
+    spoileredAttachmentUrlsRef,
+  ]);
 }

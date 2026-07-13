@@ -203,6 +203,58 @@ test("test_tombstone_failure_sidecar_suppresses_remote_resurrection", async () =
   );
 });
 
+test("test_remote_tombstone_blocks_stale_cleanup_publish", async () => {
+  setup();
+  const remote = wrapped({
+    id: "remote-draft",
+    createdAt: 1,
+    address: "address-a",
+    channelId: channelA,
+    content: "cipher",
+  });
+  const tombstone = wrapped({
+    id: "remote-tombstone",
+    createdAt: 2,
+    address: "address-a",
+    channelId: channelA,
+    content: "",
+  });
+  let events = [remote];
+  const published = [];
+  const manager = new DraftSyncManager(pubkey, "wss://relay.example", {
+    decrypt: async () => payload(channelA, "draft"),
+    deriveAddress: async () => "address-a",
+    encrypt: async (content) => content,
+    fetchEvents: async () => events,
+    sign: async (input) => ({
+      id: "stale-cleanup-publish",
+      created_at: input.createdAt ?? 0,
+      kind: input.kind,
+      pubkey,
+      content: input.content,
+      sig: "",
+      tags: input.tags,
+    }),
+    publishEvent: async (event) => published.push(event),
+  });
+
+  await manager.fetchAllOwnDrafts();
+  events = [tombstone];
+  await manager.fetchAllOwnDrafts();
+
+  // Models the mounted composer's stale cleanup after the remote delete. The
+  // unconditional tombstone abort must remove this local write without
+  // publishing it back to the relay.
+  const stale = draft(channelA, "stale cleanup content");
+  saveDraftEntry(channelA, stale);
+  manager.queuePublish(channelA, stale);
+  await manager.flushPublishes();
+  await manager.destroy();
+
+  assert.deepEqual(published, []);
+  assert.equal(loadDraftEntry(channelA), undefined);
+});
+
 test("test_remote_tombstone_removes_known_draft", async () => {
   setup();
   const remote = wrapped({
@@ -544,57 +596,4 @@ test("test_stale_tombstone_completion_preserves_rebased_delete", async () => {
 
   assert.ok(retried.some((event) => event.content === ""));
   assert.ok(retried.every((event) => event.created_at > draftEvent.created_at));
-});
-
-test("test_remote_tombstone_during_publish_allows_later_draft", async () => {
-  setup();
-  const published = [];
-  const draftPublish = deferred();
-  const remoteTombstone = wrapped({
-    id: "remote-tombstone",
-    createdAt: Math.floor(Date.now() / 1_000) + 100,
-    address: "address-a",
-    channelId: channelA,
-    content: "",
-  });
-  const manager = new DraftSyncManager(pubkey, "wss://relay.example", {
-    deriveAddress: async () => "address-a",
-    encrypt: async (content) => content,
-    fetchEvents: async () => [],
-    sign: async (input) => ({
-      id: `signed-${published.length}`,
-      created_at: input.createdAt ?? 0,
-      kind: input.kind,
-      pubkey,
-      content: input.content,
-      sig: "",
-      tags: input.tags,
-    }),
-    publishEvent: async (event) => {
-      published.push(event);
-      if (published.length === 1) await draftPublish.promise;
-    },
-  });
-
-  manager.queuePublish(channelA, draft(channelA, "raced draft"));
-  const flush = manager.flushPublishes();
-  while (published.length === 0) await Promise.resolve();
-  await manager.mergeEvent(remoteTombstone);
-  draftPublish.resolve();
-  await flush;
-
-  assert.equal(
-    localStorage.getItem(`buzz-draft-sync.v1:wss://relay.example:${pubkey}`),
-    "{}",
-  );
-
-  manager.queuePublish(channelA, draft(channelA, "new draft"));
-  await manager.flushPublishes();
-  await manager.destroy();
-
-  const newDraft = published.find((event) =>
-    event.content.includes("new draft"),
-  );
-  assert.ok(newDraft);
-  assert.ok(newDraft.created_at > remoteTombstone.created_at);
 });

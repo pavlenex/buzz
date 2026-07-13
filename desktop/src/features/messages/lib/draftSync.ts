@@ -33,7 +33,6 @@ type PendingPublish = {
   draft: DraftState;
   channelId: string;
   address?: string;
-  base?: RemoteHead;
 };
 type PendingDeletion = {
   draftKey: string;
@@ -126,7 +125,6 @@ export class DraftSyncManager {
       draftKey,
       draft,
       channelId: draft.channelId,
-      base: entry.remoteHead?.content === "" ? entry.remoteHead : undefined,
     };
     this.state.set(draftKey, entry);
     // Resolve the opaque address while the draft is alive so normal delete
@@ -254,7 +252,7 @@ export class DraftSyncManager {
         this.reschedulePublishes();
         return;
       }
-      if (state.remoteHead?.content === "" && !pending.base) {
+      if (state.remoteHead?.content === "") {
         state.pendingPublish = undefined;
         removeRemoteDraftEntry(pending.draftKey);
         this.reschedulePublishes();
