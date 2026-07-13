@@ -400,7 +400,10 @@ const overrides = new Map([
   // neutral frontend contract; split remains queued.
   // bundle-acps: node runtime check wiring for the bundled-bridge Doctor
   // requirement (+9 lines on rebase union with Git Bash Doctor discovery).
-  ["src-tauri/src/commands/agent_discovery.rs", 1366],
+  // bundle-acps: adapter_verification_step post-install gate + its test
+  // quartet (+120 lines, partly offset by the version-gate retirement's
+  // deletions in this file). Queued to split.
+  ["src-tauri/src/commands/agent_discovery.rs", 1410],
   // draft-persistence predicate: submit-time `loadDraft` check + inline comment
   // + deps-array entry in submitMessage closes the never-persisted-boundary
   // defect (Thufir Pass-3 finding). Load-bearing correctness fix; queued to
