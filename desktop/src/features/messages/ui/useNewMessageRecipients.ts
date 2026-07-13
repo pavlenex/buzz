@@ -69,6 +69,9 @@ export function useNewMessageRecipients({
   currentPubkey?: string;
 }) {
   const [searchQuery, setSearchQuery] = React.useState("");
+  const [directoryIdentityQuery, setDirectoryIdentityQuery] = React.useState<
+    string | null
+  >(null);
   const [selectedUsers, setSelectedUsers] = React.useState<UserSearchResult[]>(
     [],
   );
@@ -88,7 +91,8 @@ export function useNewMessageRecipients({
   const channelsQuery = useChannelsQuery({ enabled: active });
   const userSearchQuery = useInfiniteUserSearchQuery(deferredSearchQuery, {
     allowEmpty: true,
-    enabled: active && !hasReachedRecipientLimit,
+    enabled:
+      active && (!hasReachedRecipientLimit || deferredSearchQuery.length > 0),
     limit: DIRECTORY_PAGE_SIZE,
   });
   const userSearchResults = useFlattenedUserSearchResults(userSearchQuery.data);
@@ -114,12 +118,15 @@ export function useNewMessageRecipients({
       sharedChannelIds: getSharedChannelIds(channelsQuery.data),
     });
 
-    const addCandidate = (candidate: NewMessageRecipientCandidate) => {
+    const addCandidate = (
+      candidate: NewMessageRecipientCandidate,
+      options: { includeSelected?: boolean } = {},
+    ) => {
       const pubkey = normalizePubkey(candidate.pubkey);
 
       if (
         pubkey === currentPubkeyNormalized ||
-        selectedPubkeys.has(pubkey) ||
+        (!options.includeSelected && selectedPubkeys.has(pubkey)) ||
         isArchivedDiscovery(pubkey) ||
         (candidate.isAgent && !eligibleAgentPubkeys.has(pubkey))
       ) {
@@ -154,7 +161,9 @@ export function useNewMessageRecipients({
     };
 
     for (const user of userSearchResults) {
-      addCandidate(candidateWithAgentMetadata(user, managedAgentsByPubkey));
+      addCandidate(candidateWithAgentMetadata(user, managedAgentsByPubkey), {
+        includeSelected: deferredSearchQuery.length > 0,
+      });
     }
 
     for (const agent of relayAgentsQuery.data ?? []) {
@@ -162,27 +171,33 @@ export function useNewMessageRecipients({
         continue;
       }
 
-      addCandidate({
-        pubkey: agent.pubkey,
-        displayName: agent.name,
-        avatarUrl: null,
-        nip05Handle: null,
-        ownerPubkey: null,
-        isAgent: true,
-      });
+      addCandidate(
+        {
+          pubkey: agent.pubkey,
+          displayName: agent.name,
+          avatarUrl: null,
+          nip05Handle: null,
+          ownerPubkey: null,
+          isAgent: true,
+        },
+        { includeSelected: deferredSearchQuery.length > 0 },
+      );
     }
 
     for (const agent of managedAgentsQuery.data ?? []) {
-      addCandidate({
-        pubkey: agent.pubkey,
-        displayName: agent.name,
-        avatarUrl: null,
-        nip05Handle: null,
-        ownerPubkey: currentPubkey ?? null,
-        isAgent: true,
-        isManagedAgent: true,
-        personaId: agent.personaId,
-      });
+      addCandidate(
+        {
+          pubkey: agent.pubkey,
+          displayName: agent.name,
+          avatarUrl: null,
+          nip05Handle: null,
+          ownerPubkey: currentPubkey ?? null,
+          isAgent: true,
+          isManagedAgent: true,
+          personaId: agent.personaId,
+        },
+        { includeSelected: deferredSearchQuery.length > 0 },
+      );
     }
 
     const coalescedCandidates = coalesceAgentAutocompleteCandidates(
@@ -216,9 +231,18 @@ export function useNewMessageRecipients({
     managedAgentsQuery.isLoading ||
     relayAgentsQuery.isLoading ||
     channelsQuery.isLoading;
+  React.useEffect(() => {
+    if (isDirectoryLoading) {
+      return;
+    }
+
+    setDirectoryIdentityQuery(deferredSearchQuery);
+  }, [deferredSearchQuery, isDirectoryLoading]);
+  const isDirectorySettling =
+    isDirectoryLoading || directoryIdentityQuery !== deferredSearchQuery;
   const handleDirectoryScroll = useUserSearchFetchMoreOnScroll(
     userSearchQuery,
-    !hasReachedRecipientLimit,
+    !hasReachedRecipientLimit || deferredSearchQuery.length > 0,
   );
 
   const searchOwnerPubkeys = React.useMemo(
@@ -290,7 +314,7 @@ export function useNewMessageRecipients({
     deferredSearchQuery,
     handleDirectoryScroll,
     hasReachedRecipientLimit,
-    isDirectoryLoading,
+    isDirectoryLoading: isDirectorySettling,
     ownerProfiles: ownerProfilesQuery.data?.profiles,
     removeUser,
     reset,

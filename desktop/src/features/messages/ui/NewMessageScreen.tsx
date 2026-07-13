@@ -69,9 +69,9 @@ export function NewMessageScreen() {
   } = useNewMessageRecipients({ active: true, currentPubkey });
 
   const isSearchTransitionPending = searchQuery.trim() !== deferredSearchQuery;
-  const visibleSearchResults = isSearchTransitionPending ? [] : searchResults;
-  const showRecipientPicker =
-    isRecipientPickerOpen && !isPending && !hasReachedRecipientLimit;
+  const visibleSearchResults =
+    isSearchTransitionPending || isDirectoryLoading ? [] : searchResults;
+  const showRecipientPicker = isRecipientPickerOpen && !isPending;
   const highlightedRecipientIndex = React.useMemo(() => {
     if (!showRecipientPicker || visibleSearchResults.length === 0) {
       return -1;
@@ -141,6 +141,25 @@ export function NewMessageScreen() {
       searchInputRef.current?.focus({ preventScroll: true });
     },
     [selectUser],
+  );
+
+  const handleResultSelect = React.useCallback(
+    (user: Parameters<typeof selectUser>[0]) => {
+      const isSelected = selectedUsers.some(
+        (selectedUser) => selectedUser.pubkey === user.pubkey,
+      );
+      if (isSelected) {
+        setSearchQuery("");
+        setHighlightedRecipientPubkey(null);
+        setSubmitErrorMessage(null);
+        setIsRecipientPickerOpen(true);
+        searchInputRef.current?.focus({ preventScroll: true });
+        return;
+      }
+
+      handleSelectUser(user);
+    },
+    [handleSelectUser, selectedUsers, setSearchQuery],
   );
 
   const openDirectMessage = React.useCallback(async () => {
@@ -313,7 +332,7 @@ export function NewMessageScreen() {
                   autoCorrect="off"
                   className="h-7 min-w-32 flex-1 bg-transparent text-base outline-hidden placeholder:text-muted-foreground"
                   data-testid="new-dm-search"
-                  disabled={isPending || hasReachedRecipientLimit}
+                  disabled={isPending}
                   id="new-dm-search"
                   onChange={(event) => {
                     setSearchQuery(event.target.value);
@@ -404,7 +423,7 @@ export function NewMessageScreen() {
                     }
 
                     event.preventDefault();
-                    handleSelectUser(keyboardSelection);
+                    handleResultSelect(keyboardSelection);
                   }}
                   ref={searchInputRef}
                   role="combobox"
@@ -441,19 +460,28 @@ export function NewMessageScreen() {
               >
                 {visibleSearchResults.length > 0 ? (
                   <div>
-                    {visibleSearchResults.map((user) => (
-                      <NewMessageResultRow
-                        currentPubkey={currentPubkey}
-                        disabled={isPending || hasReachedRecipientLimit}
-                        isKeyboardHighlighted={
-                          highlightedRecipient?.pubkey === user.pubkey
-                        }
-                        key={user.pubkey}
-                        onSelect={handleSelectUser}
-                        ownerProfiles={ownerProfiles}
-                        user={user}
-                      />
-                    ))}
+                    {visibleSearchResults.map((user) => {
+                      const isSelected = selectedUsers.some(
+                        (selectedUser) => selectedUser.pubkey === user.pubkey,
+                      );
+                      return (
+                        <NewMessageResultRow
+                          currentPubkey={currentPubkey}
+                          disabled={
+                            isPending ||
+                            (hasReachedRecipientLimit && !isSelected)
+                          }
+                          isAlreadySelected={isSelected}
+                          isKeyboardHighlighted={
+                            highlightedRecipient?.pubkey === user.pubkey
+                          }
+                          key={user.pubkey}
+                          onSelect={handleResultSelect}
+                          ownerProfiles={ownerProfiles}
+                          user={user}
+                        />
+                      );
+                    })}
                   </div>
                 ) : isDirectoryLoading || isSearchTransitionPending ? (
                   <div
