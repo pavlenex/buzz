@@ -261,7 +261,10 @@ const overrides = new Map([
   // + updated adapter_availability_cached() signature (Option return, cold=None)
   // prevents false restart badge on newly restarted agents. Correctness fix;
   // load-bearing — required by Thufir's IMPORTANT findings. (+15 lines)
-  ["src-tauri/src/managed_agents/discovery.rs", 1245],
+  // bundle-acps: bundled ACP bridge check at the top of the resolution sweep
+  // (+7 lines). Temporary — the codex version-gate retirement later in the
+  // same series deletes far more from this file and ratchets this back down.
+  ["src-tauri/src/managed_agents/discovery.rs", 1252],
   // rebase over codex-acp-package-swap: its version-probe tests union with the
   // doctor-install-reliability nvm/login-shell/semver tests — each side alone
   // stayed under the 1000 default; the union exceeds it.
