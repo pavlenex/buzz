@@ -410,6 +410,31 @@ impl DesktopMeshRuntime {
         if let Ok(identity) = ensure_owner_identity() {
             payload["ownerId"] = serde_json::Value::String(identity.owner_id);
         }
+        let models = models_from_status_payload(Some(&payload));
+        payload["models"] = serde_json::to_value(&models)?;
+        let endpoint_addr = status.invite_token.unwrap_or_default();
+        let serve_targets = if self.mode == MeshNodeMode::Serve && !endpoint_addr.is_empty() {
+            models
+                .into_iter()
+                .map(|model| MeshServeTarget {
+                    model_id: model.id,
+                    model_name: model.name,
+                    endpoint_addr: endpoint_addr.clone(),
+                    node_name: payload
+                        .get("node_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                    capacity: None,
+                    reporter_pubkey: None,
+                    endpoint_id: endpoint_id_from_status(&payload, Some(&endpoint_addr)),
+                    device_id: None,
+                    device_name: None,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        payload["serveTargets"] = serde_json::to_value(serve_targets)?;
         Ok(payload)
     }
 
