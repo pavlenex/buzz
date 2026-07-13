@@ -268,7 +268,10 @@ const overrides = new Map([
   // (main's codex-install-auto-restart cache-warm growth stays).
   // bundled-adapter-doctor-copy: adapter_bundled computed in the discovery
   // sweep so the Doctor UI can hide the bundle path (+4 lines).
-  ["src-tauri/src/managed_agents/discovery.rs", 1134],
+  // claude-code-acp-fallback-retirement: the legacy command moved from the
+  // resolution sweep to identity-only aliases; +5 comment lines documenting
+  // the commands/aliases split that move makes load-bearing.
+  ["src-tauri/src/managed_agents/discovery.rs", 1139],
   // rebase over codex-acp-package-swap: its version-probe tests union with the
   // doctor-install-reliability nvm/login-shell/semver tests — each side alone
   // stayed under the 1000 default; the union exceeds it.
