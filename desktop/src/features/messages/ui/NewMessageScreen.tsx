@@ -377,7 +377,6 @@ export function NewMessageScreen() {
                   aria-controls="new-dm-results"
                   aria-expanded={showRecipientPicker}
                   aria-label="To"
-                  autoCapitalize="none"
                   autoComplete="off"
                   autoCorrect="off"
                   className="h-7 min-w-32 flex-1 bg-transparent text-base outline-hidden placeholder:text-muted-foreground"
