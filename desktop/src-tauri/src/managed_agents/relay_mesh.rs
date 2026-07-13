@@ -35,13 +35,14 @@ pub fn apply_relay_mesh_env(
         RELAY_MESH_API_KEY_PLACEHOLDER.to_string(),
     );
     env.insert("OPENAI_COMPAT_API".to_string(), "chat".to_string());
-    // Keep the combined prompt + response budget within small shared models.
-    // The router reserves roughly 25% headroom, so 4K output can reject an 8K
-    // model before the first turn once ACP/MCP context is included.
+    // Match Goose's OpenAI-compatible behavior for unknown local models: let
+    // MeshLLM enforce the selected model's discovered generation/context
+    // limits instead of imposing a harness-wide cap.
     env.insert(
-        "BUZZ_AGENT_MAX_OUTPUT_TOKENS".to_string(),
-        "1024".to_string(),
+        "OPENAI_COMPAT_OMIT_MAX_TOKENS".to_string(),
+        "true".to_string(),
     );
+    env.remove("BUZZ_AGENT_MAX_OUTPUT_TOKENS");
 }
 
 /// Resolve a record's relay-mesh config, typed field first.
@@ -185,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn native_provider_uses_a_small_model_safe_output_budget() {
+    fn native_provider_defers_output_limit_to_mesh_runtime() {
         let mut rec = fixture();
         rec.provider = Some(RELAY_MESH_PROVIDER_ID.to_string());
         rec.model = Some(RELAY_MESH_AUTO_MODEL_ID.to_string());
@@ -194,9 +195,10 @@ mod tests {
         apply_relay_mesh_env(&mut env, rec.provider.as_deref(), rec.model.as_deref());
 
         assert_eq!(
-            env.get("BUZZ_AGENT_MAX_OUTPUT_TOKENS").map(String::as_str),
-            Some("1024")
+            env.get("OPENAI_COMPAT_OMIT_MAX_TOKENS").map(String::as_str),
+            Some("true")
         );
+        assert!(!env.contains_key("BUZZ_AGENT_MAX_OUTPUT_TOKENS"));
     }
 
     #[test]
