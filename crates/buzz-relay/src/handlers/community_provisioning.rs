@@ -170,6 +170,29 @@ fn validate_domain_labels(domain: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// JSON body for `POST /operator/communities/transfer`.
+#[derive(Debug, Deserialize)]
+pub struct TransferCommunityRequest {
+    /// UUID of the community to transfer.
+    pub community_id: String,
+    /// 64-char hex pubkey of the new owner.
+    pub new_owner_pubkey: String,
+}
+
+/// JSON response from `POST /operator/communities/transfer`.
+#[derive(Debug, Serialize)]
+pub struct TransferCommunityResponse {
+    /// UUID of the transferred community.
+    pub community_id: String,
+    /// 64-char hex pubkey of the new owner.
+    pub new_owner_pubkey: String,
+    /// `"transferred"` or `"already_owner"`.
+    pub status: &'static str,
+    /// Hex pubkey of the previous owner, if one existed and was demoted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_owner: Option<String>,
+}
+
 /// Normalize and validate a host supplied to read-only operator endpoints.
 ///
 /// Unlike create, availability checks may accept non-canonical but normalizable

@@ -13,9 +13,13 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::Value;
+use uuid::Uuid;
+
+use buzz_core::{CommunityId, TenantContext};
 
 use crate::handlers::community_provisioning::{
     normalize_candidate_host, validate_pubkey_hex, ProvisionCommunityRequest,
+    TransferCommunityRequest, TransferCommunityResponse,
 };
 use crate::state::AppState;
 
@@ -211,6 +215,110 @@ pub async fn list_owned_communities(
     })))
 }
 
+/// Transfer ownership of a community to a new owner pubkey.
+///
+/// `POST /operator/communities/transfer`, NIP-98 signed by a pubkey in
+/// `RELAY_OPERATOR_PUBKEYS`, body:
+///
+/// ```json
+/// { "community_id": "<uuid>", "new_owner_pubkey": "<hex>" }
+/// ```
+///
+/// The previous owner is demoted to `member` (not `admin`). The transfer is
+/// instant and atomic at the database layer. Publication of the updated
+/// NIP-43 membership list is best-effort, matching the provision path.
+pub async fn transfer_community(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let _pubkey = authorize_operator_request(
+        &state,
+        &headers,
+        "POST",
+        "/operator/communities/transfer",
+        None,
+        Some(&body),
+    )
+    .await?;
+
+    let request: TransferCommunityRequest = serde_json::from_slice(&body).map_err(|e| {
+        api_error(
+            StatusCode::BAD_REQUEST,
+            &format!("invalid transfer-community JSON: {e}"),
+        )
+    })?;
+
+    let community_uuid = Uuid::parse_str(&request.community_id).map_err(|e| {
+        api_error(
+            StatusCode::BAD_REQUEST,
+            &format!("invalid community_id: {e}"),
+        )
+    })?;
+
+    let new_owner_pubkey = validate_pubkey_hex(&request.new_owner_pubkey).ok_or_else(|| {
+        api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid new_owner_pubkey: expected 64-char hex pubkey",
+        )
+    })?;
+
+    let community = CommunityId::from_uuid(community_uuid);
+
+    let result = state
+        .db
+        .transfer_ownership(community, &new_owner_pubkey)
+        .await
+        .map_err(|e| internal_error(&format!("transfer ownership: {e}")))?;
+
+    let (status, previous_owner) = match result {
+        buzz_db::relay_members::TransferResult::Transferred { previous_owner } => {
+            ("transferred", previous_owner)
+        }
+        buzz_db::relay_members::TransferResult::AlreadyOwner => ("already_owner", None),
+        buzz_db::relay_members::TransferResult::NoOwner => {
+            return Err(api_error(
+                StatusCode::NOT_FOUND,
+                "community has no owner to transfer from",
+            ));
+        }
+    };
+
+    // Best-effort NIP-43 membership snapshot publication — same pattern as
+    // provision_community. The DB mutation is already committed; a publication
+    // failure must not turn a success into an HTTP error.
+    if state.config.require_relay_membership {
+        if let Some(host) = state
+            .db
+            .lookup_community_host(community)
+            .await
+            .map_err(|e| internal_error(&format!("lookup community host: {e}")))?
+        {
+            let tenant = TenantContext::resolved(community, host);
+            if let Err(error) =
+                crate::handlers::side_effects::publish_nip43_membership_list(&tenant, &state).await
+            {
+                tracing::warn!(
+                    community = %community,
+                    error = %error,
+                    "ownership transferred but NIP-43 membership snapshot publication failed"
+                );
+            }
+        }
+    }
+
+    let response = TransferCommunityResponse {
+        community_id: request.community_id,
+        new_owner_pubkey,
+        status,
+        previous_owner,
+    };
+
+    Ok(Json(serde_json::to_value(response).map_err(|e| {
+        tracing::error!("failed to serialize transfer-community response: {e}");
+        internal_error("operator transfer response serialization failed")
+    })?))
+}
 /// Check whether a community host is available, returning the relay-canonical
 /// normalized authority used by create.
 pub async fn community_availability(
@@ -581,5 +689,215 @@ mod tests {
                     .is_some_and(|value| value == &owner_hex)
                 && tag.as_slice().get(2).is_some_and(|value| value == "owner")
         }));
+    }
+
+    /// Happy path: POST /operator/communities/transfer swaps ownership, demotes
+    /// the old owner to `member`, and publishes a NIP-43 snapshot reflecting the
+    /// new roles.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn happy_path_transfer_swaps_owner_and_demotes_old_to_member() {
+        let operator = Keys::generate();
+        let initial_owner = Keys::generate();
+        let new_owner = Keys::generate();
+        let Some(state) = operator_test_state(std::slice::from_ref(&operator)).await else {
+            return;
+        };
+
+        // Create a community with initial_owner.
+        let host = format!("community-{}.example", Uuid::new_v4().simple());
+        let create_body = serde_json::json!({
+            "host": host,
+            "initial_owner_pubkey": initial_owner.public_key().to_hex(),
+            "create_only": true,
+        })
+        .to_string();
+        let create_url = format!("http://{INGRESS_HOST}/operator/communities");
+        let create_auth =
+            nip98_auth_header(&operator, &create_url, "POST", Some(create_body.as_bytes()));
+        build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/operator/communities")
+                    .header(header::HOST, INGRESS_HOST)
+                    .header(header::AUTHORIZATION, create_auth)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(create_body))
+                    .expect("create request"),
+            )
+            .await
+            .expect("create response");
+
+        let community = state
+            .db
+            .lookup_community_by_host(&host)
+            .await
+            .expect("lookup community")
+            .expect("community exists");
+        let community_id = community.id.to_string();
+        let initial_owner_hex = initial_owner.public_key().to_hex();
+        let new_owner_hex = new_owner.public_key().to_hex();
+
+        // Transfer ownership.
+        let transfer_body = serde_json::json!({
+            "community_id": community_id,
+            "new_owner_pubkey": new_owner_hex,
+        })
+        .to_string();
+        let transfer_url = format!("http://{INGRESS_HOST}/operator/communities/transfer");
+        let transfer_auth = nip98_auth_header(
+            &operator,
+            &transfer_url,
+            "POST",
+            Some(transfer_body.as_bytes()),
+        );
+
+        let response = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/operator/communities/transfer")
+                    .header(header::HOST, INGRESS_HOST)
+                    .header(header::AUTHORIZATION, transfer_auth)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(transfer_body))
+                    .expect("transfer request"),
+            )
+            .await
+            .expect("transfer response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = read_json(response).await;
+        assert_eq!(
+            json.get("status").and_then(Value::as_str),
+            Some("transferred")
+        );
+        assert_eq!(
+            json.get("new_owner_pubkey").and_then(Value::as_str),
+            Some(new_owner_hex.as_str())
+        );
+        assert_eq!(
+            json.get("previous_owner").and_then(Value::as_str),
+            Some(initial_owner_hex.as_str())
+        );
+
+        // New owner is owner.
+        assert_eq!(
+            state
+                .db
+                .get_relay_member(community.id, &new_owner_hex)
+                .await
+                .expect("get new owner")
+                .expect("new owner exists")
+                .role,
+            "owner"
+        );
+        // Old owner is member (not admin).
+        assert_eq!(
+            state
+                .db
+                .get_relay_member(community.id, &initial_owner_hex)
+                .await
+                .expect("get old owner")
+                .expect("old owner exists")
+                .role,
+            "member"
+        );
+
+        // NIP-43 snapshot reflects the new roles.
+        let membership_events = state
+            .db
+            .query_events(&EventQuery {
+                kinds: Some(vec![KIND_NIP43_MEMBERSHIP_LIST as i32]),
+                global_only: true,
+                limit: Some(1),
+                ..EventQuery::for_community(community.id)
+            })
+            .await
+            .expect("query membership snapshot");
+        let snapshot = membership_events
+            .first()
+            .expect("membership snapshot published after transfer");
+        assert!(snapshot.event.tags.iter().any(|tag| {
+            tag.as_slice().first().is_some_and(|v| v == "member")
+                && tag.as_slice().get(1).is_some_and(|v| v == &new_owner_hex)
+                && tag.as_slice().get(2).is_some_and(|v| v == "owner")
+        }));
+        assert!(snapshot.event.tags.iter().any(|tag| {
+            tag.as_slice().first().is_some_and(|v| v == "member")
+                && tag
+                    .as_slice()
+                    .get(1)
+                    .is_some_and(|v| v == &initial_owner_hex)
+                && tag.as_slice().get(2).is_some_and(|v| v == "member")
+        }));
+    }
+
+    /// Transfer with an invalid community_id returns 400.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn transfer_with_invalid_community_id_returns_400() {
+        let operator = Keys::generate();
+        let new_owner = Keys::generate();
+        let Some(state) = operator_test_state(std::slice::from_ref(&operator)).await else {
+            return;
+        };
+        let body = serde_json::json!({
+            "community_id": "not-a-uuid",
+            "new_owner_pubkey": new_owner.public_key().to_hex(),
+        })
+        .to_string();
+        let url = format!("http://{INGRESS_HOST}/operator/communities/transfer");
+        let auth = nip98_auth_header(&operator, &url, "POST", Some(body.as_bytes()));
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/operator/communities/transfer")
+                    .header(header::HOST, INGRESS_HOST)
+                    .header(header::AUTHORIZATION, auth)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Transfer with an invalid new_owner_pubkey returns 400.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn transfer_with_invalid_pubkey_returns_400() {
+        let operator = Keys::generate();
+        let Some(state) = operator_test_state(std::slice::from_ref(&operator)).await else {
+            return;
+        };
+        let body = serde_json::json!({
+            "community_id": Uuid::new_v4().to_string(),
+            "new_owner_pubkey": "not-a-pubkey",
+        })
+        .to_string();
+        let url = format!("http://{INGRESS_HOST}/operator/communities/transfer");
+        let auth = nip98_auth_header(&operator, &url, "POST", Some(body.as_bytes()));
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/operator/communities/transfer")
+                    .header(header::HOST, INGRESS_HOST)
+                    .header(header::AUTHORIZATION, auth)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

@@ -2367,6 +2367,16 @@ impl Db {
         relay_members::bootstrap_owner(&self.pool, community, owner_pubkey).await
     }
 
+    /// Atomically transfers ownership of `community` to `new_owner_pubkey`,
+    /// demoting the previous owner(s) to `member`.
+    pub async fn transfer_ownership(
+        &self,
+        community: CommunityId,
+        new_owner_pubkey: &str,
+    ) -> Result<relay_members::TransferResult> {
+        relay_members::transfer_ownership(&self.pool, community, new_owner_pubkey).await
+    }
+
     /// Migrates existing `pubkey_allowlist` entries into `relay_members` for `community`.
     ///
     /// Idempotent — uses `ON CONFLICT DO NOTHING`. Returns the number of rows

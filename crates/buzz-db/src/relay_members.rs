@@ -281,6 +281,90 @@ pub async fn bootstrap_owner(
     Ok(())
 }
 
+/// The result of a transfer-ownership attempt.
+#[derive(Debug, PartialEq)]
+pub enum TransferResult {
+    /// Transfer completed: the new owner was upserted and the previous
+    /// owner(s) demoted to `member`.
+    Transferred {
+        /// Pubkey of the previous sole owner, if exactly one existed.
+        previous_owner: Option<String>,
+    },
+    /// The new owner pubkey is already the sole owner — nothing to do.
+    AlreadyOwner,
+    /// No owner row exists for this community (community may not exist).
+    NoOwner,
+}
+
+/// Atomically transfers ownership of `community` to `new_owner_pubkey`.
+///
+/// Runs in a single transaction:
+/// 1. Reads existing owner rows to detect no-op and error conditions.
+/// 2. Upserts `new_owner_pubkey` as `owner` (insert or promote).
+/// 3. Demotes every other owner in this community to `member` — **not**
+///    `admin`, per product decision: the former owner retains no management
+///    capabilities.
+///
+/// Scoped to one community — an ownership transfer in A never touches B.
+pub async fn transfer_ownership(
+    pool: &PgPool,
+    community: CommunityId,
+    new_owner_pubkey: &str,
+) -> Result<TransferResult> {
+    let pubkey = new_owner_pubkey.to_ascii_lowercase();
+    let mut tx = pool.begin().await?;
+
+    // 1. Read existing owners within the transaction so the check and the
+    //    mutation are atomic — no TOCTOU window between reading and writing.
+    let existing_owners: Vec<String> = sqlx::query_scalar(
+        "SELECT pubkey FROM relay_members WHERE community_id = $1 AND role = 'owner'",
+    )
+    .bind(community.as_uuid())
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if existing_owners.is_empty() {
+        tx.rollback().await?;
+        return Ok(TransferResult::NoOwner);
+    }
+
+    // Already the sole owner — no transfer needed.
+    if existing_owners.len() == 1 && existing_owners[0] == pubkey {
+        tx.rollback().await?;
+        return Ok(TransferResult::AlreadyOwner);
+    }
+
+    let previous_owner = if existing_owners.len() == 1 {
+        Some(existing_owners[0].clone())
+    } else {
+        existing_owners.iter().find(|p| **p != pubkey).cloned()
+    };
+
+    // 2. Upsert the new owner.
+    sqlx::query(
+        "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
+         VALUES ($1, $2, 'owner', NULL) \
+         ON CONFLICT (community_id, pubkey) DO UPDATE SET role = 'owner', updated_at = now()",
+    )
+    .bind(community.as_uuid())
+    .bind(&pubkey)
+    .execute(&mut *tx)
+    .await?;
+
+    // 3. Demote all other owners to member (not admin).
+    sqlx::query(
+        "UPDATE relay_members SET role = 'member', updated_at = now() \
+         WHERE community_id = $1 AND role = 'owner' AND pubkey <> $2",
+    )
+    .bind(community.as_uuid())
+    .bind(&pubkey)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(TransferResult::Transferred { previous_owner })
+}
+
 /// Migrates existing `pubkey_allowlist` entries into `relay_members` for
 /// `community` (the deployment's default community).
 ///
@@ -454,6 +538,191 @@ mod tests {
                 .await
                 .expect("is_relay_member B"),
             "owner bootstrapped in A must NOT be a member of B"
+        );
+    }
+
+    /// Transfer ownership: upserts new owner, demotes previous owner to
+    /// `member` (not `admin`), and returns the previous owner's pubkey.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn transfer_ownership_demotes_old_owner_to_member() {
+        let pool = setup_pool().await;
+        let community = make_test_community(&pool).await;
+        let old_owner = format!("{:064x}", Uuid::new_v4().as_u128());
+        let new_owner = format!("{:064x}", Uuid::new_v4().as_u128());
+
+        bootstrap_owner(&pool, community, &old_owner)
+            .await
+            .expect("bootstrap initial owner");
+
+        let result = transfer_ownership(&pool, community, &new_owner)
+            .await
+            .expect("transfer ownership");
+
+        assert_eq!(
+            result,
+            TransferResult::Transferred {
+                previous_owner: Some(old_owner.clone()),
+            }
+        );
+
+        // New owner is owner.
+        let new_role = get_relay_member(&pool, community, &new_owner)
+            .await
+            .expect("get new owner")
+            .expect("new owner exists")
+            .role;
+        assert_eq!(new_role, "owner");
+
+        // Old owner is member, not admin, not owner.
+        let old_role = get_relay_member(&pool, community, &old_owner)
+            .await
+            .expect("get old owner")
+            .expect("old owner still exists")
+            .role;
+        assert_eq!(old_role, "member");
+    }
+
+    /// Transferring to the current sole owner is a no-op (`AlreadyOwner`).
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn transfer_ownership_already_owner_is_noop() {
+        let pool = setup_pool().await;
+        let community = make_test_community(&pool).await;
+        let owner = format!("{:064x}", Uuid::new_v4().as_u128());
+
+        bootstrap_owner(&pool, community, &owner)
+            .await
+            .expect("bootstrap owner");
+
+        let result = transfer_ownership(&pool, community, &owner)
+            .await
+            .expect("transfer ownership to self");
+
+        assert_eq!(result, TransferResult::AlreadyOwner);
+
+        // Still owner.
+        let role = get_relay_member(&pool, community, &owner)
+            .await
+            .expect("get owner")
+            .expect("owner exists")
+            .role;
+        assert_eq!(role, "owner");
+    }
+
+    /// Transferring a community with no owner row returns `NoOwner`.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn transfer_ownership_no_owner_returns_no_owner() {
+        let pool = setup_pool().await;
+        let community = make_test_community(&pool).await;
+        let new_owner = format!("{:064x}", Uuid::new_v4().as_u128());
+
+        // No bootstrap — community exists but has no owner row.
+
+        let result = transfer_ownership(&pool, community, &new_owner)
+            .await
+            .expect("transfer ownership on empty community");
+
+        assert_eq!(result, TransferResult::NoOwner);
+    }
+
+    /// Transfer ownership is community-scoped: transferring in A does not
+    /// affect ownership in B.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn transfer_ownership_is_community_scoped() {
+        let pool = setup_pool().await;
+        let community_a = make_test_community(&pool).await;
+        let community_b = make_test_community(&pool).await;
+        let owner_a = format!("{:064x}", Uuid::new_v4().as_u128());
+        let owner_b = format!("{:064x}", Uuid::new_v4().as_u128());
+        let new_owner = format!("{:064x}", Uuid::new_v4().as_u128());
+
+        bootstrap_owner(&pool, community_a, &owner_a)
+            .await
+            .expect("bootstrap owner A");
+        bootstrap_owner(&pool, community_b, &owner_b)
+            .await
+            .expect("bootstrap owner B");
+
+        transfer_ownership(&pool, community_a, &new_owner)
+            .await
+            .expect("transfer A");
+
+        // A: new owner is owner, old owner is member.
+        assert_eq!(
+            get_relay_member(&pool, community_a, &new_owner)
+                .await
+                .expect("get new owner A")
+                .expect("exists")
+                .role,
+            "owner"
+        );
+        assert_eq!(
+            get_relay_member(&pool, community_a, &owner_a)
+                .await
+                .expect("get old owner A")
+                .expect("exists")
+                .role,
+            "member"
+        );
+
+        // B: untouched — owner_b is still owner, new_owner is not a member.
+        assert_eq!(
+            get_relay_member(&pool, community_b, &owner_b)
+                .await
+                .expect("get owner B")
+                .expect("exists")
+                .role,
+            "owner"
+        );
+        assert!(
+            !is_relay_member(&pool, community_b, &new_owner)
+                .await
+                .expect("is_relay_member B"),
+            "new owner of A must NOT be a member of B"
+        );
+    }
+
+    /// Transfer ownership to someone who is already a member promotes them to
+    /// owner and demotes the old owner to member.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn transfer_ownership_promotes_existing_member() {
+        let pool = setup_pool().await;
+        let community = make_test_community(&pool).await;
+        let old_owner = format!("{:064x}", Uuid::new_v4().as_u128());
+        let existing_member = format!("{:064x}", Uuid::new_v4().as_u128());
+
+        bootstrap_owner(&pool, community, &old_owner)
+            .await
+            .expect("bootstrap owner");
+        add_relay_member(&pool, community, &existing_member, "member", None)
+            .await
+            .expect("add member");
+
+        let result = transfer_ownership(&pool, community, &existing_member)
+            .await
+            .expect("transfer to existing member");
+
+        assert!(matches!(result, TransferResult::Transferred { .. }));
+
+        assert_eq!(
+            get_relay_member(&pool, community, &existing_member)
+                .await
+                .expect("get new owner")
+                .expect("exists")
+                .role,
+            "owner"
+        );
+        assert_eq!(
+            get_relay_member(&pool, community, &old_owner)
+                .await
+                .expect("get old owner")
+                .expect("exists")
+                .role,
+            "member"
         );
     }
 }
