@@ -197,7 +197,9 @@ const overrides = new Map([
   // checkAcpNodeRuntime wrapper for the bundled-bridge Node.js doctor check
   // (+35 lines on rebase union with Git Bash Doctor discovery). Queued to
   // split with the rest of this file.
-  ["src/shared/api/tauri.ts", 1339],
+  // bundled-adapter-doctor-copy: adapter_bundled field on
+  // RawAcpRuntimeCatalogEntry + mapper passthrough (+3 lines).
+  ["src/shared/api/tauri.ts", 1342],
   // doctor-npm-eacces-preflight: hint field added to InstallStepResult (+1 line).
   // doctor-install-reliability: AuthStatus tagged union + nodeRequired/authStatus/
   // loginHint fields on AcpRuntimeCatalogEntry (+14 lines). Load-bearing new feature.
@@ -210,7 +212,9 @@ const overrides = new Map([
   // bundled-bridge Node.js doctor check (+23 lines on rebase union with
   // main's Git Bash prerequisite type growth); "adapter_outdated"
   // availability retired with the codex version gate (-1 line).
-  ["src/shared/api/types.ts", 1060],
+  // bundled-adapter-doctor-copy: adapterBundled field on
+  // AcpRuntimeCatalogEntry (+2 lines).
+  ["src/shared/api/types.ts", 1062],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
@@ -262,7 +266,9 @@ const overrides = new Map([
   // codex_adapter_availability/is_outdated, AdapterOutdated arm) made
   // obsolete by pinned bundling; ratcheted down to bank the deletions
   // (main's codex-install-auto-restart cache-warm growth stays).
-  ["src-tauri/src/managed_agents/discovery.rs", 1130],
+  // bundled-adapter-doctor-copy: adapter_bundled computed in the discovery
+  // sweep so the Doctor UI can hide the bundle path (+4 lines).
+  ["src-tauri/src/managed_agents/discovery.rs", 1134],
   // rebase over codex-acp-package-swap: its version-probe tests union with the
   // doctor-install-reliability nvm/login-shell/semver tests — each side alone
   // stayed under the 1000 default; the union exceeds it.
