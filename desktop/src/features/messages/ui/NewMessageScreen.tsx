@@ -215,7 +215,7 @@ export function NewMessageScreen() {
 
       try {
         await sendMessageMutation.mutateAsync({
-          channelId: directMessage.id,
+          targetChannel: directMessage,
           content,
           mentionPubkeys,
           mediaTags,
