@@ -119,7 +119,7 @@ type AppSidebarProps = {
     templateId?: string;
   }) => Promise<void>;
   onOpenAddWorkspace: () => void;
-  onSendFeedback: () => void;
+  onSendFeedback?: () => void;
   onHideDm: (channelId: string) => void;
   onMarkChannelUnread: (channelId: string) => void;
   onMarkChannelRead: (

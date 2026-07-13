@@ -20,7 +20,7 @@ type SidebarProfileCardProps = {
   isPresencePending?: boolean;
   onOpenAddWorkspace: () => void;
   onOpenSettings: (section?: "profile" | "appearance") => void;
-  onSendFeedback: () => void;
+  onSendFeedback?: () => void;
   onRemoveWorkspace: (id: string) => void;
   onSetPresenceStatus?: (status: PresenceStatus) => void;
   onSetUserStatus: (text: string, emoji: string) => void;
