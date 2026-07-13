@@ -236,6 +236,7 @@ mod tests {
 
     fn persona(id: &str, source_team: Option<&str>, slug: Option<&str>) -> AgentDefinition {
         AgentDefinition {
+            mcp_servers: vec![],
             id: id.to_string(),
             display_name: id.to_string(),
             avatar_url: None,
@@ -275,6 +276,7 @@ mod tests {
 
     fn agent(name: &str, persona_id: Option<&str>) -> ManagedAgentRecord {
         ManagedAgentRecord {
+            mcp_servers: vec![],
             pubkey: String::new(),
             name: name.to_string(),
             persona_id: persona_id.map(|s| s.to_string()),

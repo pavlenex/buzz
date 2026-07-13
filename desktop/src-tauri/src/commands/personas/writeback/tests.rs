@@ -31,6 +31,7 @@ fn persona_with_prompt(
     system_prompt: &str,
 ) -> AgentDefinition {
     AgentDefinition {
+        mcp_servers: vec![],
         id: "test-id".to_string(),
         display_name: display_name.to_string(),
         avatar_url: avatar_url.map(str::to_string),
@@ -630,6 +631,7 @@ fn test_find_team_returns_none_when_no_match() {
 /// Build an AgentDefinition matching the legacy incident shape.
 fn legacy_persona(source_team: &str, runtime: Option<&str>) -> AgentDefinition {
     AgentDefinition {
+        mcp_servers: vec![],
         id: "ab5c038c-1b12-46e2-8283-d6f7c0606fce".to_string(),
         display_name: "Paul Updated".to_string(),
         avatar_url: None,

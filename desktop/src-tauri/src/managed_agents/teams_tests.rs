@@ -52,6 +52,7 @@ fn sort_teams_empty_is_noop() {
 
 fn persona(id: &str, name: &str, prompt: &str) -> AgentDefinition {
     AgentDefinition {
+        mcp_servers: vec![],
         id: id.to_string(),
         display_name: name.to_string(),
         avatar_url: None,

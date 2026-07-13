@@ -333,6 +333,7 @@ pub fn import_team_from_directory(
             env_vars: crate::managed_agents::env_vars::filter_derived_provider_model_env_vars(
                 p.runtime_env_vars.iter().cloned(),
             ),
+            mcp_servers: Vec::new(),
             respond_to: None,
             respond_to_allowlist: Vec::new(),
             parallelism: None,
@@ -571,6 +572,7 @@ pub fn sync_team_from_dir(
                 env_vars: crate::managed_agents::env_vars::filter_derived_provider_model_env_vars(
                     dir_persona.runtime_env_vars.iter().cloned(),
                 ),
+                mcp_servers: Vec::new(),
                 respond_to: None,
                 respond_to_allowlist: Vec::new(),
                 parallelism: None,
