@@ -119,21 +119,20 @@ fn normalized_roster_always_includes_self_and_dedupes() {
 
 fn signed_status_event(content: serde_json::Value) -> nostr::Event {
     let keys = nostr::Keys::generate();
-    nostr::EventBuilder::new(nostr::Kind::Custom(30_621), content.to_string())
-        .sign_with_keys(&keys)
-        .expect("test event signs")
+    nostr::EventBuilder::new(
+        nostr::Kind::Custom(super::KIND_BUZZ_MESH_MEMBER_STATUS),
+        content.to_string(),
+    )
+    .sign_with_keys(&keys)
+    .expect("test event signs")
 }
 
-fn signed_reporter_status(reporter: &str, owner_id: &str) -> nostr::Event {
-    let keys = nostr::Keys::generate();
-    nostr::EventBuilder::new(
-        nostr::Kind::Custom(30_621),
-        json!({ "ownerId": owner_id, "serveTargets": [] }).to_string(),
+fn signed_reporter_status(reporter_secret: &str, owner_id: &str) -> nostr::Event {
+    let keys = nostr::Keys::parse(reporter_secret).expect("valid reporter secret");
+    super::coordinator::build_status_report_event(
+        json!({ "ownerId": owner_id, "serveTargets": [] }),
     )
-    .tag(
-        nostr::Tag::parse(["d", &format!("buzz-relay-mesh:{reporter}")])
-            .expect("valid reporter tag"),
-    )
+    .expect("status builder")
     .sign_with_keys(&keys)
     .expect("test event signs")
 }
@@ -168,13 +167,17 @@ fn owner_ids_from_events_collects_sorted_deduped_roster() {
 
 #[test]
 fn owner_roster_intersects_status_reporters_with_current_members() {
-    let current_member = "a".repeat(64);
-    let removed_member = "b".repeat(64);
-    let nonmember = "c".repeat(64);
+    let current_secret = "1".repeat(64);
+    let removed_secret = "2".repeat(64);
+    let nonmember_secret = "3".repeat(64);
+    let current_member = nostr::Keys::parse(&current_secret)
+        .unwrap()
+        .public_key()
+        .to_hex();
     let events = vec![
-        signed_reporter_status(&current_member, "owner-current"),
-        signed_reporter_status(&removed_member, "owner-removed"),
-        signed_reporter_status(&nonmember, "owner-nonmember"),
+        signed_reporter_status(&current_secret, "owner-current"),
+        signed_reporter_status(&removed_secret, "owner-removed"),
+        signed_reporter_status(&nonmember_secret, "owner-nonmember"),
         signed_membership_event(std::slice::from_ref(&current_member)),
     ];
 
@@ -187,8 +190,8 @@ fn owner_roster_intersects_status_reporters_with_current_members() {
 #[test]
 fn owner_roster_without_membership_list_preserves_published_owners() {
     let events = vec![
-        signed_reporter_status(&"a".repeat(64), "owner-a"),
-        signed_reporter_status(&"b".repeat(64), "owner-b"),
+        signed_reporter_status(&"1".repeat(64), "owner-a"),
+        signed_reporter_status(&"2".repeat(64), "owner-b"),
     ];
 
     assert_eq!(

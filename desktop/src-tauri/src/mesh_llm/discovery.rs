@@ -79,8 +79,7 @@ pub fn availability_from_events(events: Vec<nostr::Event>) -> MeshAvailability {
         return MeshAvailability::unavailable("Buzz shared compute status is not published yet");
     }
 
-    // Relay status is now per reporter (d=buzz-relay-mesh:<pubkey>), so a
-    // query returns multiple replaceable events. Aggregate them; do not pick the
+    // Status is replaceable per member pubkey, so a query returns multiple events. Aggregate them; do not pick the
     // newest single event or one member's machines hide everyone else's.
     let mut all_targets = Vec::<MeshServeTarget>::new();
     let mut all_models = Vec::<MeshModelOption>::new();
@@ -175,15 +174,9 @@ pub fn relay_membership_filter() -> serde_json::Value {
 }
 
 fn reporter_pubkey_from_status_event(event: &nostr::Event) -> Option<String> {
-    event.tags.iter().find_map(|tag| {
-        let slice = tag.as_slice();
-        let d = slice.get(1)?;
-        if slice.first().is_some_and(|name| name == "d") {
-            d.strip_prefix("buzz-relay-mesh:").map(ToString::to_string)
-        } else {
-            None
-        }
-    })
+    // Discovery notes are signed by the member that owns the MeshLLM identity.
+    // The generic relay only stores/queries them; it is not an identity oracle.
+    Some(event.pubkey.to_hex())
 }
 
 pub(super) fn enrich_status_payload_identity(

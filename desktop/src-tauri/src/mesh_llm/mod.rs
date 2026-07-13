@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
 
 mod coordinator;
-pub(crate) use coordinator::{
-    publish_current_status_once, publish_stopped_status_once, RelayMeshConnectRequest,
-};
-pub use coordinator::{spawn_listener, start_client, MeshCoordinator};
+pub(crate) use coordinator::{publish_current_status_once, publish_stopped_status_once};
+pub use coordinator::{spawn_listener, MeshCoordinator, KIND_BUZZ_MESH_MEMBER_STATUS};
 
 mod discovery;
 pub use discovery::{
@@ -27,7 +25,7 @@ use std::time::Duration;
 
 const DEFAULT_MESH_API_PORT: u16 = 9337;
 const DEFAULT_MESH_CONSOLE_PORT: u16 = 3131;
-const MESH_STATUS_KIND: u64 = 30_621;
+const MESH_STATUS_KIND: u64 = KIND_BUZZ_MESH_MEMBER_STATUS as u64;
 const MESH_API_PORT_ENV: &str = "BUZZ_MESH_API_PORT";
 const MESH_CONSOLE_PORT_ENV: &str = "BUZZ_MESH_CONSOLE_PORT";
 /// Iroh relay tunneling for symmetric-NAT peers. Unset/empty/"1"/"default" =
@@ -169,7 +167,7 @@ pub struct StartMeshNodeRequest {
     #[serde(default)]
     pub join_token: Option<String>,
     /// Mesh owner ids admitted to this node (the member roster from
-    /// relay-signed status notes). `None` = caller did not resolve a roster
+    /// member-signed discovery notes). `None` = caller did not resolve a roster
     /// (tests, direct invocations): the node runs without allowlist
     /// enforcement, matching an open relay. `Some` = enforce
     /// `TrustPolicy::Allowlist` over exactly these owners (self is always
