@@ -1111,23 +1111,17 @@ test.describe("inbox stable-conversation regressions", () => {
   }) => {
     // Regression: after the deliberate-selection center fires (once, at
     // thread-context settle), reactions fetched for context messages above the
-    // selected one add ~36px per reacted message to the layout.  Without drift
-    // compensation the selected message slides down/out of center while
-    // scrollTop stays numerically fixed.
+    // selected one add ~36px per reacted message to the layout. The real inbox
+    // anchor hold must preserve the selected message while applying one scrollBy.
     //
-    // Fix: after the center fires, capture the selected row's viewport offset
-    // and compensate with scrollBy(0, drift) on every subsequent message-list
-    // commit.  Release on user interaction.
+    // The computed-style assertion below is a declaration-contract tripwire for
+    // the exclusive-compensator design: native anchoring must stay disabled on
+    // this container. Chromium's competing native adjustment is not
+    // deterministically observable in this React-backed geometry.
     //
-    // This test must FAIL at 5d20801b9 (no hold compensation, selected message
-    // drifts out of center on reaction arrival) and PASS with the fix.
-    //
-    // Fixture (same shape as test 5):
-    //   - fetchRoot + 10 older replies in mockMessages only (fetch path).
-    //   - fetchNewest (reply to fetchRoot) in feed as representative.
-    //   - Click fetchNewest → center after fetch settle.
-    //   - Emit kind:7 reaction events targeting older replies ABOVE fetchNewest.
-    //   - Assert selected message stays in viewport; spy count stays 1.
+    // Fixture: fetchRoot + ordered replies are loaded through the context
+    // fetch. The selected reply is centered, then kind:7 events hydrate rows
+    // currently visible between the viewport top and selected row.
 
     await installMockBridge(page);
     await page.goto("/");
@@ -1147,6 +1141,7 @@ test.describe("inbox stable-conversation regressions", () => {
           channelName: "general",
           content: "Reaction-drift test root.",
           pubkey: senderPubkey,
+          createdAt: Math.floor(Date.now() / 1000) - 20,
           id: "e0".repeat(32),
         });
 
@@ -1159,6 +1154,7 @@ test.describe("inbox stable-conversation regressions", () => {
             content: `Reaction-drift older reply ${i} — long enough to occupy vertical space so reactions adding height push the selected message out of center when uncompensated.`,
             parentEventId: fetchRoot.id,
             pubkey: senderPubkey,
+            createdAt: Math.floor(Date.now() / 1000) - 20 + i,
             id: `e${i.toString(16).padStart(1, "0")}`.repeat(32),
           });
           olderReplyIds.push(reply.id);
@@ -1171,6 +1167,7 @@ test.describe("inbox stable-conversation regressions", () => {
           parentEventId: fetchRoot.id,
           pubkey: senderPubkey,
           mentionPubkeys: [currentPubkey],
+          createdAt: Math.floor(Date.now() / 1000) - 8,
           id: "ef".repeat(32),
         });
 
@@ -1182,6 +1179,7 @@ test.describe("inbox stable-conversation regressions", () => {
             content: `Reaction-drift later reply ${i} — provides content below the selected message for a non-clamped center.`,
             parentEventId: fetchRoot.id,
             pubkey: senderPubkey,
+            createdAt: Math.floor(Date.now() / 1000) + i,
             id: `f${i.toString(16).padStart(1, "0")}`.repeat(32),
           });
         }
@@ -1249,13 +1247,60 @@ test.describe("inbox stable-conversation regressions", () => {
     expect(msgCenterOffsetBeforeReactions).not.toBeNull();
     expect(await getScrollIntoViewCount(page)).toBe(1);
 
-    // ── Emit late reactions targeting messages ABOVE fetchNewest ──────
-    // These simulate the post-settle reaction hydration from
-    // useInboxThreadContext's fetchAuxEventsByReference call.  kind:7 events
-    // with ["e", <olderReplyId>] tags arrive via the channel live subscription
-    // and feed into channelMessages → reactionEvents → messages prop, causing
-    // height growth above the selected row.  Targeting 5 of the 10 older
-    // replies produces ~5 × 36px ≈ 180px of drift when uncompensated.
+    // Select rows inside the viewport between its top and the selected row.
+    // Chromium's native anchor is above this interval, so its correction and
+    // the inbox hold target the same growth. This makes a double correction
+    // observable when native anchoring is accidentally left enabled.
+    const visibleOlderReplyNumbers = await page.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>(
+        '[data-testid="home-inbox-detail"] [aria-busy]',
+      );
+      const selected = document.querySelector<HTMLElement>(
+        '[data-testid="home-inbox-selected-message"]',
+      );
+      if (!pane || !selected) return [];
+      const paneTop = pane.getBoundingClientRect().top;
+      const selectedTop = selected.getBoundingClientRect().top;
+      return [
+        ...document.querySelectorAll<HTMLElement>(
+          '[data-testid="home-inbox-context-message"]',
+        ),
+      ]
+        .flatMap((row) => {
+          const match = row.textContent?.match(
+            /Reaction-drift older reply (\d+)/,
+          );
+          const rect = row.getBoundingClientRect();
+          return match && rect.top >= paneTop && rect.bottom <= selectedTop
+            ? [Number(match[1])]
+            : [];
+        })
+        .slice(-4);
+    });
+    expect(visibleOlderReplyNumbers.length).toBeGreaterThanOrEqual(3);
+
+    const scrollTopBeforeReactions = await page.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>(
+        '[data-testid="home-inbox-detail"] [aria-busy]',
+      );
+      if (!pane) return null;
+      const originalScrollBy = pane.scrollBy.bind(pane);
+      const calls: number[] = [];
+      pane.scrollBy = (...args) => {
+        calls.push(
+          typeof args[0] === "number" ? (args[1] ?? 0) : (args[0]?.top ?? 0),
+        );
+        return originalScrollBy(...args);
+      };
+      (
+        window as Window & { __inboxHoldScrollByCalls?: () => number[] }
+      ).__inboxHoldScrollByCalls = () => calls;
+      return pane.scrollTop;
+    });
+    expect(scrollTopBeforeReactions).not.toBeNull();
+
+    // ── Emit late reactions BETWEEN viewport top and fetchNewest ──────
+    // The reaction events cause a real React commit in the inbox context.
     await page.evaluate(
       ({ senderPubkey, targetIds }) => {
         const win = window as MockWindow;
@@ -1273,8 +1318,9 @@ test.describe("inbox stable-conversation regressions", () => {
       },
       {
         senderPubkey: TEST_IDENTITIES.bob.pubkey,
-        // React to the first 5 older replies (all above fetchNewest).
-        targetIds: olderReplyIds.slice(0, 5),
+        targetIds: visibleOlderReplyNumbers.map(
+          (number) => olderReplyIds[number - 1],
+        ),
       },
     );
 
@@ -1290,11 +1336,8 @@ test.describe("inbox stable-conversation regressions", () => {
       );
     });
 
-    // ── Assert: selected message retains its post-center viewport offset ─
-    // With the fix: the layout effect fires on messages change, measures drift,
-    // and calls scrollBy(0, drift) to preserve fetchNewest's actual centered
-    // position. Without the fix it drifts ~180px down (5 reactions × 36px).
-    const msgCenterOffsetAfterReactions = await page.evaluate(() => {
+    // ── Assert: the hold is the sole compensator ───────────────────────
+    const geometryAfterReactions = await page.evaluate(() => {
       const selectedMsg = document.querySelector<HTMLElement>(
         '[data-testid="home-inbox-selected-message"]',
       );
@@ -1304,21 +1347,43 @@ test.describe("inbox stable-conversation regressions", () => {
       if (!selectedMsg || !pane) return null;
       const paneRect = pane.getBoundingClientRect();
       const msgRect = selectedMsg.getBoundingClientRect();
-      const msgCenter = msgRect.top + msgRect.height / 2;
-      const paneCenter = paneRect.top + paneRect.height / 2;
-      // Positive = selected message is below pane center.  Without the fix
-      // this grows by ~180px as reactions add height above the anchor.
-      return msgCenter - paneCenter;
+      return {
+        centerOffset:
+          msgRect.top +
+          msgRect.height / 2 -
+          (paneRect.top + paneRect.height / 2),
+        scrollByCalls:
+          (
+            window as Window & {
+              __inboxHoldScrollByCalls?: () => number[];
+            }
+          ).__inboxHoldScrollByCalls?.() ?? [],
+        scrollTop: pane.scrollTop,
+        overflowAnchor: getComputedStyle(pane).overflowAnchor,
+      };
     });
-    expect(msgCenterOffsetAfterReactions).not.toBeNull();
-    // With the fix the offset stays where the deliberate center placed it.
-    // Without the fix, late reaction height moves it down by ~180px.
+    expect(geometryAfterReactions).not.toBeNull();
+    // This is the actual element assigned to `scrollContainerRef` in
+    // InboxDetailPane. Guard the CSS contract rather than implying this
+    // reaction geometry deterministically exposes Chromium's native adjustment.
+    expect(geometryAfterReactions?.overflowAnchor).toBe("none");
+    const scrollByCalls = geometryAfterReactions?.scrollByCalls ?? [];
+    expect(scrollByCalls).toHaveLength(1);
+    const growth = scrollByCalls[0] ?? 0;
+    expect(growth).toBeGreaterThan(0);
     expect(
       Math.abs(
-        (msgCenterOffsetAfterReactions ?? Number.MAX_SAFE_INTEGER) -
+        (geometryAfterReactions?.centerOffset ?? Number.MAX_SAFE_INTEGER) -
           (msgCenterOffsetBeforeReactions ?? 0),
       ),
-    ).toBeLessThan(30);
+    ).toBeLessThan(2);
+    expect(
+      Math.abs(
+        (geometryAfterReactions?.scrollTop ?? Number.MAX_SAFE_INTEGER) -
+          (scrollTopBeforeReactions ?? 0) -
+          growth,
+      ),
+    ).toBeLessThan(2);
 
     // ── Assert: scrollIntoView spy count is still 1 ───────────────────
     // Drift compensation uses scrollBy — must NOT call scrollIntoView again.
@@ -1357,6 +1422,7 @@ test.describe("inbox stable-conversation regressions", () => {
           channelName: "general",
           content: "Reaction-drift test root.",
           pubkey: senderPubkey,
+          createdAt: Math.floor(Date.now() / 1000) - 20,
           id: "e0".repeat(32),
         });
 
@@ -1369,6 +1435,7 @@ test.describe("inbox stable-conversation regressions", () => {
             content: `Reaction-drift older reply ${i} — long enough to occupy vertical space so reactions adding height push the selected message out of center when uncompensated.`,
             parentEventId: fetchRoot.id,
             pubkey: senderPubkey,
+            createdAt: Math.floor(Date.now() / 1000) - 20 + i,
             id: `e${i.toString(16).padStart(1, "0")}`.repeat(32),
           });
           olderReplyIds.push(reply.id);
@@ -1381,6 +1448,7 @@ test.describe("inbox stable-conversation regressions", () => {
           parentEventId: fetchRoot.id,
           pubkey: senderPubkey,
           mentionPubkeys: [currentPubkey],
+          createdAt: Math.floor(Date.now() / 1000) - 8,
           id: "ef".repeat(32),
         });
 
@@ -1388,11 +1456,12 @@ test.describe("inbox stable-conversation regressions", () => {
         // be truly centered rather than clamped at the scroll container floor.
 
         for (let i = 1; i <= 5; i++) {
-          const reply = emit({
+          emit({
             channelName: "general",
             content: `Reaction-drift later reply ${i} — provides content below the selected message for a non-clamped center.`,
             parentEventId: fetchRoot.id,
             pubkey: senderPubkey,
+            createdAt: Math.floor(Date.now() / 1000) + i,
             id: `f${i.toString(16).padStart(1, "0")}`.repeat(32),
           });
         }

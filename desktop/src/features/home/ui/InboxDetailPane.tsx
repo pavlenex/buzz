@@ -200,12 +200,11 @@ export function InboxDetailPane({
   //
   // After the deliberate-selection center fires, reactions, channel-window
   // merges, and image decodes can add content ABOVE the selected message.
-  // The browser's native scroll anchoring pins the *topmost visible row*, so
-  // growth between that row and the selected message pushes the selected row
-  // down without compensation — producing the "correct snap → brief pause →
-  // jumps up 2-3 messages" symptom.
+  // The scroll container disables browser native anchoring, leaving this hold
+  // as the sole compensator; two active compensators would apply the same
+  // correction twice and pull the selected row off center.
   //
-  // Fix (mirrors useAnchoredScroll.ts:423-433): after the center fires,
+  // After the center fires,
   // hold the selected row's absolute position within the scroll container's
   // content (invariant under user scroll: scrollBy on same axis changes both
   // bcrect.top and scrollTop by the same amount, so the sum is stable).  On
@@ -719,7 +718,7 @@ export function InboxDetailPane({
 
         <div
           aria-busy={isThreadContextLoading}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-32"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-32 [overflow-anchor:none]"
           ref={scrollContainerRef}
         >
           <div ref={contentRef}>
