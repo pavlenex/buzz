@@ -4,8 +4,7 @@ use super::overrides::{divergent_agent_command_override, update_time_agent_comma
 use super::{
     apply_agent_command_update, classify_runtime, codex_adapter_availability,
     codex_adapter_is_outdated, command_search_dirs, create_time_agent_command_override,
-    default_agent_command,
-    effective_agent_command, find_nvm_default_bin, find_via_login_shell,
+    default_agent_command, effective_agent_command, find_nvm_default_bin, find_via_login_shell,
     is_login_shell_path_uninit, is_safe_nvm_tag, managed_agent_avatar_url, normalize_agent_args,
     parse_semver_tag, probe_codex_acp_major_version, record_agent_command,
     refresh_login_shell_path, BUZZ_AGENT_AVATAR_URL, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL,
@@ -43,6 +42,24 @@ fn resolves_known_avatar_for_command_paths_and_aliases() {
 #[test]
 fn returns_none_for_unknown_commands() {
     assert!(managed_agent_avatar_url("custom-agent").is_none());
+}
+
+#[test]
+fn command_search_prefers_current_build_profile() {
+    let dirs = command_search_dirs();
+    let debug_index = dirs
+        .iter()
+        .position(|path| path.ends_with("target/debug"))
+        .expect("debug search directory");
+    let release_index = dirs
+        .iter()
+        .position(|path| path.ends_with("target/release"))
+        .expect("release search directory");
+    if cfg!(debug_assertions) {
+        assert!(debug_index < release_index);
+    } else {
+        assert!(release_index < debug_index);
+    }
 }
 
 #[test]

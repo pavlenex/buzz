@@ -473,7 +473,7 @@ fn resolve_global_fallback_when_record_and_persona_have_none() {
 #[test]
 fn inherited_shared_compute_translates_to_supported_agent_transport() {
     let record = bare_record();
-    let personas: Vec<PersonaRecord> = vec![];
+    let personas: Vec<AgentDefinition> = vec![];
     let global = GlobalAgentConfig {
         model: Some("auto".to_string()),
         provider: Some(super::super::RELAY_MESH_PROVIDER_ID.to_string()),
