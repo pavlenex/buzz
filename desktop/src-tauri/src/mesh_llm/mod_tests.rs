@@ -117,16 +117,6 @@ fn normalized_roster_always_includes_self_and_dedupes() {
     );
 }
 
-fn signed_status_event(content: serde_json::Value) -> nostr::Event {
-    let keys = nostr::Keys::generate();
-    nostr::EventBuilder::new(
-        nostr::Kind::Custom(super::KIND_BUZZ_MESH_MEMBER_STATUS),
-        content.to_string(),
-    )
-    .sign_with_keys(&keys)
-    .expect("test event signs")
-}
-
 fn signed_reporter_status(reporter_secret: &str, owner_id: &str) -> nostr::Event {
     let keys = nostr::Keys::parse(reporter_secret).expect("valid reporter secret");
     super::coordinator::build_status_report_event(
@@ -151,12 +141,15 @@ fn signed_membership_event(members: &[String]) -> nostr::Event {
 
 #[test]
 fn owner_ids_from_events_collects_sorted_deduped_roster() {
+    let secret_a = "1".repeat(64);
+    let secret_b = "2".repeat(64);
+    let member_a = nostr::Keys::parse(&secret_a).unwrap().public_key().to_hex();
+    let member_b = nostr::Keys::parse(&secret_b).unwrap().public_key().to_hex();
     let events = vec![
-        signed_status_event(json!({ "ownerId": "owner-b", "serveTargets": [] })),
-        signed_status_event(json!({ "owner_id": "owner-a" })), // snake_case accepted
-        signed_status_event(json!({ "ownerId": "owner-b" })),  // duplicate
-        signed_status_event(json!({ "serveTargets": [] })),    // pre-upgrade note: no owner id
-        signed_status_event(json!({ "ownerId": "" })),         // empty filtered
+        signed_reporter_status(&secret_b, "owner-b"),
+        signed_reporter_status(&secret_a, "owner-a"),
+        signed_reporter_status(&secret_b, "owner-b"), // duplicate
+        signed_membership_event(&[member_a, member_b]),
     ];
     assert_eq!(
         super::owner_ids_from_events(&events),
@@ -188,14 +181,11 @@ fn owner_roster_intersects_status_reporters_with_current_members() {
 }
 
 #[test]
-fn owner_roster_without_membership_list_preserves_published_owners() {
+fn owner_roster_without_membership_list_fails_closed() {
     let events = vec![
         signed_reporter_status(&"1".repeat(64), "owner-a"),
         signed_reporter_status(&"2".repeat(64), "owner-b"),
     ];
 
-    assert_eq!(
-        super::owner_ids_from_events(&events),
-        vec!["owner-a".to_string(), "owner-b".to_string()]
-    );
+    assert!(super::owner_ids_from_events(&events).is_empty());
 }

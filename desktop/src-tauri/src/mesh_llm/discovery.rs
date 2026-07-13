@@ -16,21 +16,20 @@ fn dedupe_targets(targets: Vec<MeshServeTarget>) -> Vec<MeshServeTarget> {
 
 /// Resolve the mesh admission roster from relay status and membership events.
 ///
-/// When a NIP-43 membership list exists, only status notes attributed to a
-/// currently listed direct member contribute an owner id. This removes stale
-/// notes from former members and ignores notes from nonmembers. Relays without
-/// a membership list retain the legacy/open-relay behavior: every published
-/// owner id is admitted.
+/// Only status notes signed by a currently listed NIP-43 direct member
+/// contribute an owner id. This removes stale notes from former members and
+/// ignores notes from nonmembers. If the relay has no membership snapshot, the
+/// roster is empty and MeshLLM admission therefore remains self-only.
 pub fn owner_ids_from_events(events: &[nostr::Event]) -> Vec<String> {
-    let members = latest_membership_list(events);
+    let Some(members) = latest_membership_list(events) else {
+        return Vec::new();
+    };
     let mut ids: Vec<String> = events
         .iter()
         .filter(|event| event.kind.as_u16() as u64 == MESH_STATUS_KIND)
         .filter(|event| {
-            members.as_ref().is_none_or(|members| {
-                reporter_pubkey_from_status_event(event)
-                    .is_some_and(|reporter| members.contains(&reporter.to_ascii_lowercase()))
-            })
+            reporter_pubkey_from_status_event(event)
+                .is_some_and(|reporter| members.contains(&reporter.to_ascii_lowercase()))
         })
         .filter_map(owner_id_from_status_event)
         .collect();
