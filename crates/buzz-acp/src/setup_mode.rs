@@ -62,6 +62,8 @@ pub(crate) enum AcpAvailabilityStatus {
     Available,
     /// ACP adapter binary missing; underlying CLI may be present.
     AdapterMissing,
+    /// ACP adapter binary is from the deprecated package (< 1.0). Reinstall required.
+    AdapterOutdated,
     /// CLI binary missing; ACP adapter may be present.
     CliMissing,
     /// Neither adapter nor CLI found.
@@ -111,6 +113,8 @@ pub(crate) enum RequirementPayload {
         /// One-line stderr excerpt identifying the parse error.
         diagnostic: String,
     },
+    /// Git for Windows is missing; open Doctor for the installation guide.
+    GitBash,
 }
 
 impl RequirementPayload {
@@ -136,6 +140,16 @@ impl RequirementPayload {
                         .unwrap_or("the agent");
                     format!(
                         "install the {} ACP adapter (open Doctor in Settings to diagnose)",
+                        harness
+                    )
+                }
+                AcpAvailabilityStatus::AdapterOutdated => {
+                    let harness = probe_args
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("the agent");
+                    format!(
+                        "reinstall the {} ACP adapter — the installed version is outdated (open Doctor in Settings to diagnose)",
                         harness
                     )
                 }
@@ -168,6 +182,9 @@ impl RequirementPayload {
                     "{} is invalid: {} — fix the config and restart the agent",
                     config_file, diagnostic
                 )
+            }
+            RequirementPayload::GitBash => {
+                "install Git for Windows (open Doctor in Settings to diagnose)".to_string()
             }
         }
     }
@@ -233,6 +250,10 @@ impl SetupPayload {
                 .map(|r| format!("- {}", r.instruction()))
                 .collect();
 
+            let has_doctor_requirement = self
+                .requirements
+                .iter()
+                .any(|r| matches!(r, RequirementPayload::GitBash));
             let all_external = self
                 .requirements
                 .iter()
@@ -242,7 +263,9 @@ impl SetupPayload {
                 .iter()
                 .any(|r| matches!(r, RequirementPayload::CliConfigInvalid { .. }));
 
-            let footer = if all_external {
+            let footer = if has_doctor_requirement {
+                "Open Doctor in the Buzz app, install Git for Windows, then re-check and restart the agent.".to_string()
+            } else if all_external {
                 // All requirements are external config files — Edit Agent cannot
                 // help. Don't send the user there.
                 "Fix the config file(s) and restart the agent.".to_string()
@@ -654,6 +677,18 @@ mod tests {
         let payload: SetupPayload = serde_json::from_str(json).unwrap();
         assert_eq!(payload.agent_name, "Fizz");
         assert_eq!(payload.requirements.len(), 2);
+    }
+
+    #[test]
+    fn setup_payload_deserializes_git_bash_requirement() {
+        let payload: SetupPayload = serde_json::from_str(
+            r#"{"agent_name":"Buzz Agent","agent_pubkey":"test","requirements":[{"surface":"git_bash"}]}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            payload.requirements.as_slice(),
+            [RequirementPayload::GitBash]
+        ));
     }
 
     #[test]

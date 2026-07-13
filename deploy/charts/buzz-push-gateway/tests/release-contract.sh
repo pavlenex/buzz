@@ -13,7 +13,7 @@ publish_text = publish_path.read_text()
 yaml.safe_load(auto_text)
 yaml.safe_load(publish_text)
 for needle in (
-    "startsWith(github.event.pull_request.head.ref, 'push-chart-release/')",
+    'push-chart-release/*)',
     'VERSION="${BRANCH#push-chart-release/}"',
     'TAG_PREFIX="push-chart-v"',
     'DISPATCH="push-gateway-helm-chart"',
