@@ -272,12 +272,28 @@ fn orchestrate() -> anyhow::Result<()> {
             window_secs: STRANGER_WINDOW_SECS,
         },
     )?;
-    if stranger_out.seen.is_none() {
-        eprintln!("[admission] PASS 3/3: non-member saw no model ({STRANGER_WINDOW_SECS}s window)");
-    } else {
-        eprintln!("[admission] non-member was not admitted to mesh membership");
+    match (
+        stranger_out.seen.as_deref(),
+        stranger_out.infer_ok.as_deref(),
+        stranger_out.infer_fail.as_deref(),
+    ) {
+        (None, None, _) => eprintln!(
+            "[admission] PASS 3/3: non-member saw no model ({STRANGER_WINDOW_SECS}s window)"
+        ),
+        (Some(model), None, Some(error)) => eprintln!(
+            "[admission] PASS 3/3: non-member saw gossip for {model} but inference was rejected: {error}"
+        ),
+        (Some(model), Some(content), _) => anyhow::bail!(
+            "ADMISSION FAIL: non-member reused the invite token and inferred through {model}: {content:?}"
+        ),
+        (Some(model), None, None) => anyhow::bail!(
+            "ADMISSION INCONCLUSIVE: non-member saw {model} but produced no inference verdict"
+        ),
+        (None, Some(content), _) => anyhow::bail!(
+            "ADMISSION FAIL: non-member inferred without model visibility: {content:?}"
+        ),
     }
-    eprintln!("[admission] PASS: owner allowlist gates mesh membership");
+    eprintln!("[admission] PASS: owner allowlist gates mesh membership and inference");
 
     drop(serve_guard); // kills the serve child
     let _ = serve_child.wait();
