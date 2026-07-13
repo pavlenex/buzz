@@ -426,6 +426,9 @@ export function AgentConfigPanel({
 
       {advanced.length > 0 && advancedMode === "flat" ? (
         <div className="divide-y divide-border/50 border-t border-border/50">
+          <p className="px-4 py-3 text-xs font-medium text-foreground">
+            Advanced
+          </p>
           {advanced.map((field) => (
             <AdvancedRow
               key={field.key}
