@@ -14,10 +14,8 @@ import {
 } from "@/features/channels/readState/readStateFormat";
 import { ChannelScreenEmptyState } from "@/features/channels/ui/ChannelScreenEmptyState";
 import { ChannelScreenHeader } from "@/features/channels/ui/ChannelScreenHeader";
-import {
-  ChannelPane,
-  ForumView,
-} from "@/features/channels/ui/ChannelScreenLazyViews";
+import { ChannelPane } from "@/features/channels/ui/ChannelScreenLazyViews";
+import { ForumChannelContent } from "@/features/channels/ui/ForumChannelContent";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
 import {
   useManagedAgentsQuery,
@@ -82,7 +80,6 @@ import { useChannelProfilePanel } from "./useChannelProfilePanel";
 import { useChannelRouteTarget } from "./useChannelRouteTarget";
 import { useChannelUnreadState } from "./useChannelUnreadState";
 import type { ChannelScreenProps } from "./ChannelScreen.types";
-
 const HEADER_ACTIONS_COMPACT_BREAKPOINT_PX = 760,
   EMPTY_RELAY_EVENTS: RelayEvent[] = [];
 export function ChannelScreen({
@@ -192,7 +189,7 @@ export function ChannelScreen({
     effectiveOpenThreadHeadId,
   );
   useChannelSubscription(activeChannel);
-  const { fetchOlder, hasOlderMessages, isFetchingOlder } =
+  const { fetchOlder, hasOlderMessages, historyExhausted, isFetchingOlder } =
     useFetchOlderMessages(activeChannel);
   const latestActiveMessage = React.useMemo(() => {
     const messages = messagesQuery.data;
@@ -839,19 +836,27 @@ export function ChannelScreen({
         >
           {activeChannel ? (
             activeChannel.channelType === "forum" ? (
-              <>
-                {channelHeader}
-                <React.Suspense fallback={<ViewLoadingFallback kind="forum" />}>
-                  <ForumView
-                    channel={activeChannel}
-                    currentPubkey={currentPubkey}
-                    onClosePost={onCloseForumPost}
-                    onSelectPost={onSelectForumPost}
-                    selectedPostId={selectedForumPostId}
-                    targetReplyId={targetForumReplyId}
-                  />
-                </React.Suspense>
-              </>
+              <ForumChannelContent
+                canResetPanelWidth={canResetThreadPanelWidth}
+                channel={activeChannel}
+                currentPubkey={currentPubkey}
+                header={channelHeader}
+                onClosePost={onCloseForumPost}
+                onCloseProfilePanel={handleCloseProfilePanel}
+                onOpenDm={handleOpenDm}
+                onOpenProfilePanel={handleOpenProfilePanel}
+                onPanelResizeStart={handleThreadPanelResizeStart}
+                onProfilePanelTabChange={setProfilePanelTab}
+                onProfilePanelViewChange={setProfilePanelView}
+                onResetPanelWidth={handleThreadPanelWidthReset}
+                onSelectPost={onSelectForumPost}
+                panelWidthPx={threadPanelWidthPx}
+                profilePanelPubkey={profilePanelPubkey}
+                profilePanelTab={profilePanelTab}
+                profilePanelView={profilePanelView}
+                selectedPostId={selectedForumPostId}
+                targetReplyId={targetForumReplyId}
+              />
             ) : (
               <React.Suspense
                 fallback={<ViewLoadingFallback includeHeader kind="channel" />}
@@ -872,6 +877,7 @@ export function ChannelScreen({
                   fetchOlder={fetchOlder}
                   header={channelHeader}
                   hasOlderMessages={hasOlderMessages}
+                  historyExhausted={historyExhausted}
                   onAddAgent={handleOpenAddBot}
                   onCreateChannel={openCreateChannel}
                   onOpenMembers={handleOpenMembersSidebar}
@@ -963,6 +969,7 @@ export function ChannelScreen({
                   targetMessageId={mainTimelineTargetMessageId}
                   threadHeadMessage={displayedThreadHeadMessage}
                   threadMessages={displayedThreadMessages}
+                  threadMessagesPending={threadRepliesQuery.isPending}
                   threadPanelWidthPx={threadPanelWidthPx}
                   threadTypingPubkeys={threadTypingPubkeys}
                   threadReplyTargetMessage={displayedThreadReplyTargetMessage}

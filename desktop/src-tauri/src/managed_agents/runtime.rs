@@ -349,6 +349,7 @@ fn resolve_pgids_and_kill(candidate_pids: &[i32]) {
     // PID-recycling guard: if a resolved PGID is alive but isn't one of our
     // orphan candidates, the old harness PID was recycled by a new process
     // that called setsid() — skip it to avoid killing an unrelated group.
+    let candidate_groups = pgids.len();
     pgids.retain(|&pgid| {
         if candidate_set.contains(&pgid) {
             return true;
@@ -356,6 +357,11 @@ fn resolve_pgids_and_kill(candidate_pids: &[i32]) {
         let alive = unsafe { libc::kill(pgid, 0) } == 0;
         !alive
     });
+    if pgids.is_empty() && candidate_groups > 0 {
+        eprintln!(
+            "buzz-desktop: orphan sweep: skipped all {candidate_groups} candidate group(s) (live foreign group leader or candidate already exited); nothing signalled"
+        );
+    }
     let unique: Vec<i32> = pgids.into_iter().collect();
     sigterm_then_sigkill(&unique);
 }
@@ -377,6 +383,7 @@ fn resolve_pgids_and_kill(candidate_pids: &[i32]) {
     // PID-recycling guard: if a resolved PGID is alive but isn't one of our
     // orphan candidates, the old harness PID was recycled by a new process
     // that called setsid() — skip it to avoid killing an unrelated group.
+    let candidate_groups = pgids.len();
     pgids.retain(|&pgid| {
         if candidate_set.contains(&pgid) {
             return true;
@@ -384,6 +391,11 @@ fn resolve_pgids_and_kill(candidate_pids: &[i32]) {
         let alive = unsafe { libc::kill(pgid, 0) } == 0;
         !alive
     });
+    if pgids.is_empty() && candidate_groups > 0 {
+        eprintln!(
+            "buzz-desktop: orphan sweep: skipped all {candidate_groups} candidate group(s) (live foreign group leader or candidate already exited); nothing signalled"
+        );
+    }
     let unique: Vec<i32> = pgids.into_iter().collect();
     sigterm_then_sigkill(&unique);
 }
@@ -515,18 +527,11 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
         if info.pbi_uid != my_uid {
             continue;
         }
-        // Live child of a tracked harness — not an orphan.
-        if skip_pids.contains(&info.pbi_ppid) {
-            continue;
-        }
-        // Grandchild check: the harness is spawned with process_group(0), so
-        // all descendants share its PGID. If this process's PGID matches a
-        // tracked harness PID, it's a live descendant — not an orphan.
-        let pgid = unsafe { libc::getpgid(pid) };
-        if pgid > 0 && skip_pids.contains(&(pgid as u32)) {
-            continue;
-        }
         if !process_has_buzz_marker(upid, instance_id) {
+            continue;
+        }
+        // Live descendants of a tracked harness are exempt — see sweep::is_live_descendant_*.
+        if sweep::is_live_descendant_macos(upid, info.pbi_ppid, skip_pids) {
             continue;
         }
         orphans.push(pid);
@@ -541,27 +546,12 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
     }
 }
 
-/// Read the parent PID of a process from /proc/<pid>/stat.
-/// The comm field (field 2) may contain spaces and parens, so we find the last
-/// ')' and parse fields after it. Field 1 after ')' is state, field 2 is PPID.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn read_ppid_linux(pid: u32) -> Option<u32> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after_comm = stat.rsplit_once(')')?.1;
-    // Fields after ')': " S ppid pgid ..."
-    let ppid_str = after_comm.split_whitespace().nth(1)?;
-    ppid_str.parse::<u32>().ok()
-}
-
-/// Read the process group ID from /proc/<pid>/stat. Same parsing strategy as
-/// `read_ppid_linux` — field 3 after the closing ')' is the PGID.
+/// Read the process group ID from /proc/<pid>/stat by delegating to the shared
+/// stat parser in `sweep`. Keeps a single parse site for the `/proc/<pid>/stat`
+/// field layout.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn read_pgid_linux(pid: u32) -> Option<u32> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after_comm = stat.rsplit_once(')')?.1;
-    // Fields after ')': " S ppid pgid ..."
-    let pgid_str = after_comm.split_whitespace().nth(2)?;
-    pgid_str.parse::<u32>().ok()
+    sweep::proc_stat_ppid_pgid_linux(pid).map(|(_, pgid)| pgid)
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -599,23 +589,9 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
         if !process_belongs_to_us(upid) || !process_has_buzz_marker(upid, instance_id) {
             continue;
         }
-        // Live child of a tracked harness — not an orphan. If /proc/<pid>/stat
-        // is unreadable (process exiting, transient I/O error), we treat the
-        // process as orphaned — safe because an exiting process will disappear
-        // shortly, and the two-tick grace in the periodic path prevents acting
-        // on transient failures.
-        if let Some(ppid) = read_ppid_linux(upid) {
-            if skip_pids.contains(&ppid) {
-                continue;
-            }
-        }
-        // Grandchild check: the harness is spawned with process_group(0), so
-        // all descendants share its PGID. If this process's PGID matches a
-        // tracked harness PID, it's a live descendant — not an orphan.
-        if let Some(pgid) = read_pgid_linux(upid) {
-            if skip_pids.contains(&pgid) {
-                continue;
-            }
+        // Live descendants of a tracked harness are exempt — see sweep::is_live_descendant_*.
+        if sweep::is_live_descendant_linux(upid, skip_pids) {
+            continue;
         }
         orphans.push(pid);
     }
@@ -714,20 +690,14 @@ pub(crate) fn collect_same_instance_orphans(
         if info.pbi_uid != my_uid {
             continue;
         }
-        // Live child of a tracked harness — not an orphan.
-        if skip_pids.contains(&info.pbi_ppid) {
+        if !process_has_buzz_marker(upid, instance_id) {
             continue;
         }
-        // Grandchild check: the harness is spawned with process_group(0), so
-        // all descendants share its PGID. If this process's PGID matches a
-        // tracked harness PID, it's a live descendant — not an orphan.
-        let pgid = unsafe { libc::getpgid(pid) };
-        if pgid > 0 && skip_pids.contains(&(pgid as u32)) {
+        // Live descendants of a tracked harness are exempt — see sweep::is_live_descendant_*.
+        if sweep::is_live_descendant_macos(upid, info.pbi_ppid, skip_pids) {
             continue;
         }
-        if process_has_buzz_marker(upid, instance_id) {
-            orphans.insert(upid);
-        }
+        orphans.insert(upid);
     }
     orphans
 }
@@ -769,22 +739,9 @@ pub(crate) fn collect_same_instance_orphans(
         if !process_belongs_to_us(upid) || !process_has_buzz_marker(upid, instance_id) {
             continue;
         }
-        // Live child of a tracked harness — not an orphan. If /proc/<pid>/stat
-        // is unreadable (process exiting, transient I/O error), we treat the
-        // process as orphaned — safe because an exiting process will disappear
-        // shortly, and the two-tick grace prevents acting on transient failures.
-        if let Some(ppid) = read_ppid_linux(upid) {
-            if skip_pids.contains(&ppid) {
-                continue;
-            }
-        }
-        // Grandchild check: the harness is spawned with process_group(0), so
-        // all descendants share its PGID. If this process's PGID matches a
-        // tracked harness PID, it's a live descendant — not an orphan.
-        if let Some(pgid) = read_pgid_linux(upid) {
-            if skip_pids.contains(&pgid) {
-                continue;
-            }
+        // Live descendants of a tracked harness are exempt — see sweep::is_live_descendant_*.
+        if sweep::is_live_descendant_linux(upid, skip_pids) {
+            continue;
         }
         orphans.insert(upid);
     }
@@ -1279,7 +1236,7 @@ pub fn sync_managed_agent_processes(
 /// - no persona_id: neither — a hand-built agent has no persona to drift from.
 fn persona_drift_state(
     record: &ManagedAgentRecord,
-    personas: &[crate::managed_agents::types::PersonaRecord],
+    personas: &[crate::managed_agents::types::AgentDefinition],
 ) -> (bool, bool) {
     let Some(persona_id) = record.persona_id.as_deref() else {
         return (false, false);
@@ -1301,7 +1258,7 @@ pub fn build_managed_agent_summary(
     app: &AppHandle,
     record: &ManagedAgentRecord,
     runtimes: &HashMap<String, ManagedAgentProcess>,
-    personas: &[crate::managed_agents::types::PersonaRecord],
+    personas: &[crate::managed_agents::types::AgentDefinition],
 ) -> Result<ManagedAgentSummary, String> {
     use crate::managed_agents::BackendKind;
 
@@ -1364,15 +1321,29 @@ pub fn build_managed_agent_summary(
     // at launch; recompute from current disk state and flag drift. Only a
     // tracked live process can drift — stopped agents spawn fresh, and
     // adopted (runtime_pid-only) processes have no stamped hash to compare.
+    //
+    // Additionally, for runtimes with an adapter version gate (codex only),
+    // check whether the cached adapter availability has drifted from the value
+    // stamped at spawn.  This catches out-of-band adapter changes (manual
+    // npm install/downgrade) that Phase-1 auto-restart doesn't cover.  The
+    // cache is read-only here — no subprocess is spawned.
     let needs_restart = runtimes.get(&record.pubkey).is_some_and(|runtime| {
         use tauri::Manager;
         let state = app.state::<crate::app_state::AppState>();
-        runtime.spawn_config_hash
+        let global_for_hash =
+            crate::managed_agents::load_global_agent_config(app).unwrap_or_default();
+        let hash_drift = runtime.spawn_config_hash
             != crate::managed_agents::spawn_hash::spawn_config_hash(
                 record,
                 personas,
                 &crate::relay::relay_ws_url_with_override(&state),
-            )
+                &global_for_hash,
+            );
+        let availability_drift = super::availability_drift(
+            runtime.adapter_availability.as_ref(),
+            super::adapter_availability_cached(),
+        );
+        hash_drift || availability_drift
     });
 
     // Resolve the effective harness the same way, then derive args/mcp from it,
@@ -1405,7 +1376,6 @@ pub fn build_managed_agent_summary(
         persona_out_of_date,
         persona_orphaned,
         needs_restart,
-        mcp_toolsets: record.mcp_toolsets.clone(),
         env_vars: record.env_vars.clone(),
         backend: record.backend.clone(),
         backend_agent_id: record.backend_agent_id.clone(),
@@ -1528,6 +1498,9 @@ pub fn spawn_agent_child(
     // command, so we recompute them from the effective value rather than the
     // frozen record snapshot. Mirrors the model resolution below.
     let personas = super::load_personas(app).unwrap_or_default();
+    // Load global config once; used for runtime_metadata_env_vars (model/provider fallback)
+    // and for the env-var merge at spawn time.
+    let global = crate::managed_agents::load_global_agent_config(app).unwrap_or_default();
     let effective_command = super::record_agent_command(record, &personas);
     let agent_args = normalize_agent_args(&effective_command, record.agent_args.clone());
     let resolved_acp_command = resolve_command(&record.acp_command)
@@ -1567,14 +1540,19 @@ pub fn spawn_agent_child(
 
     // Augment PATH for DMG launches so child processes can find:
     //   - bundled CLI via ~/.local/bin symlink
+    //   - nvm-managed node/npm (nvm initializes only in interactive shells)
     //   - bundled sidecars (buzz, buzz-acp, etc.) via exe parent (Contents/MacOS/)
     //   - runtimes (node, python, etc.) via login shell PATH
+    let nvm_bin = dirs::home_dir()
+        .as_deref()
+        .and_then(super::find_nvm_default_bin);
     let augmented_path = build_augmented_path(
         dirs::home_dir(),
         std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
         login_shell_path(),
+        nvm_bin,
     );
 
     let mut command = std::process::Command::new(&resolved_acp_command);
@@ -1622,12 +1600,17 @@ pub fn spawn_agent_child(
     //
     // The JSON format mirrors `setup_mode::SetupPayload` in buzz-acp:
     //   { "agent_name": "...", "agent_pubkey": "...", "requirements": [{ "surface": "...", ... }] }
+    //
+    // `spawned_setup_mode` is captured outside the block so it can be stamped
+    // on `ManagedAgentProcess` — used by `install_acp_runtime` to target only
+    // stuck agents for auto-restart.
+    let spawned_setup_mode;
     {
         use crate::managed_agents::{
             agent_readiness, resolve_effective_agent_env, AgentReadiness, Requirement,
         };
 
-        let effective = resolve_effective_agent_env(record, &personas, runtime_meta);
+        let effective = resolve_effective_agent_env(record, &personas, runtime_meta, &global);
         // Compute the optional payload before touching the command.
         let setup_payload_json =
             if let AgentReadiness::NotReady { requirements } = agent_readiness(&effective) {
@@ -1652,6 +1635,16 @@ pub fn spawn_agent_child(
                             "setup_copy": setup_copy,
                             "availability": availability,
                         }),
+                        Requirement::CliConfigInvalid {
+                            probe_args,
+                            setup_copy,
+                            diagnostic,
+                        } => serde_json::json!({
+                            "surface": "cli_config_invalid",
+                            "probe_args": probe_args,
+                            "setup_copy": setup_copy,
+                            "diagnostic": diagnostic,
+                        }),
                     })
                     .collect();
                 let payload = serde_json::json!({
@@ -1672,6 +1665,8 @@ pub fn spawn_agent_child(
             } else {
                 None
             };
+
+        spawned_setup_mode = setup_payload_json.is_some();
 
         // Strip the key from the process-spawned command on every path.
         // Two independent guards protect the invariant:
@@ -1725,27 +1720,22 @@ pub fn spawn_agent_child(
         command.env("BUZZ_ACP_PERSONA_NAME", persona_name);
     }
 
-    // System prompt, model, and provider come from the record snapshot — the
-    // record is the authoritative spawn source. For persona-created agents the
-    // snapshot was pinned at create (see `create_managed_agent`); for others
-    // these are the user-supplied values. Reading the record (never the live
-    // persona) is what keeps a running agent pinned across restarts: a persona
-    // edit reaches the agent only via delete+respawn, which rewrites the
-    // snapshot.
-    // Prompt via the shared spawn-effective filter — the SAME function the
+    // System prompt via the shared spawn-effective filter — the SAME function the
     // config hash digests, so env write and badge cannot disagree (see
     // `effective_spawn_prompt` for the Some("")/None collapse and the
-    // team-pack suppression exception).
+    // team-pack suppression exception). Model and provider use the shared
+    // resolver: agent → persona → global → None, so a global-default-only agent
+    // spawns with the correct provider/model env.
     let effective_prompt = super::spawn_hash::effective_spawn_prompt(record);
-    let effective_model = record.model.clone();
-    let effective_provider = record.provider.clone();
+    let (effective_model, effective_provider) =
+        crate::managed_agents::resolve_effective_model_provider(record, &personas, &global);
 
     if let Some(prompt) = &effective_prompt {
         command.env("BUZZ_ACP_SYSTEM_PROMPT", prompt);
     } else {
         command.env_remove("BUZZ_ACP_SYSTEM_PROMPT");
     }
-    if let Some(model) = &effective_model {
+    if let Some(model) = effective_model {
         command.env("BUZZ_ACP_MODEL", model);
     } else {
         command.env_remove("BUZZ_ACP_MODEL");
@@ -1759,16 +1749,11 @@ pub fn spawn_agent_child(
             meta.model_env_var,
             meta.provider_env_var,
             meta.provider_locked,
-            effective_model.as_deref(),
-            effective_provider.as_deref(),
+            effective_model,
+            effective_provider,
         ) {
             command.env(key, value);
         }
-    }
-    if let Some(toolsets) = &record.mcp_toolsets {
-        command.env("BUZZ_TOOLSETS", toolsets);
-    } else {
-        command.env("BUZZ_TOOLSETS", super::types::DEFAULT_MCP_TOOLSETS);
     }
     command.env_remove("BUZZ_ACP_PRIVATE_KEY");
     command.env_remove("BUZZ_ACP_API_TOKEN");
@@ -1834,18 +1819,22 @@ pub fn spawn_agent_child(
     // persona's env is read live and merged underneath (agent wins on
     // collision), so persona credential edits reach the agent on the next
     // spawn — same refresh semantics as prompt/model/provider above and the
-    // provider deploy path. `merged_user_env` also applies the reserved-key /
-    // malformed-key / NUL filtering.
+    // provider deploy path. Global env vars are the floor layer below persona.
+    // `merged_user_env` also applies the reserved-key / malformed-key / NUL
+    // filtering. Precedence: baked floor < Buzz-set env above < GLOBAL <
+    // PERSONA < per-agent.
     //
     // These writes go LAST so user-provided values win over every Buzz-set env
     // above — EXCEPT reserved keys (BUZZ_PRIVATE_KEY, NOSTR_PRIVATE_KEY,
     // BUZZ_AUTH_TAG, BUZZ_API_TOKEN, BUZZ_ACP_PRIVATE_KEY, BUZZ_ACP_API_TOKEN),
     // which `merged_user_env` strips. Those carry Buzz's identity and must
     // never be GUI-overridable.
-    for (key, value) in super::env_vars::merged_user_env(
+    // global < live persona < agent (last-wins on collision at each layer).
+    let persona_over_global = super::env_vars::merged_user_env(
+        &global.env_vars,
         &super::env_vars::live_persona_env(&personas, record.persona_id.as_deref()),
-        &record.env_vars,
-    ) {
+    );
+    for (key, value) in super::env_vars::merged_user_env(&persona_over_global, &record.env_vars) {
         command.env(key, value);
     }
 
@@ -1887,7 +1876,21 @@ pub fn spawn_agent_child(
     // `effective_relay_url` is already resolved, and resolution is idempotent,
     // so it serves as the workspace-relay input here.
     let spawn_config_hash =
-        super::spawn_hash::spawn_config_hash(record, &personas, &effective_relay_url);
+        super::spawn_hash::spawn_config_hash(record, &personas, &effective_relay_url, &global);
+
+    // Stamp the adapter availability for runtimes with a version gate (codex
+    // only). The summary builder compares this against the current cached value
+    // to detect out-of-band adapter changes after spawn (Phase-2 badge fallback).
+    // Non-codex runtimes get `None` — nothing changes for them.
+    // When the cache is cold (e.g. Doctor just installed and cleared the cache),
+    // `adapter_availability_cached()` returns `None`, so the stamp is `None` and
+    // the drift check is skipped until discovery warms the cache — preventing a
+    // false restart badge immediately after auto-restart.
+    let spawned_adapter_availability = if runtime_meta.is_some_and(|r| r.id == "codex") {
+        super::adapter_availability_cached()
+    } else {
+        None
+    };
 
     let _ = super::write_agent_pid_file(app, &record.pubkey, child.id());
 
@@ -1898,6 +1901,8 @@ pub fn spawn_agent_child(
         child,
         log_path,
         spawn_config_hash,
+        spawned_setup_mode,
+        spawned_adapter_availability,
         &record.name,
     ));
     #[cfg(not(windows))]
@@ -1905,6 +1910,8 @@ pub fn spawn_agent_child(
         child,
         log_path,
         spawn_config_hash,
+        setup_mode: spawned_setup_mode,
+        adapter_availability: spawned_adapter_availability,
     })
 }
 
@@ -2073,7 +2080,7 @@ pub(crate) fn runtime_metadata_env_vars<'a>(
 /// PersonaDefault for fields the record did not independently set.
 pub(crate) fn resolve_effective_prompt_model_provider(
     persona_id: Option<&str>,
-    personas: &[crate::managed_agents::types::PersonaRecord],
+    personas: &[crate::managed_agents::types::AgentDefinition],
     record_prompt: Option<String>,
     record_model: Option<String>,
     record_provider: Option<String>,

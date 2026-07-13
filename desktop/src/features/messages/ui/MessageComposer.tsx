@@ -623,9 +623,9 @@ function MessageComposerImpl({
       pendingImeta: currentPendingImeta,
       // resolveSentDraftKey checks at submit time (synchronously, before any
       // await) whether a draft was actually persisted. If not — fast/
-      // never-persisted send — it returns null so no sent record is written.
-      // The function is exported and tested directly in
-      // MessageComposerDraftPredicate.test.mjs.
+      // never-persisted send — it returns null so the active draft is not
+      // cleared (nothing to clear). The function is exported and tested directly
+      // in MessageComposerDraftPredicate.test.mjs.
       sentDraftKey: resolveSentDraftKey(
         effectiveDraftKeyRef.current,
         drafts.loadDraft,
@@ -902,7 +902,7 @@ function MessageComposerImpl({
       >
         <div
           aria-hidden="true"
-          className="absolute inset-x-0 bottom-0 h-5 bg-background"
+          className="absolute inset-x-0 bottom-0 h-5 bg-transparent"
         />
         <div className="relative flex w-full flex-col gap-0">
           <ComposerReplyEditBanner
