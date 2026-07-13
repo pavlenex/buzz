@@ -223,6 +223,53 @@ fn owner_roster_rejects_spoofed_owner_id_and_cross_member_binding() {
 }
 
 #[test]
+fn availability_excludes_removed_member_status() {
+    let current_secret = "6".repeat(64);
+    let removed_secret = "7".repeat(64);
+    let current_member = nostr::Keys::parse(&current_secret)
+        .unwrap()
+        .public_key()
+        .to_hex();
+    let events = vec![
+        signed_reporter_target(&current_secret, "model-current", "addr-current"),
+        signed_reporter_target(&removed_secret, "model-removed", "addr-removed"),
+        signed_membership_event(std::slice::from_ref(&current_member)),
+    ];
+
+    let availability = super::availability_from_events(events);
+    assert_eq!(availability.models.len(), 1);
+    assert_eq!(availability.models[0].id, "model-current");
+    assert_eq!(availability.serve_targets.len(), 1);
+    assert_eq!(availability.serve_targets[0].endpoint_addr, "addr-current");
+}
+
+fn signed_reporter_target(reporter_secret: &str, model: &str, endpoint: &str) -> nostr::Event {
+    use mesh_llm_host_runtime::crypto::OwnerKeypair;
+
+    let keys = nostr::Keys::parse(reporter_secret).unwrap();
+    let owner = OwnerKeypair::generate();
+    let member_pubkey = keys.public_key().to_hex();
+    super::coordinator::build_status_report_event(json!({
+        "ownerId": owner.owner_id(),
+        "ownerVerifyingKey": hex::encode(owner.verifying_key().as_bytes()),
+        "ownerBindingSig": hex::encode(owner.sign_bytes(
+            &super::identity::member_binding_bytes(&member_pubkey)
+        )),
+        "models": [{"id": model, "name": null}],
+        "serveTargets": [{
+            "modelId": model,
+            "modelName": null,
+            "endpointAddr": endpoint,
+            "nodeName": null,
+            "capacity": null
+        }]
+    }))
+    .unwrap()
+    .sign_with_keys(&keys)
+    .unwrap()
+}
+
+#[test]
 fn owner_roster_without_membership_list_fails_closed() {
     let events = vec![
         signed_reporter_status(&"1".repeat(64), "owner-a"),

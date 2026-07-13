@@ -226,9 +226,15 @@ pub async fn discover_agent_models(
     if input.provider.as_deref().map(str::trim)
         == Some(crate::managed_agents::RELAY_MESH_PROVIDER_ID)
     {
-        let events = crate::relay::query_relay(&state, &[crate::mesh_llm::mesh_status_filter()])
-            .await
-            .map_err(|error| format!("Buzz shared compute model discovery failed: {error}"))?;
+        let events = crate::relay::query_relay(
+            &state,
+            &[
+                crate::mesh_llm::mesh_status_filter(),
+                crate::mesh_llm::relay_membership_filter(),
+            ],
+        )
+        .await
+        .map_err(|error| format!("Buzz shared compute model discovery failed: {error}"))?;
         let availability = crate::mesh_llm::availability_from_events(events);
         if availability.models.is_empty() {
             return Err(availability.reason.unwrap_or_else(|| {

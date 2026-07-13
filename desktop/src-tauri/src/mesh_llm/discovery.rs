@@ -96,14 +96,25 @@ pub fn availability_from_events(events: Vec<nostr::Event>) -> MeshAvailability {
     if events.is_empty() {
         return MeshAvailability::unavailable("Buzz shared compute status is not published yet");
     }
+    let Some(members) = latest_membership_list(&events) else {
+        return MeshAvailability::unavailable(
+            "Buzz shared compute is waiting for the current member roster",
+        );
+    };
 
-    // Status is replaceable per member pubkey, so a query returns multiple events. Aggregate them; do not pick the
-    // newest single event or one member's machines hide everyone else's.
+    // Status is replaceable per member pubkey, so a query returns multiple
+    // events. Aggregate only current members: a removed member's last status
+    // must not remain selectable after their admission is revoked.
     let mut all_targets = Vec::<MeshServeTarget>::new();
     let mut all_models = Vec::<MeshModelOption>::new();
     let mut saw_valid_status = false;
 
     for event in events {
+        if event.kind.as_u16() as u64 != MESH_STATUS_KIND
+            || !members.contains(&event.pubkey.to_hex().to_ascii_lowercase())
+        {
+            continue;
+        }
         let Ok(content) = serde_json::from_str::<serde_json::Value>(&event.content) else {
             continue;
         };

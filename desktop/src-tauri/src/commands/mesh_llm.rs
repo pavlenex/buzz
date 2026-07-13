@@ -97,7 +97,15 @@ pub(crate) async fn restore_mesh_sharing(app: &AppHandle, state: &AppState) -> C
 pub async fn mesh_availability(
     state: State<'_, AppState>,
 ) -> CmdResult<mesh_llm::MeshAvailability> {
-    match relay::query_relay(&state, &[mesh_llm::mesh_status_filter()]).await {
+    match relay::query_relay(
+        &state,
+        &[
+            mesh_llm::mesh_status_filter(),
+            mesh_llm::relay_membership_filter(),
+        ],
+    )
+    .await
+    {
         Ok(events) => Ok(mesh_llm::availability_from_events(events)),
         Err(error) => Ok(mesh_llm::MeshAvailability::unavailable(error)),
     }
@@ -291,7 +299,14 @@ pub(crate) async fn resolve_mesh_bootstrap_target(
     if model_id.is_empty() {
         return Ok(None);
     }
-    let events = relay::query_relay(state, &[mesh_llm::mesh_status_filter()]).await?;
+    let events = relay::query_relay(
+        state,
+        &[
+            mesh_llm::mesh_status_filter(),
+            mesh_llm::relay_membership_filter(),
+        ],
+    )
+    .await?;
     Ok(pick_serve_target_for_model(
         mesh_llm::availability_from_events(events).serve_targets,
         model_id,
