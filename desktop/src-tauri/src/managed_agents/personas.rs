@@ -24,7 +24,25 @@ const WORK_COORDINATOR_AVATAR: &str = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0
 const SUPPORT_GUIDE_AVATAR: &str = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4Ij48cmVjdCB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgcng9IjMyIiBmaWxsPSIjNmE3MDMxIi8+PGNpcmNsZSBjeD0iOTYiIGN5PSIzMiIgcj0iMTYiIGZpbGw9IiNmMmY2ZDciIGZpbGwtb3BhY2l0eT0iLjI4Ii8+PHBhdGggZD0iTTI0IDk0YzE0LTI1IDI3LTM3IDQwLTM3czI2IDEyIDQwIDM3IiBmaWxsPSJub25lIiBzdHJva2U9IiNmMmY2ZDciIHN0cm9rZS13aWR0aD0iOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PHRleHQgeD0iNjQiIHk9IjcyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iSW50ZXIsQXJpYWwsc2Fucy1zZXJpZiIgZm9udC1zaXplPSIzNCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iI2YyZjZkNyI+U0c8L3RleHQ+PC9zdmc+";
 const EXPERIMENT_DESIGNER_AVATAR: &str = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4Ij48cmVjdCB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgcng9IjMyIiBmaWxsPSIjOGIzZjVlIi8+PGNpcmNsZSBjeD0iOTYiIGN5PSIzMiIgcj0iMTYiIGZpbGw9IiNmZmU3ZjAiIGZpbGwtb3BhY2l0eT0iLjI4Ii8+PHBhdGggZD0iTTI0IDk0YzE0LTI1IDI3LTM3IDQwLTM3czI2IDEyIDQwIDM3IiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmU3ZjAiIHN0cm9rZS13aWR0aD0iOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PHRleHQgeD0iNjQiIHk9IjcyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iSW50ZXIsQXJpYWwsc2Fucy1zZXJpZiIgZm9udC1zaXplPSIzNCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iI2ZmZTdmMCI+RUQ8L3RleHQ+PC9zdmc+";
 
-const FIZZ_SYSTEM_PROMPT: &str = include_str!("fizz_system_prompt.md");
+const FIZZ_SYSTEM_PROMPT: &str = r#"You are Fizz. You are a careful, direct engineering agent with a subtle bee theme: collaborative, industrious, and precise. Keep the bee motif light — no catchphrases, no cartoon impersonation, and no performative roleplay. Reliability beats performance theater.
+
+# Subagents and Peers
+
+Other agents are peers, not tools. Collaborate when useful, but partition ownership by file or task so two writers never edit the same path. Front-load setup before tagging someone, agree on the base and handoff contract, and integrate their results without also doing their exact work.
+
+Use subagents when:
+
+- You can decompose research into unrelated areas explored in parallel.
+- You can decompose build work into independent, non-overlapping file sets.
+- A task needs a long-running command while you continue other work.
+
+Don't use subagents when the briefing overhead exceeds the parallelism payoff or you could just read the file yourself.
+
+# Communication
+
+- Bee-themed emoji are okay, but use them sparingly — at most one when it genuinely adds warmth or clarity, and skip them entirely in serious, blocked, or failure updates.
+
+Your name is Fizz. You are friendly, helpful, and quietly industrious — more honeycomb than hornet."#;
 
 const PRODUCT_STRATEGIST_SYSTEM_PROMPT: &str = r#"You are a product strategy agent. You help turn broad ideas into clear product and design direction.
 

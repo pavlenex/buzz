@@ -36,19 +36,6 @@ fn fit_code(model_gb: f64, vram_gb: f64) -> ModelFit {
     }
 }
 
-fn agent_suitability(name: &str) -> u8 {
-    match name {
-        // Repeated real-hardware Fizz publication + ordinary chat + file-tool
-        // gates pass with the shared-compute request policy.
-        "Gemma-4-E4B-it-Q4_K_M" => 3,
-        "Qwen3-8B-Q4_K_M" => 2,
-        // MeshLLM's catalog explicitly identifies these as Goose defaults with
-        // good/strong agent tool calling. Keep below locally verified models.
-        "Hermes-2-Pro-Mistral-7B-Q4_K_M" | "Llama-3.2-3B-Instruct-Q4_K_M" => 1,
-        _ => 0,
-    }
-}
-
 fn fit_rank(fit: ModelFit) -> u8 {
     match fit {
         ModelFit::Comfortable => 0,
@@ -201,11 +188,11 @@ fn build_catalog(
         })
         .collect();
 
-    // Recommendation: prefer an agent-suitable model that's already on disk.
-    // Fizz needs reliable structured tool use, not merely good chat prose, so
-    // models that pass the real hardware Fizz contract outrank unverified
-    // general models. Within the same suitability tier, prefer the larger
-    // comfortable model. Coder-specialized models are skipped.
+    // Recommendation: prefer what's already on disk. The largest installed
+    // general-purpose model that fits comfortably starts instantly — a far
+    // better first-run than upstream's pack, which optimizes for a fresh
+    // machine and would trigger a multi-GB download. Coder-specialized
+    // models are skipped (a shared chat/agent model should be general).
     // Fall back to upstream `auto_model_pack` when nothing suitable is
     // installed.
     let installed_pick = MODEL_CATALOG
@@ -217,11 +204,7 @@ fn build_catalog(
             fit_code(size_gb, vram_gb) == ModelFit::Comfortable
                 && !m.name.to_ascii_lowercase().contains("coder")
         })
-        .max_by(|a, b| {
-            agent_suitability(&a.name)
-                .cmp(&agent_suitability(&b.name))
-                .then(parse_size_gb(&a.size).total_cmp(&parse_size_gb(&b.size)))
-        })
+        .max_by(|a, b| parse_size_gb(&a.size).total_cmp(&parse_size_gb(&b.size)))
         .map(|m| m.name.clone());
     let recommended = installed_pick.or_else(|| auto_model_pack(vram_gb).into_iter().next());
     for entry in &mut entries {
@@ -328,25 +311,6 @@ mod tests {
     }
 
     #[test]
-    fn recommendation_prefers_verified_agent_model_over_larger_chat_model() {
-        let installed = vec![
-            (
-                "Qwen3-30B-A3B-Q4_K_M.gguf".to_string(),
-                "unsloth/Qwen3-30B-A3B-GGUF:Q4_K_M".to_string(),
-            ),
-            (
-                "gemma-4-E4B-it-Q4_K_M.gguf".to_string(),
-                "unsloth/gemma-4-E4B-it-GGUF:Q4_K_M".to_string(),
-            ),
-        ];
-        let catalog = build_catalog(None, 64_000_000_000, 64.0, &installed, &[]);
-        assert_eq!(
-            catalog.recommended.as_deref(),
-            Some("Gemma-4-E4B-it-Q4_K_M")
-        );
-    }
-
-    #[test]
     fn recommendation_skips_incomplete_layer_packages() {
         // Regression: Qwen3-30B-A3B's GGUF was cached but its meshllm layer
         // package was 7/48 layers — recommending it meant a surprise ~7GB
@@ -370,10 +334,9 @@ mod tests {
             Some("Qwen3-8B-Q4_K_M"),
             "incomplete layer package must not be the instant-start pick"
         );
-        // Even when the larger package is complete, the verified Fizz-capable
-        // model remains the safer agent recommendation.
+        // Same cache with the 30B package complete -> 30B wins again.
         let catalog = build_catalog(None, 64_000_000_000, 64.0, &installed, &[]);
-        assert_eq!(catalog.recommended.as_deref(), Some("Qwen3-8B-Q4_K_M"));
+        assert_eq!(catalog.recommended.as_deref(), Some("Qwen3-30B-A3B-Q4_K_M"));
     }
 
     #[test]

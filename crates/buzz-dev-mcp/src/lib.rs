@@ -10,7 +10,6 @@ use rmcp::{
 use std::path::Path;
 use std::sync::Arc;
 
-mod buzz_message;
 mod paths;
 mod read_file;
 mod rg;
@@ -48,17 +47,6 @@ impl DevMcp {
         context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         shell::run(&self.state, p, context.ct).await
-    }
-
-    #[tool(
-        name = "buzz_send_message",
-        description = "Publish the user-visible reply for the current Buzz turn. Use the channel UUID and optional reply event id from the prompt's Context section. Prefer this typed tool over constructing `buzz messages send` in the shell. Every turn that processes a Buzz user message must call this before ending."
-    )]
-    async fn buzz_send_message(
-        &self,
-        Parameters(p): Parameters<buzz_message::SendMessageParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        buzz_message::run(&self.state, p).await
     }
 
     #[tool(

@@ -35,11 +35,6 @@ pub fn apply_relay_mesh_env(
         RELAY_MESH_API_KEY_PLACEHOLDER.to_string(),
     );
     env.insert("OPENAI_COMPAT_API".to_string(), "chat".to_string());
-    // Agent/tool turns require a visible answer or complete tool call. MeshLLM
-    // canonicalizes OpenAI's model-agnostic `reasoning_effort: none` into the
-    // selected runtime's thinking-disable control (for example Qwen's
-    // `chat_template_kwargs.enable_thinking=false`).
-    env.insert("BUZZ_AGENT_THINKING_EFFORT".to_string(), "none".to_string());
     // Match Goose's OpenAI-compatible behavior for unknown local models: let
     // MeshLLM enforce the selected model's discovered generation/context
     // limits instead of imposing a harness-wide cap.
@@ -202,10 +197,6 @@ mod tests {
         assert_eq!(
             env.get("OPENAI_COMPAT_OMIT_MAX_TOKENS").map(String::as_str),
             Some("true")
-        );
-        assert_eq!(
-            env.get("BUZZ_AGENT_THINKING_EFFORT").map(String::as_str),
-            Some("none")
         );
         assert!(!env.contains_key("BUZZ_AGENT_MAX_OUTPUT_TOKENS"));
     }

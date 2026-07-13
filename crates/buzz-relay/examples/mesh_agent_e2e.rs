@@ -6,9 +6,9 @@
 //! Permutations:
 //!   P1 explicit-model chat  — agent pinned to the served model id replies.
 //!   P2 auto-model chat      — agent sends `model: "auto"`; mesh router picks.
-//!   P3 repeated ordinary chat — each turn emits user-visible ACP text.
-//!   P4 repeated Fizz publish — real Fizz selects the typed Buzz publish tool.
-//!   P5 agentic tool use — agent + buzz-dev-mcp writes a verified file.
+//!   P3 repeated ordinary chat — several normal prompts must each produce a
+//!      user-visible ACP message, never reasoning-only silent success.
+//!   P4 agentic tool use     — agent + buzz-dev-mcp writes a file on disk.
 //!
 //! The serve node is the same `mesh_llm_sdk::serve` path Share-compute uses
 //! (publish off, mdns, loopback). The agent legs spawn the real
@@ -22,7 +22,6 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use mesh_llm_sdk::{serve, MeshDiscoveryMode};
-use nostr::{Keys, ToBech32};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
@@ -34,9 +33,6 @@ const DEFAULT_MODEL: &str = "unsloth/Qwen3-8B-GGUF:Q4_K_M";
 const API_PORT: u16 = 19437;
 const CONSOLE_PORT: u16 = 13231;
 const BUZZ_BASE_PROMPT: &str = include_str!("../../buzz-acp/src/base_prompt.md");
-const FIZZ_SYSTEM_PROMPT: &str =
-    include_str!("../../../desktop/src-tauri/src/managed_agents/fizz_system_prompt.md");
-const FIZZ_TEST_CHANNEL: &str = "11111111-2222-4333-8444-555555555555";
 
 fn main() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -144,42 +140,7 @@ async fn run() -> anyhow::Result<()> {
         }
     }
 
-    // P4: the actual Fizz/Buzz contract. Visible ACP prose is insufficient:
-    // Fizz must select the typed Buzz publish tool. Capturing ACP tool calls
-    // keeps this relay/keychain independent while exercising the real Fizz
-    // prompt, buzz-agent, and developer MCP.
-    for attempt in 1..=3 {
-        let (fizz_result, fizz_capture) = fizz_publish_turn(&base, "auto").await;
-        match fizz_result {
-            Ok(text) => {
-                let args = std::fs::read_to_string(&fizz_capture).unwrap_or_default();
-                let calls: Vec<serde_json::Value> = serde_json::from_str(&args).unwrap_or_default();
-                let published = calls.iter().any(|call| {
-                    call["title"] == "dev__buzz_send_message"
-                        && call["rawInput"]["channel"] == FIZZ_TEST_CHANNEL
-                        && call["rawInput"]["content"] == "FIZZ_MESH_CONTRACT_OK"
-                });
-                record(
-                    &format!("P4.{attempt} Fizz selects typed Buzz publish tool"),
-                    published,
-                    if published {
-                        format!("typed publish invocation captured; ACP text: {text}")
-                    } else {
-                        format!(
-                            "no valid typed Buzz publish invocation; args={args:?}; ACP text={text}"
-                        )
-                    },
-                );
-            }
-            Err(error) => record(
-                &format!("P4.{attempt} Fizz selects typed Buzz publish tool"),
-                false,
-                error.to_string(),
-            ),
-        }
-    }
-
-    // P5: agentic tool use via buzz-dev-mcp — write a real file inside the
+    // P4: agentic tool use via buzz-dev-mcp — write a real file inside the
     // isolated ACP working directory. The MCP sandbox intentionally rejects
     // nonexistent absolute paths outside that root.
     let marker_name = format!("mesh-e2e-{}.txt", std::process::id());
@@ -193,7 +154,7 @@ async fn run() -> anyhow::Result<()> {
         .unwrap_or(false);
     match r {
         Ok(text) => record(
-            "P5 agentic tool use",
+            "P4 agentic tool use",
             file_ok,
             if file_ok {
                 format!("file written; agent said: {text}")
@@ -201,7 +162,7 @@ async fn run() -> anyhow::Result<()> {
                 format!("no file at {}; agent said: {text}", marker.display())
             },
         ),
-        Err(e) => record("P5 agentic tool use", file_ok, format!("agent error: {e}")),
+        Err(e) => record("P4 agentic tool use", file_ok, format!("agent error: {e}")),
     }
     let _ = std::fs::remove_file(&marker);
 
@@ -212,37 +173,6 @@ async fn run() -> anyhow::Result<()> {
     eprintln!("[e2e] PASS: share-compute → agent → inference proven end to end");
     // ggml teardown aborts in C++ static destructors; skip them (issue #8).
     std::process::exit(0);
-}
-
-async fn fizz_publish_turn(
-    base: &str,
-    model: &str,
-) -> (anyhow::Result<String>, std::path::PathBuf) {
-    let root = std::env::temp_dir().join(format!("mesh-fizz-e2e-{}", std::process::id()));
-    let capture = root.join("tool-calls.json");
-    if let Err(error) = std::fs::create_dir_all(&root) {
-        return (Err(error.into()), capture);
-    }
-
-    let dev_mcp = match repo_bin("buzz-dev-mcp") {
-        Ok(path) => vec![("dev".to_string(), path)],
-        Err(error) => return (Err(error), capture),
-    };
-    let system_prompt = format!("{BUZZ_BASE_PROMPT}\n\n[System]\n{FIZZ_SYSTEM_PROMPT}");
-    let prompt = format!(
-        "[Context]\nChannel UUID: {FIZZ_TEST_CHANNEL}\nReply destination: top-level channel message.\n\n[Buzz event: message]\n@Fizz Reply exactly FIZZ_MESH_CONTRACT_OK. You must follow the Buzz communication contract and publish the reply to this channel."
-    );
-    let (result, _) = agent_chat_with_setup(
-        base,
-        model,
-        &prompt,
-        &dev_mcp,
-        &system_prompt,
-        None,
-        Some(&capture),
-    )
-    .await;
-    (result, capture)
 }
 
 fn repo_bin(name: &str) -> anyhow::Result<String> {
@@ -285,27 +215,6 @@ async fn agent_chat_in_isolated_home(
     prompt: &str,
     mcp_servers: &[(String, String)],
 ) -> (anyhow::Result<String>, std::path::PathBuf) {
-    agent_chat_with_setup(
-        base,
-        model,
-        prompt,
-        mcp_servers,
-        BUZZ_BASE_PROMPT,
-        None,
-        None,
-    )
-    .await
-}
-
-async fn agent_chat_with_setup(
-    base: &str,
-    model: &str,
-    prompt: &str,
-    mcp_servers: &[(String, String)],
-    system_prompt: &str,
-    path_prefix: Option<&std::path::Path>,
-    tool_call_capture: Option<&std::path::Path>,
-) -> (anyhow::Result<String>, std::path::PathBuf) {
     let agent = match repo_bin("buzz-agent") {
         Ok(agent) => agent,
         Err(error) => return (Err(error), std::path::PathBuf::new()),
@@ -316,22 +225,9 @@ async fn agent_chat_with_setup(
         return (Err(error.into()), home);
     }
 
-    let test_nsec = match Keys::generate().secret_key().to_bech32() {
-        Ok(key) => key,
-        Err(error) => return (Err(error.into()), home),
-    };
-    let path = path_prefix
-        .map(|prefix| {
-            format!(
-                "{}:{}",
-                prefix.display(),
-                std::env::var("PATH").unwrap_or_default()
-            )
-        })
-        .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
     let mut child = match Command::new(&agent)
         .env_clear()
-        .env("PATH", path)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("HOME", &home)
         // Exactly the relay-mesh preset env (preset.rs).
         .env("BUZZ_AGENT_PROVIDER", "openai")
@@ -341,12 +237,6 @@ async fn agent_chat_with_setup(
         .env("OPENAI_COMPAT_API_KEY", "buzz-mesh-local")
         .env("OPENAI_COMPAT_API", "chat")
         .env("OPENAI_COMPAT_OMIT_MAX_TOKENS", "true")
-        .env("BUZZ_AGENT_THINKING_EFFORT", "none")
-        // Real desktop launches inject these into the harness and MCP server.
-        // Hermetic placeholders satisfy the CLI preflight; the test-local
-        // `buzz` shim records the command without contacting a relay.
-        .env("BUZZ_RELAY_URL", "ws://127.0.0.1:1")
-        .env("BUZZ_PRIVATE_KEY", test_nsec)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -356,21 +246,9 @@ async fn agent_chat_with_setup(
         Err(error) => return (Err(error.into()), home),
     };
 
-    let result = drive_acp(&mut child, prompt, mcp_servers, &home, system_prompt)
-        .await
-        .and_then(|turn| {
-            if let Some(path) = tool_call_capture {
-                std::fs::write(path, serde_json::to_vec_pretty(&turn.tool_calls)?)?;
-            }
-            Ok(turn.text)
-        });
+    let result = drive_acp(&mut child, prompt, mcp_servers, &home).await;
     let _ = child.kill().await;
     (result, home)
-}
-
-struct AcpTurnResult {
-    text: String,
-    tool_calls: Vec<serde_json::Value>,
 }
 
 async fn drive_acp(
@@ -378,8 +256,7 @@ async fn drive_acp(
     prompt: &str,
     mcp_servers: &[(String, String)],
     cwd: &std::path::Path,
-    system_prompt: &str,
-) -> anyhow::Result<AcpTurnResult> {
+) -> anyhow::Result<String> {
     let mut stdin = child
         .stdin
         .take()
@@ -414,7 +291,7 @@ async fn drive_acp(
                 "params": {
                     "cwd": cwd.to_string_lossy(),
                     "mcpServers": mcp_json,
-                    "systemPrompt": system_prompt
+                    "systemPrompt": BUZZ_BASE_PROMPT
                 }
             }))
             .as_bytes(),
@@ -423,7 +300,6 @@ async fn drive_acp(
 
     let mut session_id: Option<String> = None;
     let mut agent_text = String::new();
-    let mut tool_calls = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
 
     loop {
@@ -441,8 +317,6 @@ async fn drive_acp(
             let update = &msg["params"]["update"];
             if update["sessionUpdate"] == "agent_message_chunk" {
                 collect_text(update, &mut agent_text);
-            } else if update["sessionUpdate"] == "tool_call" {
-                tool_calls.push(update.clone());
             }
             continue;
         }
@@ -474,10 +348,7 @@ async fn drive_acp(
                 if let Some(err) = msg.get("error") {
                     anyhow::bail!("session/prompt failed: {err}");
                 }
-                return Ok(AcpTurnResult {
-                    text: agent_text.trim().to_string(),
-                    tool_calls,
-                });
+                return Ok(agent_text.trim().to_string());
             }
             _ => {}
         }
