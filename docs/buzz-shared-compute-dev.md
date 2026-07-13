@@ -39,9 +39,10 @@ runtime are behind the `mesh-llm` feature.
 1. Open **Settings**.
 2. Select **Compute**.
 3. Under **Share compute**, choose a suggested model.
-   - On a 16 GB Apple Silicon machine, use a suggested Qwen3.5 4B quantized
-     model when available.
-   - `unsloth/Qwen3.5-4B-GGUF:Q4_K_M` is the model used by the hardware proof.
+   - Prefer `Gemma-4-E4B-it-Q4_K_M` when it is suggested; it passes repeated
+     real-hardware Fizz publication, ordinary chat, and file-tool checks.
+   - `Qwen3-8B-Q4_K_M` is the verified fallback. Models smaller than these may
+     chat successfully but are not recommended for Fizz's structured tool use.
 4. Turn on **Share this machine**.
 5. Wait until the card says it is sharing/running. Do not start Fizz while the
    card says downloading, preparing, or starting.
