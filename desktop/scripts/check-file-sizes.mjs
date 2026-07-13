@@ -266,7 +266,8 @@ const overrides = new Map([
   // rebase over codex-acp-package-swap: its version-probe tests union with the
   // doctor-install-reliability nvm/login-shell/semver tests — each side alone
   // stayed under the 1000 default; the union exceeds it.
-  ["src-tauri/src/managed_agents/discovery/tests.rs", 1029],
+  // Rebase added two required `mcp_servers` fixture fields after main reached 1029.
+  ["src-tauri/src/managed_agents/discovery/tests.rs", 1031],
   // identity-import-keyring: the identity resolution state machine's behavioral
   // matrix (46 tests over FakeIdentityStore — probe × marker × file cells,
   // adoption / read-back-corruption / marker-failure arms, recovery-mode
