@@ -367,6 +367,7 @@ const WINDOW_AUX_DELETE_KINDS: [u32; 2] = [
 /// Validation errors (missing `#h`, half a cursor) are deterministic client
 /// mistakes and return `400`; an inaccessible channel is an access-scope skip
 /// that still emits nothing, matching every other read path here.
+#[allow(clippy::too_many_arguments)]
 async fn handle_channel_window_filter(
     state: &AppState,
     tenant: &buzz_core::TenantContext,
@@ -375,6 +376,7 @@ async fn handle_channel_window_filter(
     accessible_channels: &[uuid::Uuid],
     events: &mut Vec<Value>,
     pubkey_bytes: &[u8],
+    reader_pubkey_hex: &str,
 ) -> Result<(), (StatusCode, Json<Value>)> {
     use buzz_core::kind::{KIND_THREAD_SUMMARY, KIND_WINDOW_BOUNDS};
 
@@ -442,9 +444,18 @@ async fn handle_channel_window_filter(
         .await
         .map_err(|e| internal_error(&format!("channel window error: {e}")))?;
 
-    // 1. Rows, in keyset order.
+    // 1. Rows, in keyset order. Gate each row through the canonical read-
+    //    authorization predicate so draft-expiry (and any future per-event
+    //    predicates) apply consistently with every other read surface.
     let mut row_ids_hex = Vec::with_capacity(window.rows.len());
     for row in &window.rows {
+        if !buzz_core::filter::reader_can_receive_event(
+            &row.stored_event.event,
+            reader_pubkey_hex,
+            pubkey_bytes,
+        ) {
+            continue;
+        }
         row_ids_hex.push(row.stored_event.event.id.to_hex());
         let v = serde_json::to_value(&row.stored_event.event)
             .map_err(|e| internal_error(&format!("window row serialize: {e}")))?;
@@ -771,6 +782,7 @@ pub async fn query_events(
             &accessible_channels,
             &mut events,
             &pubkey_bytes,
+            &authed_pubkey_hex,
         )
         .await?;
         handled.insert(idx);

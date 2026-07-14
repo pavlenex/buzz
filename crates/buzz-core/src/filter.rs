@@ -42,17 +42,6 @@ pub fn is_author_only_event(event: &nostr::Event, requester_pubkey_bytes: &[u8])
         && event.pubkey.to_bytes() != requester_pubkey_bytes
 }
 
-/// Canonical per-event read-authorization gate: combines `reader_authorized_for_event`
-/// (p-gated/result-gated kinds) and `is_author_only_event` (author-private kinds)
-/// into a single predicate.
-///
-/// Every delivery surface — WS historical pull, WS fan-out, HTTP bridge (all
-/// branches: feed, thread, search, catchall, channel-window), and COUNT fallback
-/// — must pass each event through this function before serializing it to the wire.
-/// Using one canonical gate instead of composing the two predicates at each call
-/// site prevents future read surfaces from accidentally omitting half the privacy
-/// model.
-///
 /// Returns `true` if a draft event should be suppressed at read time due to expiry.
 ///
 /// Only applies to `KIND_DRAFT` events; all other kinds return `false`.
@@ -88,6 +77,16 @@ pub fn draft_expired(event: &nostr::Event, now: nostr::Timestamp) -> bool {
     now.as_secs() >= effective_expiry
 }
 
+/// Canonical per-event read-authorization gate: combines `reader_authorized_for_event`
+/// (p-gated/result-gated kinds), `is_author_only_event` (author-private kinds), and
+/// `draft_expired` (time-based draft suppression) into a single predicate.
+///
+/// Every delivery surface — WS historical pull, WS fan-out, HTTP bridge (all
+/// branches: feed, thread, search, catchall, channel-window), and COUNT fallback
+/// — must pass each event through this function before serializing it to the wire.
+/// Using one canonical gate instead of composing the predicates at each call site
+/// prevents future read surfaces from accidentally omitting half the privacy model.
+///
 /// Returns `true` if `reader` MAY receive the event.
 pub fn reader_can_receive_event(
     event: &nostr::Event,
