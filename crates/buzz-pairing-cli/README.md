@@ -25,10 +25,24 @@ Acts as the device holding the secret. Generates an ephemeral keypair and sessio
 
 ```
 buzz-pair source --relay <RELAY_URL> [--nsec <BECH32_NSEC>]
+buzz-pair source --relay <RELAY_URL> --payload-type <TYPE> --payload <CONTENT>
 ```
 
 - `--relay` — WebSocket relay URL (default: `wss://relay.damus.io`)
 - `--nsec` — bech32 nsec to transfer. If omitted, generates a throwaway test key.
+- `--payload-type` — type for explicit payload content: `nsec`, `bunker`, `connect`, or `custom`.
+- `--payload` — explicit payload content. Must be provided with `--payload-type`; it is sent verbatim so interop tests can exercise both valid and malformed payloads.
+
+`--payload-type` and `--payload` let the generic interop tool exercise application-defined payloads without baking an application's schema into the CLI. For example, a Buzz workspace payload can be sent with:
+
+```bash
+buzz-pair source \
+  --relay wss://relay.example.com \
+  --payload-type custom \
+  --payload '{"relayUrl":"https://relay.example.com","pubkey":"<HEX_PUBKEY>","nsec":"<BECH32_NSEC>"}'
+```
+
+The workspace `relayUrl` is the HTTP API base URL, while `--relay` remains the WebSocket relay used for the pairing exchange.
 
 ### `target`
 

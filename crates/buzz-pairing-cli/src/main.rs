@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! buzz-pair source --relay wss://relay.example.com [--nsec nsec1...]
+//!                  [--payload-type custom --payload '{...}']
 //! buzz-pair target [--relay wss://relay.example.com]
 //! buzz-pair test-vectors
 //! ```
@@ -23,7 +24,7 @@ use buzz_core::pairing::{
     types::PayloadType,
     PairingError,
 };
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use futures_util::{SinkExt, StreamExt};
 use nostr::{Event, EventBuilder, Keys, RelayUrl, SecretKey, ToBech32};
 use tokio::time::timeout;
@@ -51,8 +52,16 @@ enum Cmd {
         relay: String,
 
         /// nsec (bech32) of the key to transfer. If omitted, generates a test key.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["payload_type", "payload"])]
         nsec: Option<String>,
+
+        /// Type of an explicit payload to transfer.
+        #[arg(long, value_enum, requires = "payload", conflicts_with = "nsec")]
+        payload_type: Option<CliPayloadType>,
+
+        /// Explicit payload content to transfer.
+        #[arg(long, requires = "payload_type", conflicts_with = "nsec")]
+        payload: Option<String>,
     },
 
     /// Act as the target device (scans QR code, receives the secret).
@@ -68,6 +77,25 @@ enum Cmd {
 
     /// Print NIP-AB test vectors derived from the spec's fixed keys.
     TestVectors,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CliPayloadType {
+    Nsec,
+    Bunker,
+    Connect,
+    Custom,
+}
+
+impl From<CliPayloadType> for PayloadType {
+    fn from(value: CliPayloadType) -> Self {
+        match value {
+            CliPayloadType::Nsec => Self::Nsec,
+            CliPayloadType::Bunker => Self::Bunker,
+            CliPayloadType::Connect => Self::Connect,
+            CliPayloadType::Custom => Self::Custom,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -105,15 +133,25 @@ async fn main() {
 
 async fn run(cmd: Cmd) -> Result<(), CliError> {
     match cmd {
-        Cmd::Source { relay, nsec } => cmd_source(relay, nsec).await,
+        Cmd::Source {
+            relay,
+            nsec,
+            payload_type,
+            payload,
+        } => cmd_source(relay, nsec, payload_type, payload).await,
         Cmd::Target { relay, show_secret } => cmd_target(relay, show_secret).await,
         Cmd::TestVectors => cmd_test_vectors(),
     }
 }
 
-async fn cmd_source(relay_url: String, nsec: Option<String>) -> Result<(), CliError> {
+async fn cmd_source(
+    relay_url: String,
+    nsec: Option<String>,
+    payload_type: Option<CliPayloadType>,
+    payload: Option<String>,
+) -> Result<(), CliError> {
     // Resolve the payload to transfer.
-    let (payload_str, payload_type) = resolve_payload(nsec)?;
+    let (payload_str, payload_type) = resolve_payload(nsec, payload_type, payload)?;
 
     // Create pairing session.
     let (mut session, qr) = PairingSession::new_source(relay_url.clone());
@@ -576,9 +614,25 @@ fn parse_relay_event(text: &str, sub_id: &str) -> Option<Event> {
 
 /// Resolve the payload to send.
 ///
-/// If `nsec` is provided, parse it as bech32 and return the raw nsec string.
-/// Otherwise generate a fresh test key and return its nsec.
-fn resolve_payload(nsec: Option<String>) -> Result<(Zeroizing<String>, PayloadType), CliError> {
+/// Explicit payload content and type take precedence. Otherwise, parse a provided
+/// nsec as bech32 or generate a fresh test key when no payload was supplied.
+fn resolve_payload(
+    nsec: Option<String>,
+    payload_type: Option<CliPayloadType>,
+    payload: Option<String>,
+) -> Result<(Zeroizing<String>, PayloadType), CliError> {
+    match (payload_type, payload) {
+        (Some(payload_type), Some(payload)) => {
+            return Ok((Zeroizing::new(payload), payload_type.into()));
+        }
+        (None, None) => {}
+        _ => {
+            return Err(CliError::Other(
+                "--payload-type and --payload must be provided together".into(),
+            ));
+        }
+    }
+
     match nsec {
         Some(s) => {
             // Validate it parses as a secret key.
@@ -591,7 +645,7 @@ fn resolve_payload(nsec: Option<String>) -> Result<(Zeroizing<String>, PayloadTy
                 .secret_key()
                 .to_bech32()
                 .map_err(|e| CliError::InvalidNsec(e.to_string()))?;
-            println!("(no --nsec provided; using generated test key)");
+            println!("(no payload provided; using generated test key)");
             Ok((Zeroizing::new(nsec_str), PayloadType::Nsec))
         }
     }
@@ -620,4 +674,99 @@ fn hex_to_32(s: &str) -> Result<[u8; 32], CliError> {
     bytes
         .try_into()
         .map_err(|_| CliError::Other(format!("expected 32 bytes, got wrong length for '{s}'")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_each_explicit_payload_type() {
+        let cases = [
+            ("nsec", PayloadType::Nsec),
+            ("bunker", PayloadType::Bunker),
+            ("connect", PayloadType::Connect),
+            ("custom", PayloadType::Custom),
+        ];
+
+        for (argument, expected) in cases {
+            let cli = Cli::try_parse_from([
+                "buzz-pair",
+                "source",
+                "--payload-type",
+                argument,
+                "--payload",
+                "test payload",
+            ])
+            .expect("explicit payload arguments should parse");
+
+            let Cmd::Source {
+                nsec,
+                payload_type,
+                payload,
+                ..
+            } = cli.command
+            else {
+                panic!("expected source command");
+            };
+            let (content, kind) =
+                resolve_payload(nsec, payload_type, payload).expect("payload should resolve");
+
+            assert_eq!(kind, expected);
+            assert_eq!(&*content, "test payload");
+        }
+    }
+
+    #[test]
+    fn explicit_payload_flags_must_be_paired() {
+        assert!(Cli::try_parse_from(["buzz-pair", "source", "--payload-type", "custom"]).is_err());
+        assert!(Cli::try_parse_from(["buzz-pair", "source", "--payload", "content"]).is_err());
+    }
+
+    #[test]
+    fn resolve_payload_rejects_unpaired_explicit_arguments() {
+        assert!(resolve_payload(None, Some(CliPayloadType::Custom), None).is_err());
+        assert!(resolve_payload(None, None, Some("content".into())).is_err());
+    }
+
+    #[test]
+    fn explicit_payload_content_is_not_validated() {
+        let (content, kind) = resolve_payload(
+            None,
+            Some(CliPayloadType::Nsec),
+            Some("intentionally malformed nsec".into()),
+        )
+        .expect("interop payloads should pass through verbatim");
+
+        assert_eq!(kind, PayloadType::Nsec);
+        assert_eq!(&*content, "intentionally malformed nsec");
+    }
+
+    #[test]
+    fn explicit_payload_conflicts_with_nsec() {
+        assert!(Cli::try_parse_from([
+            "buzz-pair",
+            "source",
+            "--nsec",
+            "nsec1example",
+            "--payload-type",
+            "custom",
+            "--payload",
+            "content",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn preserves_legacy_nsec_mode() {
+        let secret = Keys::generate()
+            .secret_key()
+            .to_bech32()
+            .expect("generated key should encode");
+        let (content, kind) =
+            resolve_payload(Some(secret.clone()), None, None).expect("valid nsec should resolve");
+
+        assert_eq!(kind, PayloadType::Nsec);
+        assert_eq!(&*content, &secret);
+    }
 }
