@@ -132,6 +132,12 @@ jobs:
           cargo build --release -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
           ./scripts/bundle-sidecars.sh
 
+      # Stage the pinned ACP bridge tools into src-tauri/resources/acp before
+      # `tauri build` bundles resources — without this the app ships an empty
+      # resources/acp and silently falls back to unpinned user installs.
+      - name: Stage bundled ACP tools
+        run: ./desktop/scripts/prepare-acp-tools-resource.sh aarch64-apple-darwin
+
       # Mesh rev derived from Cargo.lock (no lockstep edit on dep bump); cache key tracks it.
       - name: Resolve mesh-llm rev
         id: mesh_rev
@@ -340,6 +346,9 @@ jobs:
         run: |
           cargo build --release --target "$TARGET" -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
           ./scripts/bundle-sidecars.sh "$TARGET"
+
+      - name: Stage bundled ACP tools
+        run: ./desktop/scripts/prepare-acp-tools-resource.sh "$TARGET"
 
       - name: Build unsigned Tauri app
         run: cd desktop && pnpm tauri build --verbose --no-sign --target "$TARGET" --config src-tauri/tauri.release.conf.json
@@ -588,6 +597,9 @@ jobs:
           cargo build --release -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
           ./scripts/bundle-sidecars.sh
 
+      - name: Stage bundled ACP tools
+        run: ./desktop/scripts/prepare-acp-tools-resource.sh x86_64-unknown-linux-gnu
+
       - name: Generate release config
         run: cd desktop && node scripts/build-release-config.mjs
         env:
@@ -744,6 +756,10 @@ jobs:
         run: |
           cargo build --release --target "$TARGET" -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
           ./scripts/bundle-sidecars.sh "$TARGET"
+
+      - name: Stage bundled ACP tools
+        shell: bash
+        run: ./desktop/scripts/prepare-acp-tools-resource.sh "$TARGET"
 
       - name: Build Windows NSIS installer (unsigned)
         shell: bash
