@@ -36,3 +36,14 @@ export async function persistCurrentIdentity(): Promise<Identity> {
     await invokeTauri<RawIdentity>("persist_current_identity"),
   );
 }
+
+/**
+ * Wipe all local Buzz state (keychain, App Support, WebKit, nest, OAuth cache,
+ * CLI symlinks) and relaunch into first-run onboarding.
+ *
+ * This call never resolves on success — the process restarts. Callers should
+ * handle the error case (e.g. display a toast) but not await a resolution.
+ */
+export async function signOut(): Promise<void> {
+  await invokeTauri("sign_out");
+}

@@ -317,7 +317,13 @@ const overrides = new Map([
   // security fix for the lost-update race that stranded agent keys.
   // identity-import-keyring: KeyringLockedScreen, RecoveryScreen,
   // load_readonly + load_all_readonly + store_all for safe cross-service reads.
-  ["src-tauri/src/secret_store.rs", 1140],
+  // sign-out wipe: delete_all() method removes the entire keychain blob under
+  // the interprocess advisory lock; +8 lines. Load-bearing; queued to split.
+  ["src-tauri/src/secret_store.rs", 1148],
+  // sign-out wipe: Sign Out section (AlertDialog + controlled state) added
+  // at the bottom of the Profile settings page. Load-bearing UX feature;
+  // queued to split when ProfileSettingsCard is broken into sub-components.
+  ["src/features/settings/ui/ProfileSettingsCard.tsx", 1005],
   // keyring-dev-isolation: keyring_service() fn (7 lines) replaces the const
   // to return "buzz-desktop-dev" in debug builds. Load-bearing isolation fix.
   ["src-tauri/src/app_state.rs", 1042],

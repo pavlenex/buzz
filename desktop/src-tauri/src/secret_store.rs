@@ -740,6 +740,42 @@ impl SecretStore {
         }
     }
 
+    /// Delete the entire keychain blob for this service.
+    ///
+    /// Used by the sign-out wipe path to remove all persisted keys in one shot.
+    /// After this call the OS keychain has no entry for this service; the next
+    /// launch will generate a fresh keypair and show first-run onboarding.
+    pub fn delete_all(&self) -> Result<(), String> {
+        #[cfg(feature = "system-keyring")]
+        {
+            let _lock = acquire_blob_lock(&self.service)?;
+            if let Ok(entry) = keyring_entry(&self.service, BLOB_KEY) {
+                match entry.delete_credential() {
+                    Ok(()) | Err(keyring::Error::NoEntry) => {}
+                    Err(e) if is_keyring_availability_error(&e.to_string()) => {
+                        return Err(format!("keyring unavailable: {e}"));
+                    }
+                    Err(e) => {
+                        // Non-fatal — log and continue; the blob is gone even if
+                        // the delete_credential call returned a non-standard error.
+                        eprintln!("buzz-desktop sign-out: keychain delete: {e}");
+                    }
+                }
+            }
+            // Best-effort: also remove any legacy DPK blob written by #1267.
+            #[cfg(target_os = "macos")]
+            let _ = delete_generic_password_options(dpk_opts(&self.service, BLOB_KEY));
+            // Clear the in-memory cache so subsequent calls see the clean state.
+            let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = None;
+            Ok(())
+        }
+        #[cfg(not(feature = "system-keyring"))]
+        {
+            Ok(()) // No-op: no keyring, nothing to delete.
+        }
+    }
+
     /// Delete the secret for `key`. A missing entry is not an error.
     pub fn delete(&self, key: &str) -> Result<(), String> {
         #[cfg(feature = "system-keyring")]

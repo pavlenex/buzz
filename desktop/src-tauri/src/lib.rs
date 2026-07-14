@@ -702,6 +702,7 @@ pub fn run() {
             discover_managed_agent_prereqs,
             sign_event,
             sign_nostr_identity_binding,
+            sign_out,
             decrypt_observer_event,
             build_observer_control_event,
             create_auth_event,
