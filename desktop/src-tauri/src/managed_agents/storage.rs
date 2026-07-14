@@ -40,7 +40,7 @@ pub fn managed_agents_base_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn managed_agents_store_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn managed_agents_store_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(managed_agents_base_dir(app)?.join("managed-agents.json"))
 }
 

@@ -487,6 +487,9 @@ pub async fn preview_team_snapshot_import(
 ///      If ANY generation fails, return immediately — zero writes.
 ///   3. Store — inside `managed_agents_store_lock`: write all `AgentDefinition`s
 ///      + all `ManagedAgentRecord`s (with `team_id` set) + `TeamRecord`.
+///      The raw agent store is snapshotted before the first write; if either
+///      `save_managed_agents` or `save_teams` fails the pre-import bytes are
+///      restored, making the store phase all-or-none at the application level.
 ///   4. Profile sync — for each member, call `sync_managed_agent_profile`.
 ///      Best-effort; errors are collected per member.
 ///   5. Memory restore — for each member with non-empty snapshot memory,
@@ -638,30 +641,54 @@ pub async fn confirm_team_snapshot_import(
             }
         }
 
+        // Snapshot the raw agent store for rollback on partial write failure.
+        let agents_store_path = crate::managed_agents::storage::managed_agents_store_path(&app)?;
+        let agents_store_snapshot = std::fs::read(&agents_store_path).ok();
+
         // Write all definitions.
         let mut personas = load_personas(&app)?;
         for m in &minted {
             personas.push(m.definition.clone());
         }
         save_personas(&app, &personas)?;
-        for m in &minted {
-            crate::commands::personas::retain_persona_pending(&app, &state, &m.definition);
-        }
 
         // Write all managed-agent records.
         let mut records = existing_records;
         for m in &minted {
             records.push(m.record.clone());
         }
-        save_managed_agents(&app, &records)?;
-        for m in &minted {
-            retain_agent_pending(&app, &state, &m.record);
+        if let Err(e) = save_managed_agents(&app, &records) {
+            // save_personas already wrote — rollback the agent store.
+            if let Some(ref bytes) = agents_store_snapshot {
+                let _ = crate::managed_agents::storage::atomic_write_json_restricted(
+                    &agents_store_path,
+                    bytes,
+                );
+            }
+            return Err(e);
         }
 
         // Write the team record.
         let mut teams = load_teams(&app)?;
         teams.push(imported_team.clone());
-        save_teams(&app, &teams)?;
+        if let Err(e) = save_teams(&app, &teams) {
+            // Rollback: restore pre-import agent store.
+            if let Some(ref bytes) = agents_store_snapshot {
+                let _ = crate::managed_agents::storage::atomic_write_json_restricted(
+                    &agents_store_path,
+                    bytes,
+                );
+            }
+            return Err(e);
+        }
+
+        // All writes committed — safe to update in-memory state.
+        for m in &minted {
+            crate::commands::personas::retain_persona_pending(&app, &state, &m.definition);
+        }
+        for m in &minted {
+            retain_agent_pending(&app, &state, &m.record);
+        }
         crate::commands::teams::retain_team_pending(&app, &state, &imported_team);
 
         crate::managed_agents::try_regenerate_nest(&app);

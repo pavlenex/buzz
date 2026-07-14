@@ -234,3 +234,86 @@ fn detach_skips_non_directory_backed_teams() {
     let teams = read_teams_json(base);
     assert_eq!(teams[0]["instructions"], "Existing instructions.");
 }
+
+#[test]
+fn second_boot_after_successful_detach_yields_zero_detached() {
+    // Crash-safety pin: a successful detach clears source_dir atomically.
+    // A second boot must find no directory-backed teams and return 0 — both
+    // files are intact and parseable, so the idempotency gate fires correctly.
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+
+    let team_dir = base.join("teams/com.example.myteam");
+    std::fs::create_dir_all(&team_dir).unwrap();
+    std::fs::write(team_dir.join("instructions.md"), "Team rules.").unwrap();
+
+    write_teams_json(
+        base,
+        &serde_json::json!([{
+            "id": "team-uuid-1",
+            "name": "My Team",
+            "persona_ids": ["persona-1"],
+            "is_builtin": false,
+            "source_dir": team_dir.to_str().unwrap(),
+            "is_symlink": false,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }]),
+    );
+    write_agents_json(
+        base,
+        &serde_json::json!([{
+            "pubkey": "aaaa",
+            "name": "agent-1",
+            "persona_id": "persona-1",
+            "source_team": "com.example.myteam",
+            "persona_team_dir": team_dir.to_str().unwrap(),
+            "persona_name_in_team": "agent-slug",
+            "relay_url": "wss://relay.example.com",
+            "acp_command": "claude",
+            "agent_command": "claude",
+            "mcp_command": "claude",
+            "agent_args": [],
+            "turn_timeout_seconds": 60,
+            "parallelism": 1,
+            "start_on_app_launch": false,
+            "auto_restart_on_config_change": true,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }]),
+    );
+
+    // Boot 1: migration runs.
+    let n1 = super::detach::detach_directory_backed_teams_in_dir(&base.join("agents")).unwrap();
+    assert_eq!(n1, 1);
+
+    // Both files are readable and valid after the first boot.
+    let teams_after_first = read_teams_json(base);
+    assert!(
+        teams_after_first[0]
+            .get("source_dir")
+            .is_none_or(|v| v.is_null()),
+        "source_dir cleared after first boot"
+    );
+    let agents_after_first = read_agents_json(base);
+    assert_eq!(
+        agents_after_first[0]["team_id"], "team-uuid-1",
+        "team_id backfilled after first boot"
+    );
+
+    // Boot 2: idempotency gate fires — no teams have source_dir set.
+    let n2 = super::detach::detach_directory_backed_teams_in_dir(&base.join("agents")).unwrap();
+    assert_eq!(n2, 0, "second boot is a no-op");
+
+    // Files are unchanged.
+    let teams_after_second = read_teams_json(base);
+    assert_eq!(
+        teams_after_second[0]["instructions"], "Team rules.",
+        "instructions preserved across boots"
+    );
+    let agents_after_second = read_agents_json(base);
+    assert_eq!(
+        agents_after_second[0]["team_id"], "team-uuid-1",
+        "team_id stable across boots"
+    );
+}

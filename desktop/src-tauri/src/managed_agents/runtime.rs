@@ -1728,8 +1728,8 @@ pub fn spawn_agent_child(
 
     // System prompt via the shared spawn-effective filter — the SAME function the
     // config hash digests, so env write and badge cannot disagree (see
-    // `effective_spawn_prompt` for the Some("")/None collapse and the
-    // team-pack suppression exception). Model and provider use the shared
+    // `effective_spawn_prompt` for the Some("")/None collapse). Model and provider
+    // use the shared
     // resolver: agent → persona → global → None, so a global-default-only agent
     // spawns with the correct provider/model env.
     let effective_prompt = super::spawn_hash::effective_spawn_prompt(record);

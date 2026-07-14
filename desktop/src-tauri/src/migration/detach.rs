@@ -10,6 +10,10 @@ use crate::managed_agents::{ManagedAgentRecord, TeamRecord};
 /// directory-backed teams from their source directories.
 ///
 /// Runs on app launch if any `TeamRecord` still has `source_dir` set.
+/// Both output files are written atomically (temp-file + rename), so a crash
+/// mid-write leaves the previous version intact and the migration can safely
+/// retry on next boot.
+///
 /// Steps (written last so the idempotency gate stays open until both files
 /// are committed):
 ///
@@ -105,8 +109,7 @@ pub(super) fn detach_directory_backed_teams_in_dir(base_dir: &Path) -> Result<us
         if agents_changed {
             let payload = serde_json::to_vec_pretty(&agents)
                 .map_err(|e| format!("failed to serialize managed-agents.json: {e}"))?;
-            std::fs::write(&agents_path, &payload)
-                .map_err(|e| format!("failed to write managed-agents.json: {e}"))?;
+            crate::managed_agents::atomic_write_json_restricted(&agents_path, &payload)?;
         }
     }
 
@@ -151,8 +154,7 @@ pub(super) fn detach_directory_backed_teams_in_dir(base_dir: &Path) -> Result<us
 
     let payload = serde_json::to_vec_pretty(&teams)
         .map_err(|e| format!("failed to serialize teams.json: {e}"))?;
-    std::fs::write(&teams_path, &payload)
-        .map_err(|e| format!("failed to write teams.json: {e}"))?;
+    crate::managed_agents::atomic_write_json(&teams_path, &payload)?;
 
     Ok(detached)
 }
