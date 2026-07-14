@@ -246,6 +246,29 @@ fn build_draft_at(
         .unwrap()
 }
 
+/// Build a kind:31234 draft with a short-lived `expiration` tag.
+///
+/// `secs_from_now` controls how far in the future the expiration is set.
+/// Ingest requires `expiration` strictly in the future, so callers should use
+/// a margin wide enough to survive CI scheduler pauses (~10s recommended).
+fn build_expiring_draft(
+    keys: &Keys,
+    d_tag: &str,
+    channel_id: &str,
+    secs_from_now: u64,
+) -> nostr::Event {
+    let exp_ts = Timestamp::now().as_secs() + secs_from_now;
+    EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
+        .tags([
+            Tag::parse(["d", d_tag]).unwrap(),
+            Tag::parse(["k", "9"]).unwrap(),
+            Tag::parse(["h", channel_id]).unwrap(),
+            Tag::parse(["expiration", &exp_ts.to_string()]).unwrap(),
+        ])
+        .sign_with_keys(keys)
+        .unwrap()
+}
+
 /// Build a blank-content tombstone (NIP-37 deletion) bound to `channel_id`.
 fn build_tombstone(
     keys: &Keys,
@@ -3596,10 +3619,10 @@ async fn test_reminder_target_reaction_oracle_closed() {
 
 #[tokio::test]
 #[ignore]
-async fn test_draft_expired_by_server_ttl_suppressed_on_http_query() {
-    // A draft with a short future `expiration` tag (now + 2s) must be served
-    // immediately after ingest, then suppressed on /query once the tag lapses.
-    // A fresh draft (no expiration) must remain visible throughout.
+async fn test_draft_expired_by_client_tag_suppressed_on_http_query() {
+    // A draft with a short future `expiration` tag must be served immediately
+    // after ingest, then suppressed on /query once the tag lapses. A fresh
+    // draft (no expiration) must remain visible throughout.
     //
     // Bite check: if `draft_expired` were removed from `reader_can_receive_event`,
     // the expired draft would persist alongside the fresh one — the final `ids`
@@ -3610,18 +3633,7 @@ async fn test_draft_expired_by_server_ttl_suppressed_on_http_query() {
     let d_expiring = uuid::Uuid::new_v4().to_string();
     let d_fresh = uuid::Uuid::new_v4().to_string();
 
-    // Short-lived draft: expiration = now + 2s. Passes ingest's strictly-future
-    // check, then `draft_expired` suppresses once 2s elapse.
-    let exp_ts = Timestamp::now().as_secs() + 2;
-    let expiring = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
-        .tags([
-            Tag::parse(["d", &d_expiring]).unwrap(),
-            Tag::parse(["k", "9"]).unwrap(),
-            Tag::parse(["h", &ch_id]).unwrap(),
-            Tag::parse(["expiration", &exp_ts.to_string()]).unwrap(),
-        ])
-        .sign_with_keys(&owner)
-        .unwrap();
+    let expiring = build_expiring_draft(&owner, &d_expiring, &ch_id, 10);
     let expiring_id = expiring.id;
     let (ok_e, msg_e) = submit_event_http(&client, &owner, &expiring).await;
     assert!(ok_e, "expiring draft must be accepted at ingest: {msg_e}");
@@ -3631,11 +3643,11 @@ async fn test_draft_expired_by_server_ttl_suppressed_on_http_query() {
     let (ok_f, msg_f) = submit_event_http(&client, &owner, &fresh).await;
     assert!(ok_f, "fresh draft must be accepted: {msg_f}");
 
-    // Poll until the expiring draft drops from /query (timeout 10s).
+    // Poll until the expiring draft drops from /query (timeout 20s).
     let filter = Filter::new()
         .kind(nostr::Kind::Custom(KIND_DRAFT))
         .author(owner.public_key());
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
     loop {
         let events =
             query_events_http(&client, &owner.public_key().to_hex(), vec![filter.clone()]).await;
@@ -3675,16 +3687,7 @@ async fn test_draft_expired_not_counted_on_count_surface() {
     let d_expiring = uuid::Uuid::new_v4().to_string();
     let d_fresh = uuid::Uuid::new_v4().to_string();
 
-    let exp_ts = Timestamp::now().as_secs() + 2;
-    let expiring = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
-        .tags([
-            Tag::parse(["d", &d_expiring]).unwrap(),
-            Tag::parse(["k", "9"]).unwrap(),
-            Tag::parse(["h", &ch_id]).unwrap(),
-            Tag::parse(["expiration", &exp_ts.to_string()]).unwrap(),
-        ])
-        .sign_with_keys(&owner)
-        .unwrap();
+    let expiring = build_expiring_draft(&owner, &d_expiring, &ch_id, 10);
     let (ok_e, msg_e) = submit_event_http(&client, &owner, &expiring).await;
     assert!(ok_e, "expiring draft must be accepted at ingest: {msg_e}");
 
@@ -3696,8 +3699,8 @@ async fn test_draft_expired_not_counted_on_count_surface() {
         .kind(nostr::Kind::Custom(KIND_DRAFT))
         .author(owner.public_key());
 
-    // Poll until COUNT drops to 1 (timeout 10s).
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    // Poll until COUNT drops to 1 (timeout 20s).
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
     loop {
         let resp = client
             .post(format!("{}/count", relay_http_url()))
@@ -3741,16 +3744,7 @@ async fn test_draft_expired_suppressed_on_channel_window() {
     let d_expiring = uuid::Uuid::new_v4().to_string();
     let d_fresh = uuid::Uuid::new_v4().to_string();
 
-    let exp_ts = Timestamp::now().as_secs() + 2;
-    let expiring = EventBuilder::new(Kind::Custom(KIND_DRAFT), fake_nip44_v2())
-        .tags([
-            Tag::parse(["d", &d_expiring]).unwrap(),
-            Tag::parse(["k", "9"]).unwrap(),
-            Tag::parse(["h", &ch_id]).unwrap(),
-            Tag::parse(["expiration", &exp_ts.to_string()]).unwrap(),
-        ])
-        .sign_with_keys(&owner)
-        .unwrap();
+    let expiring = build_expiring_draft(&owner, &d_expiring, &ch_id, 10);
     let expiring_id = expiring.id;
     let (ok_e, msg_e) = submit_event_http(&client, &owner, &expiring).await;
     assert!(ok_e, "expiring draft must be accepted at ingest: {msg_e}");
@@ -3760,8 +3754,8 @@ async fn test_draft_expired_suppressed_on_channel_window() {
     let (ok_f, msg_f) = submit_event_http(&client, &owner, &fresh).await;
     assert!(ok_f, "fresh draft must be accepted: {msg_f}");
 
-    // Poll channel-window until the expiring draft drops (timeout 10s).
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    // Poll channel-window until the expiring draft drops (timeout 20s).
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
     loop {
         let events = query_channel_window_mixed(&owner, &ch_id, false, false).await;
         let ids: Vec<String> = events
