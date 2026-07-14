@@ -220,7 +220,7 @@ pub struct CliArgs {
     pub idle_timeout: Option<u64>,
 
     /// Absolute wall-clock cap per turn (safety valve).
-    #[arg(long, env = "BUZZ_ACP_MAX_TURN_DURATION", default_value = "3600")]
+    #[arg(long, env = "BUZZ_ACP_MAX_TURN_DURATION", default_value = "7200")]
     pub max_turn_duration: u64,
 
     /// Deprecated: alias for --idle-timeout. If both set, --idle-timeout wins.
@@ -1326,7 +1326,7 @@ mod tests {
             agent_args: vec!["acp".into()],
             mcp_command: "".into(),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
-            max_turn_duration_secs: 3600,
+            max_turn_duration_secs: 7200,
             agents: 1,
             heartbeat_interval_secs: 0,
             turn_liveness_secs: 10,
@@ -2231,7 +2231,7 @@ channels = "ALL"
             "summary should include {expected_idle}: {summary}"
         );
         assert!(
-            summary.contains("max_turn=3600s"),
+            summary.contains("max_turn=7200s"),
             "summary should include max_turn: {summary}"
         );
     }
@@ -2438,10 +2438,10 @@ channels = "ALL"
 
         // And the valid case:
         let idle_valid = 900u64;
-        let max_turn_valid = 3600u64;
+        let max_turn_valid = 7200u64;
         assert!(
             idle_valid < max_turn_valid,
-            "default idle (900) must be less than default max_turn (3600)"
+            "default idle (900) must be less than default max_turn (7200)"
         );
     }
 
