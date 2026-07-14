@@ -4246,7 +4246,9 @@ mod error_outcome_emission_tests {
             }
         };
 
+        // Returns (pending_channels, queued_event_count_for_channel).
         let run = |outcome: PromptOutcome, batch: FlushBatch| async move {
+            let channel_id = batch.channel_id;
             let agent = dummy_agent(0).await;
             let mut pool = AgentPool::from_slots(vec![None]);
             let task_id = pool.join_set.spawn(async {}).id();
@@ -4273,7 +4275,7 @@ mod error_outcome_emission_tests {
             let mut respawn_tasks = tokio::task::JoinSet::new();
             let result = PromptResult {
                 agent,
-                source: PromptSource::Channel(batch.channel_id),
+                source: PromptSource::Channel(channel_id),
                 outcome,
                 batch: Some(batch),
             };
@@ -4290,27 +4292,33 @@ mod error_outcome_emission_tests {
                 None,
                 None,
             );
-            // Return how many channels have pending items in the queue.
-            // requeue() inserts a queue entry (even for empty event lists) and
-            // sets a retry_after delay, so flush_next() won't fire immediately.
-            // pending_channels() reflects the queue map directly.
-            queue.pending_channels()
+            (
+                queue.pending_channels(),
+                queue.queued_event_count(&channel_id),
+            )
         };
 
         // Hard timeout: batch must NOT be requeued (dead-lettered immediately).
         let hard_batch = make_batch();
+        let (hard_channels, hard_events) =
+            run(PromptOutcome::Timeout(TimeoutKind::Hard), hard_batch).await;
         assert_eq!(
-            run(PromptOutcome::Timeout(TimeoutKind::Hard), hard_batch).await,
-            0,
+            hard_channels, 0,
             "hard-cap timeout must not requeue the batch"
         );
+        assert_eq!(hard_events, 0, "hard-cap timeout must drop all events");
 
         // Idle timeout: batch IS requeued (first attempt, not yet dead-lettered).
         let idle_batch = make_batch();
+        let (idle_channels, idle_events) =
+            run(PromptOutcome::Timeout(TimeoutKind::Idle), idle_batch).await;
         assert_eq!(
-            run(PromptOutcome::Timeout(TimeoutKind::Idle), idle_batch).await,
-            1,
+            idle_channels, 1,
             "idle timeout must requeue the batch for retry"
+        );
+        assert_eq!(
+            idle_events, 1,
+            "idle timeout must preserve the event for retry"
         );
     }
 

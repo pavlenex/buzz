@@ -569,6 +569,12 @@ impl EventQueue {
         self.queues.len()
     }
 
+    /// Number of queued events for a specific channel. Test-only.
+    #[cfg(test)]
+    pub fn queued_event_count(&self, channel_id: &Uuid) -> usize {
+        self.queues.get(channel_id).map_or(0, |q| q.len())
+    }
+
     /// Drop all queued (non-in-flight) events for a channel.
     ///
     /// Used when the agent is removed from a channel — any pending events

@@ -30,6 +30,11 @@ pub(crate) const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 900;
 /// Override via `--max-turn-duration` / `BUZZ_ACP_MAX_TURN_DURATION`.
 pub(crate) const DEFAULT_MAX_TURN_DURATION_SECS: u64 = 7200;
 
+/// Upper bound for `max_turn_duration` (7 days). Any higher is operationally
+/// meaningless and risks arithmetic overflow when deriving the in-flight
+/// deadline (`max_turn_duration + IN_FLIGHT_DEADLINE_BUFFER_SECS`).
+pub(crate) const MAX_TURN_DURATION_CEILING_SECS: u64 = 604_800;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to parse nostr keys: {0}")]
@@ -835,6 +840,11 @@ impl Config {
             if raw == 0 {
                 tracing::warn!("max turn duration of 0 is invalid — using 60s minimum");
                 60
+            } else if raw > MAX_TURN_DURATION_CEILING_SECS {
+                return Err(ConfigError::ConfigFile(format!(
+                    "max_turn_duration ({}s) exceeds ceiling ({}s / 7 days)",
+                    raw, MAX_TURN_DURATION_CEILING_SECS
+                )));
             } else {
                 raw
             }
@@ -2627,5 +2637,58 @@ channels = "ALL"
             result.is_ok(),
             "from_args should accept any mode when allowed list is unset: {result:?}"
         );
+    }
+
+    // --- max_turn_duration ceiling gate ---
+
+    #[test]
+    fn max_turn_duration_at_ceiling_is_accepted() {
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--max-turn-duration",
+            &MAX_TURN_DURATION_CEILING_SECS.to_string(),
+        ])
+        .expect("clap should parse args");
+        let result = Config::from_args(args);
+
+        assert!(
+            result.is_ok(),
+            "from_args should accept max_turn_duration at the ceiling: {result:?}"
+        );
+    }
+
+    #[test]
+    fn max_turn_duration_above_ceiling_is_rejected() {
+        let over = MAX_TURN_DURATION_CEILING_SECS + 1;
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--max-turn-duration",
+            &over.to_string(),
+        ])
+        .expect("clap should parse args");
+        let result = Config::from_args(args);
+
+        assert!(
+            result.is_err(),
+            "from_args should reject max_turn_duration above the ceiling"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("exceeds ceiling"),
+            "error should mention 'exceeds ceiling': {msg}"
+        );
+    }
+
+    #[test]
+    fn max_turn_duration_ceiling_cannot_overflow_in_flight_deadline() {
+        // The in-flight deadline is max_turn + 100s buffer (IN_FLIGHT_DEADLINE_BUFFER_SECS).
+        // Verify that even at the ceiling, this addition cannot overflow u64.
+        const {
+            assert!(MAX_TURN_DURATION_CEILING_SECS < u64::MAX - 100);
+        }
     }
 }
