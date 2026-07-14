@@ -106,6 +106,8 @@ export function AppShell() {
   const [managedChannelId, setManagedChannelId] = React.useState<string | null>(
     null,
   );
+  const [openChannelManagementInEditMode, setOpenChannelManagementInEditMode] =
+    React.useState(false);
   const [searchFocusRequest, setSearchFocusRequest] = React.useState(0);
   const [browseDialogType, setBrowseDialogType] =
     React.useState<BrowseDialogType>(null);
@@ -637,10 +639,14 @@ export function AppShell() {
             markChannelRead,
             markChannelUnread,
             openCreateChannel: handleOpenCreateChannel,
-            openChannelManagement: (channelId?: string) => {
+            openChannelManagement: (
+              channelId?: string,
+              options?: { edit?: boolean },
+            ) => {
               setManagedChannelId(
                 typeof channelId === "string" ? channelId : null,
               );
+              setOpenChannelManagementInEditMode(options?.edit === true);
               setIsChannelManagementOpen(true);
             },
             getChannelReadAt,
@@ -906,12 +912,16 @@ export function AppShell() {
                       channels={channels}
                       currentPubkey={identityQuery.data?.pubkey}
                       isChannelManagementOpen={isChannelManagementOpen}
+                      openChannelManagementInEditMode={
+                        openChannelManagementInEditMode
+                      }
                       onBrowseChannelJoin={handleBrowseChannelJoin}
                       onBrowseDialogOpenChange={handleBrowseDialogOpenChange}
                       onChannelManagementOpenChange={(open) => {
                         setIsChannelManagementOpen(open);
                         if (!open) {
                           setManagedChannelId(null);
+                          setOpenChannelManagementInEditMode(false);
                         }
                       }}
                       onDeleteActiveChannel={() => {

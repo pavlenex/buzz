@@ -89,6 +89,7 @@ type ChannelManagementSheetProps = {
   channel: Channel | null;
   animateSplitEnter?: boolean;
   currentPubkey?: string;
+  initiallyEditing?: boolean;
   layout?: "overlay" | "split";
   onDeleted?: () => void;
   onOpenChange: (open: boolean) => void;
@@ -100,6 +101,7 @@ export function ChannelManagementSheet({
   animateSplitEnter = false,
   channel,
   currentPubkey,
+  initiallyEditing = false,
   layout = "overlay",
   onDeleted,
   onOpenChange,
@@ -229,8 +231,9 @@ export function ChannelManagementSheet({
     setTtlDraft(
       detail.ttlSeconds !== null ? formatTtlDuration(detail.ttlSeconds) : "",
     );
+    setIsEditDialogOpen(initiallyEditing);
     setActiveView("summary");
-  }, [detail, open]);
+  }, [detail, initiallyEditing, open]);
 
   if (!channel) {
     return null;

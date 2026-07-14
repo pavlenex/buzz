@@ -2333,6 +2333,75 @@ test("open channel management supports join and leave", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("channel context menu edits a stream", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByTestId("channel-general").click({ button: "right" });
+  const editItem = page.getByRole("menuitem", { name: "Edit channel" });
+  await expect(editItem).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "Archive channel" }),
+  ).toBeVisible();
+
+  await editItem.click();
+  const editDialog = page.getByRole("dialog", { name: "Edit channel" });
+  await expect(editDialog).toBeVisible();
+  await expect(editDialog.getByTestId("channel-management-name")).toHaveValue(
+    "general",
+  );
+
+  await editDialog.getByTestId("channel-management-name").fill("general-chat");
+  await editDialog.getByTestId("channel-management-save-changes").click();
+  await expect(editDialog).not.toBeVisible();
+  await expect(page.getByTestId("stream-list")).toContainText("general-chat");
+
+  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByTestId("channel-management-trigger").click();
+  await expect(editDialog).toHaveCount(0);
+});
+
+test("channel context menu hides management actions from members and DMs", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.getByTestId("channel-random").click({ button: "right" });
+  await expect(
+    page.getByRole("menuitem", { name: "Edit channel" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("menuitem", { name: "Archive channel" }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  const firstDm = page
+    .getByTestId("dm-list")
+    .locator('[data-testid^="channel-"]')
+    .first();
+  await firstDm.click({ button: "right" });
+  await expect(
+    page.getByRole("menuitem", { name: "Edit channel" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("menuitem", { name: "Archive channel" }),
+  ).toHaveCount(0);
+});
+
+test("channel context menu archives a stream", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByTestId("channel-general").click({ button: "right" });
+  const archiveItem = page.getByRole("menuitem", { name: "Archive channel" });
+  await expect(archiveItem).toBeVisible();
+  await archiveItem.click();
+
+  await expect(page.getByTestId("stream-list")).not.toContainText("general");
+  await openChannelBrowser(page);
+  await expect(page.getByTestId("browse-channel-general")).toContainText(
+    "archived",
+  );
+});
+
 test("manage channel can archive and unarchive a stream", async ({ page }) => {
   await page.goto("/");
   await openChannelManagement(page, "general");

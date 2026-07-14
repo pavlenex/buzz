@@ -21,6 +21,7 @@ type AppShellOverlaysProps = {
   channels: Channel[];
   currentPubkey?: string;
   isChannelManagementOpen: boolean;
+  openChannelManagementInEditMode: boolean;
   onBrowseChannelJoin: (channelId: string) => Promise<void>;
   onBrowseDialogOpenChange: (open: boolean) => void;
   onChannelManagementOpenChange: (open: boolean) => void;
@@ -34,6 +35,7 @@ export function AppShellOverlays({
   channels,
   currentPubkey,
   isChannelManagementOpen,
+  openChannelManagementInEditMode,
   onBrowseChannelJoin,
   onBrowseDialogOpenChange,
   onChannelManagementOpenChange,
@@ -80,6 +82,7 @@ export function AppShellOverlays({
           <ChannelManagementSheet
             channel={activeChannel}
             currentPubkey={currentPubkey}
+            initiallyEditing={openChannelManagementInEditMode}
             onDeleted={onDeleteActiveChannel}
             onOpenChange={onChannelManagementOpenChange}
             open={true}

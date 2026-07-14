@@ -1,4 +1,5 @@
 import {
+  Archive,
   Bell,
   BellOff,
   Check,
@@ -6,11 +7,22 @@ import {
   CircleDot,
   Copy,
   LogOut,
+  Pencil,
   Plus,
   Star,
   StarOff,
 } from "lucide-react";
+import { toast } from "sonner";
 
+import { useAppShell } from "@/app/AppShellContext";
+import {
+  useArchiveChannelMutation,
+  useChannelMembersQuery,
+} from "@/features/channels/hooks";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
+import { ownsAuthorAgent } from "@/features/profile/lib/identity";
+import { useIdentityQuery } from "@/shared/api/hooks";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import type { ChannelSection } from "@/features/sidebar/lib/useChannelSections";
 import {
   ContextMenuIconSlot,
@@ -166,6 +178,37 @@ export function ChannelContextMenuItems({
   onCreateSectionForChannel?: (channelId: string) => void;
   onLeaveChannel?: (channel: Channel) => void;
 }) {
+  const { openChannelManagement } = useAppShell();
+  const currentPubkey = useIdentityQuery().data?.pubkey;
+  const archiveChannelMutation = useArchiveChannelMutation(channel.id);
+  const membersQuery = useChannelMembersQuery(
+    channel.id,
+    channel.channelType !== "dm",
+  );
+  const ownerPubkeys =
+    membersQuery.data
+      ?.filter(
+        (member) => member.role === "owner" && member.pubkey !== currentPubkey,
+      )
+      .map((member) => member.pubkey) ?? [];
+  const ownerProfilesQuery = useUsersBatchQuery(ownerPubkeys, {
+    enabled: ownerPubkeys.length > 0,
+  });
+  const selfMember = membersQuery.data?.find(
+    (member) => member.pubkey === currentPubkey,
+  );
+  const canManageOwnedAgentChannel = ownerPubkeys.some((pubkey) =>
+    ownsAuthorAgent(
+      ownerProfilesQuery.data?.profiles[normalizePubkey(pubkey)],
+      currentPubkey,
+    ),
+  );
+  const showManagementActions =
+    channel.channelType !== "dm" &&
+    channel.archivedAt === null &&
+    (selfMember?.role === "owner" ||
+      selfMember?.role === "admin" ||
+      canManageOwnedAgentChannel);
   const showStar = Boolean(onStarChannel && onUnstarChannel);
   const showReadToggle = hasUnread
     ? Boolean(onMarkChannelRead)
@@ -191,6 +234,42 @@ export function ChannelContextMenuItems({
           onUnassignChannel={onUnassignChannel ?? (() => {})}
           onCreateSectionForChannel={onCreateSectionForChannel ?? (() => {})}
         />
+      ) : null}
+      {showManagementActions ? (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            onSelect={() =>
+              deferMenuAction(() =>
+                openChannelManagement(channel.id, { edit: true }),
+              )
+            }
+          >
+            <ContextMenuIconSlot>
+              <Pencil className="h-4 w-4" />
+            </ContextMenuIconSlot>
+            <span>Edit channel</span>
+          </ContextMenuItem>
+          <ContextMenuItem
+            className="text-destructive focus:text-destructive"
+            onSelect={() =>
+              deferMenuAction(() => {
+                void archiveChannelMutation.mutateAsync().catch((error) => {
+                  toast.error(
+                    error instanceof Error
+                      ? error.message
+                      : "Failed to archive channel.",
+                  );
+                });
+              })
+            }
+          >
+            <ContextMenuIconSlot>
+              <Archive className="h-4 w-4" />
+            </ContextMenuIconSlot>
+            <span>Archive channel</span>
+          </ContextMenuItem>
+        </>
       ) : null}
       {showReadToggle ? <ContextMenuSeparator /> : null}
       {hasUnread && onMarkChannelRead ? (
