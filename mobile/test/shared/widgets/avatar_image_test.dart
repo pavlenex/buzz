@@ -26,7 +26,9 @@ void main() {
     await tester.pumpWidget(subject(raccoonAvatar));
     await tester.pumpAndSettle();
 
-    expect(find.byType(SvgPicture), findsOneWidget);
+    final emoji = tester.widget<Text>(find.text('🦝'));
+    expect(emoji.style?.height, 1);
+    expect(find.byType(SvgPicture), findsNothing);
     expect(find.text('R'), findsNothing);
     expect(tester.takeException(), isNull);
   });

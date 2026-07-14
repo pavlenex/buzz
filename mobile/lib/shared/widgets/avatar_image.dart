@@ -71,6 +71,21 @@ class _AvatarImageContentState extends State<AvatarImageContent> {
     final centeredFallback = Center(child: widget.fallback);
 
     return switch (_source) {
+      _EmojiAvatarSource(:final emoji, :final color) => ColoredBox(
+        color: color,
+        child: LayoutBuilder(
+          builder: (_, constraints) => Center(
+            child: Text(
+              emoji,
+              textScaler: TextScaler.noScaling,
+              style: TextStyle(
+                fontSize: constraints.biggest.shortestSide * 258 / 512,
+                height: 1,
+              ),
+            ),
+          ),
+        ),
+      ),
       _SvgAvatarSource(:final svg) => SvgPicture.string(
         svg,
         fit: widget.fit,
@@ -104,13 +119,43 @@ sealed class _AvatarSource {
       final data = UriData.parse(url);
       if (data.mimeType == 'image/svg+xml') {
         final Uint8List bytes = data.contentAsBytes();
-        return _SvgAvatarSource(utf8.decode(bytes));
+        final svg = utf8.decode(bytes);
+        return _parseEmojiAvatar(svg) ?? _SvgAvatarSource(svg);
       }
       return _RasterDataAvatarSource(data.contentAsBytes());
     } on FormatException {
       return null;
     }
   }
+}
+
+_EmojiAvatarSource? _parseEmojiAvatar(String svg) {
+  final colorValue = RegExp(
+    r'<rect\b[^>]*\sfill="([^"]+)"',
+  ).firstMatch(svg)?[1];
+  final emojiValue = RegExp(r'<text\b[^>]*>(.*?)</text>').firstMatch(svg)?[1];
+  if (colorValue == null || emojiValue == null) return null;
+
+  final color = _parseHexColor(colorValue);
+  if (color == null) return null;
+  final emoji = emojiValue
+      .replaceAll('&gt;', '>')
+      .replaceAll('&lt;', '<')
+      .replaceAll('&amp;', '&');
+  return _EmojiAvatarSource(emoji, color);
+}
+
+Color? _parseHexColor(String value) {
+  final hex = value.startsWith('#') ? value.substring(1) : value;
+  if (!RegExp(r'^[0-9a-fA-F]{6}$').hasMatch(hex)) return null;
+  final rgb = int.tryParse(hex, radix: 16);
+  return rgb == null ? null : Color(0xFF000000 | rgb);
+}
+
+class _EmojiAvatarSource extends _AvatarSource {
+  final String emoji;
+  final Color color;
+  const _EmojiAvatarSource(this.emoji, this.color);
 }
 
 class _SvgAvatarSource extends _AvatarSource {
