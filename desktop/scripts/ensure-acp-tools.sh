@@ -132,10 +132,11 @@ entry_count="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).
 mkdir -p "$bin_dir"
 if [[ "$entry_count" == "0" ]]; then
   find "$bin_dir" -type f -delete
+  # stderr so the notice shows up in release build logs even when stdout is
+  # reserved for --print-bin-dir consumers (prepare-acp-tools-resource.sh).
+  echo "No ACP tools locked for target $target." >&2
   if [[ "$print_bin_dir" == "1" ]]; then
     printf '%s\n' "$bin_dir"
-  else
-    echo "No ACP tools locked for target $target."
   fi
   exit 0
 fi
