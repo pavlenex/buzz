@@ -79,7 +79,9 @@ const overrides = new Map([
   // 3-phase (stage/stop/commit) + commit_cascade_agents injectable helper for
   // retry-safety. Load-bearing reviewer-required change; queued to split.
   // Consolidation removed the legacy persona-card import/export codecs.
-  ["src-tauri/src/commands/personas/mod.rs", 984],
+  // team-instructions-first-class: apply_inbound_team mirrors the new
+  // TeamRecord.instructions field on both the update and insert branches.
+  ["src-tauri/src/commands/personas/mod.rs", 986],
   // #1418 read-path fix: get_thread_replies' blocker fix (shared TIMELINE_KINDS
   // const + build_thread_replies_filter helper, mirroring the channel sibling so
   // the two p-gate filters can't drift) plus two guard unit tests. The file was
@@ -163,7 +165,9 @@ const overrides = new Map([
   // Git Bash readiness is intentionally colocated with buzz-agent's other
   // setup-mode requirements. The Windows-only requirement and serialization
   // test add eight lines; split remains queued with the existing file debt.
-  ["src-tauri/src/managed_agents/readiness.rs", 1762],
+  // team-instructions-first-class: ManagedAgentRecord fixture gains the new
+  // team_id field (+1 line).
+  ["src-tauri/src/managed_agents/readiness.rs", 1763],
   // applyWorkspace reposDir parameter plus the validateReposDir binding,
   // threaded through Tauri invokes for configurable repos_dir, plus the
   // harness-persona-sync `harnessOverride` create-input bit — load-bearing
@@ -196,7 +200,9 @@ const overrides = new Map([
   // RawInstallRuntimeResult + fromRawInstallRuntimeResult mapper (+2).
   // Git Bash Doctor discovery adds the raw Tauri response and its camelCase
   // mapper. This is the existing API boundary; split remains queued.
-  ["src/shared/api/tauri.ts", 1304],
+  // team-instructions-first-class: createManagedAgent Tauri bridge threads the
+  // new teamId input through to the backend (+1 line).
+  ["src/shared/api/tauri.ts", 1305],
   // doctor-npm-eacces-preflight: hint field added to InstallStepResult (+1 line).
   // codex-acp-package-swap: "adapter_outdated" variant added to AcpAvailabilityStatus (+1 line).
   // doctor-install-reliability: AuthStatus tagged union + nodeRequired/authStatus/
@@ -206,7 +212,11 @@ const overrides = new Map([
   // mcp-readonly-view rebase: PR2 MCP config surface FE-type fields force +1 over the grandfathered ceiling.
   // Git Bash prerequisite payload adds four fields to the shared Tauri API
   // contract. This is the canonical type location; split remains queued.
-  ["src/shared/api/types.ts", 1038],
+  // team-instructions-first-class: CreateManagedAgentInput.teamId (+2, incl.
+  // doc comment) and AgentTeam/CreateTeamInput/UpdateTeamInput.instructions
+  // (+3) — the new team-id spawn link and the runtime-layered instructions
+  // field.
+  ["src/shared/api/types.ts", 1043],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
@@ -265,7 +275,9 @@ const overrides = new Map([
   // rebase over codex-acp-package-swap: its version-probe tests union with the
   // doctor-install-reliability nvm/login-shell/semver tests — each side alone
   // stayed under the 1000 default; the union exceeds it.
-  ["src-tauri/src/managed_agents/discovery/tests.rs", 1029],
+  // team-instructions-first-class: record_with test fixture gained the new
+  // ManagedAgentRecord.team_id field (+1 line) alongside persona_team_dir.
+  ["src-tauri/src/managed_agents/discovery/tests.rs", 1030],
   // identity-import-keyring: the identity resolution state machine's behavioral
   // matrix (46 tests over FakeIdentityStore — probe × marker × file cells,
   // adoption / read-back-corruption / marker-failure arms, recovery-mode

@@ -19,8 +19,6 @@ import { RelayDirectorySection } from "./RelayDirectorySection";
 import { SecretRevealDialog } from "./SecretRevealDialog";
 import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { TeamDialog } from "./TeamDialog";
-import { TeamImportDialog } from "./TeamImportDialog";
-import { TeamImportUpdateDialog } from "./TeamImportUpdateDialog";
 import { TeamsSection } from "./TeamsSection";
 import { UnifiedAgentsSection } from "./UnifiedAgentsSection";
 import { useManagedAgentActions } from "./useManagedAgentActions";
@@ -55,7 +53,6 @@ export function AgentsView() {
   const isActionPending =
     agents.isPending ||
     personas.isPending ||
-    teamActions.exportTeamJsonMutation.isPending ||
     teamActions.createTeamMutation.isPending ||
     teamActions.updateTeamMutation.isPending ||
     teamActions.deleteTeamMutation.isPending;
@@ -178,11 +175,6 @@ export function AgentsView() {
               onDelete={teamActions.setTeamToDelete}
               onDuplicate={teamActions.openDuplicateDialog}
               onEdit={teamActions.openEditDialog}
-              onExport={teamActions.handleExportTeam}
-              onImportFile={teamActions.handleImportFile}
-              onInstallFromDirectory={teamActions.handleInstallFromDirectory}
-              onSync={teamActions.handleSyncTeam}
-              onRevealInFinder={teamActions.handleRevealInFinder}
               onAddToChannel={teamActions.setTeamToAddToChannel}
               personas={personas.libraryPersonas}
               teams={teamActions.teams}
@@ -408,12 +400,10 @@ export function AgentsView() {
                 : null
           }
           initialValues={teamActions.teamDialogState.initialValues}
-          isImportPending={teamActions.isApplyingTeamImportUpdate}
           isPending={
             teamActions.createTeamMutation.isPending ||
             teamActions.updateTeamMutation.isPending
           }
-          onImportUpdateFile={teamActions.handleEditDialogImportUpdateFile}
           onOpenChange={(open) => {
             if (!open) {
               teamActions.setTeamDialogState(null);
@@ -452,39 +442,6 @@ export function AgentsView() {
           open={teamActions.teamToAddToChannel !== null}
           personas={personas.libraryPersonas}
           team={teamActions.teamToAddToChannel}
-        />
-      ) : null}
-      {teamActions.teamImportPreview ? (
-        <TeamImportDialog
-          fileName={teamActions.teamImportPreview.fileName}
-          onComplete={teamActions.handleTeamImportComplete}
-          onOpenChange={(open) => {
-            if (!open) {
-              teamActions.setTeamImportPreview(null);
-            }
-          }}
-          open={teamActions.teamImportPreview !== null}
-          preview={teamActions.teamImportPreview.preview}
-        />
-      ) : null}
-      {teamActions.teamImportTarget ? (
-        <TeamImportUpdateDialog
-          fileName={teamActions.teamImportTargetPreview?.fileName ?? ""}
-          isPending={
-            teamActions.isApplyingTeamImportUpdate ||
-            teamActions.updateTeamMutation.isPending
-          }
-          onApply={teamActions.handleTeamImportUpdateApply}
-          onClear={teamActions.clearImportUpdateAndReturnToEdit}
-          onOpenChange={(open) => {
-            if (!open) {
-              teamActions.closeImportUpdateDialog();
-            }
-          }}
-          open={teamActions.teamImportTarget !== null}
-          personas={personas.libraryPersonas}
-          preview={teamActions.teamImportTargetPreview?.preview ?? null}
-          team={teamActions.teamImportTarget}
         />
       ) : null}
     </>

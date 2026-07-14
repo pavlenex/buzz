@@ -58,6 +58,8 @@ export type CreateChannelManagedAgentInput = {
   systemPrompt?: string;
   avatarUrl?: string;
   personaId?: string | null;
+  /** Team this instance is deployed from; prevents cross-team reuse. */
+  teamId?: string | null;
   /**
    * True when `runtime` is a runtime the user deliberately picked to override
    * the persona (a deploy-dialog runtime selector), as opposed to a
@@ -358,6 +360,7 @@ export async function createChannelManagedAgent(
     agentArgs: input.runtime.defaultArgs,
     mcpCommand: input.runtime.mcpCommand ?? "",
     personaId: input.personaId ?? undefined,
+    teamId: input.teamId ?? undefined,
     systemPrompt: input.systemPrompt?.trim() || undefined,
     avatarUrl: resolvedAvatarUrl,
     model: input.model?.trim() || undefined,

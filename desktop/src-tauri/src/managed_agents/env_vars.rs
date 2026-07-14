@@ -45,6 +45,7 @@ pub(crate) fn is_derived_provider_model_key(key: &str) -> bool {
 /// The structured `AgentDefinition.provider` / `AgentDefinition.model` fields are
 /// the authoritative source of truth. Keeping the derived copies would cause
 /// stale env values to override updated structured fields at spawn/deploy time.
+#[cfg(test)]
 pub(crate) fn filter_derived_provider_model_env_vars(
     env_vars: impl IntoIterator<Item = (String, String)>,
 ) -> BTreeMap<String, String> {

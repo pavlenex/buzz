@@ -44,6 +44,7 @@ fn snapshot(members: Vec<AgentSnapshot>) -> TeamSnapshot {
         team: TeamSnapshotMeta {
             name: "Review Team".to_string(),
             description: Some("Reviews changes".to_string()),
+            instructions: Some("Be thorough.".to_string()),
         },
         members,
     }
@@ -97,6 +98,7 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
         id: "review".to_string(),
         name: "Review Team".to_string(),
         description: Some("Reviews changes".to_string()),
+        instructions: Some("Be thorough.".to_string()),
         persona_ids: vec!["alice".to_string(), "bob".to_string()],
         is_builtin: false,
         source_dir: None,
@@ -107,13 +109,23 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
         updated_at: "now".to_string(),
     };
 
-    let bytes =
-        encode_team_snapshot_json(&build_team_export_snapshot(&team, &definitions).unwrap())
-            .unwrap();
+    // Export with no instances and MemoryLevel::None — memory stays empty.
+    let bytes = encode_team_snapshot_json(
+        &build_team_export_snapshot(
+            &team,
+            &definitions,
+            &[],
+            MemoryLevel::None,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let decoded = decode_team_snapshot_from_bytes(&bytes).unwrap();
 
     assert_eq!(decoded.team.name, "Review Team");
     assert_eq!(decoded.team.description.as_deref(), Some("Reviews changes"));
+    assert_eq!(decoded.team.instructions.as_deref(), Some("Be thorough."));
     assert_eq!(decoded.members.len(), 2);
     assert!(decoded.members.iter().all(|member| {
         member.memory.level == MemoryLevel::None && member.memory.entries.is_empty()
@@ -121,7 +133,151 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
 }
 
 #[test]
-fn team_import_creates_definitions_without_instances_or_memory() {
+fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
+    let definitions = vec![AgentDefinition {
+        id: "alice".to_string(),
+        display_name: "Alice".to_string(),
+        avatar_url: None,
+        system_prompt: "Alice prompt".to_string(),
+        runtime: Some("goose".to_string()),
+        model: None,
+        provider: None,
+        name_pool: vec![],
+        is_builtin: false,
+        is_active: true,
+        source_team: None,
+        source_team_persona_slug: None,
+        env_vars: Default::default(),
+        respond_to: None,
+        respond_to_allowlist: vec![],
+        parallelism: None,
+        created_at: "now".to_string(),
+        updated_at: "now".to_string(),
+    }];
+    let team = TeamRecord {
+        id: "t1".to_string(),
+        name: "Team".to_string(),
+        description: None,
+        instructions: None,
+        persona_ids: vec!["alice".to_string()],
+        is_builtin: false,
+        source_dir: None,
+        is_symlink: false,
+        symlink_target: None,
+        version: None,
+        created_at: "now".to_string(),
+        updated_at: "now".to_string(),
+    };
+
+    // Build a fake instance record tied to this team+persona.
+    let instance = ManagedAgentRecord {
+        pubkey: "a".repeat(64),
+        name: "Alice".to_string(),
+        display_name: None,
+        slug: None,
+        persona_id: Some("alice".to_string()),
+        private_key_nsec: String::new(),
+        auth_tag: None,
+        relay_url: String::new(),
+        avatar_url: None,
+        acp_command: crate::managed_agents::DEFAULT_ACP_COMMAND.to_string(),
+        agent_command: String::new(),
+        agent_command_override: None,
+        agent_args: vec![],
+        mcp_command: String::new(),
+        turn_timeout_seconds: 0,
+        idle_timeout_seconds: None,
+        max_turn_duration_seconds: None,
+        parallelism: crate::managed_agents::DEFAULT_AGENT_PARALLELISM,
+        system_prompt: None,
+        model: None,
+        provider: None,
+        persona_source_version: None,
+        env_vars: Default::default(),
+        start_on_app_launch: false,
+        auto_restart_on_config_change: true,
+        runtime_pid: None,
+        backend: crate::managed_agents::BackendKind::Local,
+        backend_agent_id: None,
+        provider_binary_path: None,
+        team_id: Some("t1".to_string()),
+        persona_team_dir: None,
+        persona_name_in_team: None,
+        created_at: "now".to_string(),
+        updated_at: "now".to_string(),
+        last_started_at: None,
+        last_stopped_at: None,
+        last_exit_code: None,
+        last_error: None,
+        last_error_code: None,
+        respond_to: crate::managed_agents::RespondTo::default(),
+        respond_to_allowlist: vec![],
+        is_builtin: false,
+        is_active: true,
+        source_team: None,
+        source_team_persona_slug: None,
+        definition_respond_to: None,
+        definition_respond_to_allowlist: vec![],
+        definition_parallelism: None,
+        relay_mesh: None,
+        runtime: None,
+        name_pool: vec![],
+    };
+
+    let mut memory_map = std::collections::HashMap::new();
+    memory_map.insert(
+        "alice".to_string(),
+        vec![
+            AgentSnapshotMemoryEntry {
+                slug: "core".to_string(),
+                body: "Alice is an expert reviewer.".to_string(),
+            },
+            AgentSnapshotMemoryEntry {
+                slug: "mem/pref".to_string(),
+                body: "prefers concise answers".to_string(),
+            },
+        ],
+    );
+
+    // MemoryLevel::Everything with an instance → entries should appear.
+    let snap = build_team_export_snapshot(
+        &team,
+        &definitions,
+        std::slice::from_ref(&instance),
+        MemoryLevel::Everything,
+        &memory_map,
+    )
+    .unwrap();
+    assert_eq!(snap.members[0].memory.level, MemoryLevel::Everything);
+    assert_eq!(snap.members[0].memory.entries.len(), 2);
+
+    // MemoryLevel::None → entries stripped regardless.
+    let snap_none = build_team_export_snapshot(
+        &team,
+        &definitions,
+        std::slice::from_ref(&instance),
+        MemoryLevel::None,
+        &memory_map,
+    )
+    .unwrap();
+    assert_eq!(snap_none.members[0].memory.level, MemoryLevel::None);
+    assert!(snap_none.members[0].memory.entries.is_empty());
+
+    // No instance → entries stripped even with Everything level.
+    let snap_no_instance = build_team_export_snapshot(
+        &team,
+        &definitions,
+        &[],
+        MemoryLevel::Everything,
+        &memory_map,
+    )
+    .unwrap();
+    assert_eq!(snap_no_instance.members[0].memory.level, MemoryLevel::None);
+    assert!(snap_no_instance.members[0].memory.entries.is_empty());
+}
+
+#[test]
+fn team_import_definitions_are_built_for_all_members() {
     let mut memory_bearing = member("Alice");
     memory_bearing.memory = AgentSnapshotMemory {
         level: MemoryLevel::Everything,
@@ -147,6 +303,7 @@ fn team_import_creates_definitions_without_instances_or_memory() {
 
     assert_eq!(definitions.len(), 2);
     assert_eq!(team.persona_ids.len(), 2);
+    assert_eq!(team.instructions.as_deref(), Some("Be thorough."));
     assert_eq!(
         team.persona_ids,
         definitions
@@ -161,8 +318,6 @@ fn team_import_creates_definitions_without_instances_or_memory() {
             && definition.respond_to_allowlist.is_empty()
     }));
     assert_eq!(definitions[0].system_prompt, "Alice prompt");
-    // `AgentDefinition` has no key/auth/memory fields: the exact import plan
-    // creates N definitions + one TeamRecord, never a managed instance/key.
 }
 
 #[test]
@@ -195,4 +350,16 @@ fn canonical_team_json_is_accepted_without_extension_case_policy() {
     // Preview/confirm intentionally decode content rather than file names, so
     // canonical lowercase and uppercase extensions reach this same safe path.
     assert!(decode_team_snapshot_from_bytes(&bytes).is_ok());
+}
+
+#[test]
+fn parse_memory_level_round_trips_all_variants() {
+    assert_eq!(parse_memory_level("none").unwrap(), MemoryLevel::None);
+    assert_eq!(parse_memory_level("").unwrap(), MemoryLevel::None);
+    assert_eq!(parse_memory_level("core").unwrap(), MemoryLevel::Core);
+    assert_eq!(
+        parse_memory_level("everything").unwrap(),
+        MemoryLevel::Everything
+    );
+    assert!(parse_memory_level("bad").is_err());
 }

@@ -73,6 +73,7 @@ export function TeamDialog({
 }: TeamDialogProps) {
   const [name, setName] = React.useState("");
   const [teamDescription, setTeamDescription] = React.useState("");
+  const [instructions, setInstructions] = React.useState("");
   const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
     [],
   );
@@ -107,6 +108,7 @@ export function TeamDialog({
 
     setName(initialValues.name);
     setTeamDescription(initialValues.description ?? "");
+    setInstructions(initialValues.instructions ?? "");
     setSelectedPersonaIds(copySelectedPersonaIds(initialValues.personaIds));
     setInitialSelectedPersonaIdsForSort(
       copySelectedPersonaIds(initialValues.personaIds),
@@ -227,6 +229,7 @@ export function TeamDialog({
     if (!next) {
       setName("");
       setTeamDescription("");
+      setInstructions("");
       setSelectedPersonaIds([]);
       setInitialSelectedPersonaIdsForSort([]);
       setImportErrorMessage(null);
@@ -266,6 +269,7 @@ export function TeamDialog({
     const baseInput = {
       name,
       description: teamDescription.trim() || undefined,
+      instructions: instructions.trim() || undefined,
       personaIds: filterAvailablePersonaIds(selectedPersonaIds, personas),
     };
 
@@ -359,6 +363,23 @@ export function TeamDialog({
                   onChange={(event) => setTeamDescription(event.target.value)}
                   placeholder="Optional description for this team."
                   value={teamDescription}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="team-instructions"
+                >
+                  Team Instructions
+                </label>
+                <Textarea
+                  className="min-h-24"
+                  disabled={isPending}
+                  id="team-instructions"
+                  onChange={(event) => setInstructions(event.target.value)}
+                  placeholder="Optional instructions applied to every deployed team member."
+                  value={instructions}
                 />
               </div>
 

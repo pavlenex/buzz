@@ -65,6 +65,8 @@ pub struct TeamSnapshotMeta {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 // ── Top-level manifest ────────────────────────────────────────────────────────
@@ -100,6 +102,7 @@ pub fn build_team_snapshot(team: &TeamRecord, members: Vec<AgentSnapshot>) -> Te
         team: TeamSnapshotMeta {
             name: team.name.clone(),
             description: team.description.clone(),
+            instructions: team.instructions.clone(),
         },
         members,
     }
@@ -257,6 +260,7 @@ mod tests {
             id: format!("{name}-id"),
             name: name.to_string(),
             description: Some(format!("{name} description")),
+            instructions: None,
             persona_ids: vec![],
             is_builtin: false,
             source_dir: None,
@@ -303,6 +307,7 @@ mod tests {
             backend: BackendKind::Local,
             backend_agent_id: None,
             provider_binary_path: None,
+            team_id: None,
             persona_team_dir: None,
             persona_name_in_team: None,
             created_at: "2024-01-01T00:00:00Z".to_string(),

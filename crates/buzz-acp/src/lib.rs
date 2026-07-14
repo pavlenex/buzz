@@ -1398,6 +1398,7 @@ async fn tokio_main() -> Result<()> {
         turn_liveness_interval: Duration::from_secs(config.turn_liveness_secs),
         dedup_mode: config.dedup_mode,
         system_prompt: config.system_prompt.clone(),
+        team_instructions: config.team_instructions.clone(),
         base_prompt: if config.no_base_prompt {
             None
         } else if let Some(content) = base_prompt_content {
@@ -3841,6 +3842,7 @@ mod build_mcp_servers_tests {
             turn_liveness_secs: 10,
             heartbeat_prompt: None,
             system_prompt: None,
+            team_instructions: None,
             initial_message: None,
             subscribe_mode: config::SubscribeMode::All,
             dedup_mode: config::DedupMode::Queue,
@@ -4001,6 +4003,7 @@ mod error_outcome_emission_tests {
             turn_liveness_secs: 10,
             heartbeat_prompt: None,
             system_prompt: None,
+            team_instructions: None,
             initial_message: None,
             subscribe_mode: config::SubscribeMode::All,
             dedup_mode: config::DedupMode::Queue,
