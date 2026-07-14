@@ -233,24 +233,13 @@ pub struct DesktopMeshRuntime {
 }
 
 async fn initialize_mesh_native_runtime() -> anyhow::Result<()> {
-    let cache = mesh_llm_sdk::native_runtime::native_runtime_cache(None)?;
-    let installed = cache.installed()?;
-    let current = mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION;
-    if !installed
-        .iter()
-        .any(|runtime| runtime.mesh_version == current)
-    {
-        anyhow::bail!(
-            "mesh native runtime for MeshLLM {current} is not installed; run `just mesh=1 staging` or `just mesh-e2e-hardware` to prepare it"
-        );
-    }
+    // The dynamic host runtime installs the recommended signed runtime on first
+    // use when no compatible version is cached. Keep that SDK-owned path intact
+    // so release builds work on clean machines without bundling llama.cpp or
+    // requiring a separate `mesh-llm runtime install` command.
     mesh_llm_host_runtime::initialize_host_runtime()
         .await
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "mesh native runtime failed to load; run `just mesh=1 staging` or `just mesh-e2e-hardware` to repair it: {error}"
-            )
-        })
+        .map_err(|error| anyhow::anyhow!("mesh native runtime failed to install or load: {error}"))
 }
 
 /// Tokio worker stack size for the runtime that polls mesh-llm futures.
