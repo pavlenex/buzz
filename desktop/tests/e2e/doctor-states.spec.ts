@@ -451,7 +451,7 @@ test.describe("Doctor panel state screenshots", () => {
 
   /**
    * 09 — available runtime whose adapter is the bridge bundled with the app:
-   * the row says "ACP bridge bundled with Buzz" instead of rendering the
+   * the row says "Bundled with Buzz" instead of rendering the
    * resource-dir path, and no CLI path renders — the bundled bridge vendors
    * its own CLI, so the user-CLI row retired with the cli_missing gate.
    */
@@ -476,7 +476,7 @@ test.describe("Doctor panel state screenshots", () => {
 
     const row = page.getByTestId("doctor-runtime-claude");
     await expect(row).toBeVisible({ timeout: 10_000 });
-    await expect(row).toContainText("ACP bridge bundled with Buzz.");
+    await expect(row).toContainText("Bundled with Buzz.");
     await expect(row).not.toContainText("CLI:");
     await expect(row).not.toContainText(bundledPath);
     await expect(row).not.toContainText("installed on PATH");

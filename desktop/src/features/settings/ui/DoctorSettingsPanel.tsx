@@ -202,7 +202,7 @@ function RuntimeRow({
           <>
             <p className="mt-1 text-sm font-normal text-muted-foreground">
               {runtime.adapterBundled
-                ? "ACP bridge bundled with Buzz."
+                ? "Bundled with Buzz."
                 : `Available via ${describeResolvedCommand(runtime.command, runtime.binaryPath)}.`}
             </p>
             {runtime.defaultArgs.length > 0 ? (
@@ -214,7 +214,7 @@ function RuntimeRow({
               </p>
             ) : null}
             {/* The bundled bridge's resource-dir path is noise — the
-                "ACP bridge bundled with Buzz." line above covers it. The
+                "Bundled with Buzz." line above covers it. The
                 user-CLI path row is retired with the cli_missing gate: the
                 bundled bridges vendor their own CLI, so no runtime reports a
                 separate CLI path anymore. */}
