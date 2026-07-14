@@ -63,9 +63,9 @@ pub(crate) fn delete_sentinel(app_data_dir: &Path) -> Result<(), String> {
 pub(crate) trait ResetKeychain {
     /// Delete the blob + all per-key legacy entries.
     fn delete_all_with_legacy(&self) -> Result<(), String>;
-    /// Return `true` when the keychain has no blob entry and no legacy entries
-    /// for `"identity"`.
-    fn probe_empty(&self) -> bool;
+    /// Return `true` when all keychain shapes (main blob, DPK blob, per-key
+    /// entries) that `migrate_legacy_key` can consume are absent.
+    fn verify_fully_wiped(&self) -> bool;
 }
 
 impl ResetKeychain for crate::secret_store::SecretStore {
@@ -73,9 +73,8 @@ impl ResetKeychain for crate::secret_store::SecretStore {
         self.delete_all_with_legacy_cleanup()
     }
 
-    fn probe_empty(&self) -> bool {
-        use crate::secret_store::KeyringProbe;
-        matches!(self.probe("identity"), KeyringProbe::ReachableButEmpty)
+    fn verify_fully_wiped(&self) -> bool {
+        self.verify_fully_wiped()
     }
 }
 
@@ -95,6 +94,13 @@ pub(crate) struct ResetOutcome {
 /// Wipe parameters assembled by `lib.rs` and passed into `run_boot_reset_with_keychain`.
 pub(crate) struct ResetContext<'a> {
     pub app_data_dir: &'a Path,
+    /// Legacy App Support dir for this build (Sprout import source). When
+    /// present and non-empty, wiped alongside `app_data_dir` to prevent
+    /// `migrate_legacy_app_data_dir` from restoring the old identity.
+    pub legacy_app_data_dir: Option<PathBuf>,
+    /// Nest dir (`~/.buzz` or `~/.buzz-dev`) scoped to this build's variant,
+    /// injected so unit tests can override without touching the global OnceLock.
+    pub nest_dir: Option<PathBuf>,
     pub keychain: &'a dyn ResetKeychain,
     pub home_dir: Option<PathBuf>,
     pub is_dev: bool,
@@ -112,20 +118,18 @@ pub(crate) fn run_boot_reset(app_data_dir: &Path) -> ResetOutcome {
     let is_dev = app_data_dir
         .file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.starts_with("xyz.block.buzz.app.dev"))
+        .map(crate::migration::is_dev_data_dir_name)
         .unwrap_or(false);
 
-    let service = if is_dev {
-        "buzz-desktop-dev"
-    } else {
-        "buzz-desktop"
-    };
-
-    let store = crate::secret_store::SecretStore::keyring(service);
+    let store = crate::secret_store::SecretStore::keyring(crate::app_state::keyring_service());
     let home_dir = dirs::home_dir();
+    let legacy_dir = crate::migration::legacy_app_data_dir(app_data_dir);
+    let nest_dir = crate::managed_agents::nest_dir();
 
     let ctx = ResetContext {
         app_data_dir,
+        legacy_app_data_dir: legacy_dir,
+        nest_dir,
         keychain: &store,
         home_dir,
         is_dev,
@@ -161,6 +165,29 @@ pub(crate) fn run_boot_reset_with_keychain(ctx: ResetContext<'_>) -> ResetOutcom
         }
     }
 
+    // ── Step 1b: rename legacy App Support dir (sprout import source) ────────
+    let mut trash_legacy: Option<PathBuf> = None;
+    if let Some(ref legacy) = ctx.legacy_app_data_dir {
+        if legacy.exists() {
+            let legacy_trash = legacy.with_file_name(format!(
+                "{}.trash-{trash_pid}",
+                legacy
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("sprout")
+            ));
+            if let Err(e) = std::fs::rename(legacy, &legacy_trash) {
+                eprintln!(
+                    "buzz-desktop reset: rename legacy app-data {}: {e}",
+                    legacy.display()
+                );
+                // Non-fatal for legacy dir — continue
+            } else {
+                trash_legacy = Some(legacy_trash);
+            }
+        }
+    }
+
     // ── Step 2: rename WebKit dir for this build ──────────────────────────────
     let mut trash_webkit: Option<PathBuf> = None;
     if let Some(ref home) = ctx.home_dir {
@@ -184,8 +211,8 @@ pub(crate) fn run_boot_reset_with_keychain(ctx: ResetContext<'_>) -> ResetOutcom
     }
 
     // ── Step 3: remove nest, ~/.sprout, ~/.config/buzz-agent, CLI symlink ────
-    if let Some(nest) = crate::managed_agents::nest_dir() {
-        let _ = std::fs::remove_dir_all(&nest);
+    if let Some(ref nest) = ctx.nest_dir {
+        let _ = std::fs::remove_dir_all(nest);
     }
     if let Some(ref home) = ctx.home_dir {
         let _ = std::fs::remove_dir_all(home.join(".sprout"));
@@ -212,6 +239,11 @@ pub(crate) fn run_boot_reset_with_keychain(ctx: ResetContext<'_>) -> ResetOutcom
     if trash_app.exists() {
         let _ = std::fs::remove_dir_all(&trash_app);
     }
+    if let Some(ref tl) = trash_legacy {
+        if tl.exists() {
+            let _ = std::fs::remove_dir_all(tl);
+        }
+    }
     if let Some(ref tw) = trash_webkit {
         if tw.exists() {
             let _ = std::fs::remove_dir_all(tw);
@@ -219,16 +251,19 @@ pub(crate) fn run_boot_reset_with_keychain(ctx: ResetContext<'_>) -> ResetOutcom
     }
 
     // ── Step 6: verify ────────────────────────────────────────────────────────
-    let keychain_ok = ctx.keychain.probe_empty();
+    let keychain_ok = ctx.keychain.verify_fully_wiped();
     let app_data_gone = !app_data_dir.exists();
-    let nest_gone = crate::managed_agents::nest_dir()
-        .map(|n| !n.exists())
+    let legacy_gone = ctx
+        .legacy_app_data_dir
+        .as_ref()
+        .map(|p| !p.exists())
         .unwrap_or(true);
+    let nest_gone = ctx.nest_dir.as_ref().map(|n| !n.exists()).unwrap_or(true);
 
-    if !keychain_ok || !app_data_gone || !nest_gone {
+    if !keychain_ok || !app_data_gone || !legacy_gone || !nest_gone {
         eprintln!(
-            "buzz-desktop reset: verification failed (keychain_empty={keychain_ok}, \
-             app_data_gone={app_data_gone}, nest_gone={nest_gone})"
+            "buzz-desktop reset: verification failed (keychain_wiped={keychain_ok}, \
+             app_data_gone={app_data_gone}, legacy_gone={legacy_gone}, nest_gone={nest_gone})"
         );
         return ResetOutcome {
             completed: false,
@@ -263,7 +298,8 @@ mod tests {
         delete_result: Result<(), String>,
         /// Tracks number of times delete was called.
         delete_calls: Cell<u32>,
-        empty_after_delete: bool,
+        /// Whether `verify_fully_wiped` returns true after a successful delete.
+        wiped_after_delete: bool,
     }
 
     impl FakeKeychain {
@@ -271,7 +307,7 @@ mod tests {
             FakeKeychain {
                 delete_result: Ok(()),
                 delete_calls: Cell::new(0),
-                empty_after_delete: true,
+                wiped_after_delete: true,
             }
         }
 
@@ -279,15 +315,15 @@ mod tests {
             FakeKeychain {
                 delete_result: Err(msg.to_string()),
                 delete_calls: Cell::new(0),
-                empty_after_delete: false,
+                wiped_after_delete: false,
             }
         }
 
-        fn ok_but_not_empty() -> Self {
+        fn ok_but_not_wiped() -> Self {
             FakeKeychain {
                 delete_result: Ok(()),
                 delete_calls: Cell::new(0),
-                empty_after_delete: false,
+                wiped_after_delete: false,
             }
         }
     }
@@ -298,8 +334,8 @@ mod tests {
             self.delete_result.clone()
         }
 
-        fn probe_empty(&self) -> bool {
-            self.empty_after_delete && self.delete_calls.get() > 0
+        fn verify_fully_wiped(&self) -> bool {
+            self.wiped_after_delete && self.delete_calls.get() > 0
         }
     }
 
@@ -319,6 +355,8 @@ mod tests {
     ) -> ResetContext<'a> {
         ResetContext {
             app_data_dir,
+            legacy_app_data_dir: None,
+            nest_dir: None,
             keychain,
             home_dir: None, // skip nest/sprout/CLI ops in unit tests
             is_dev,
@@ -346,15 +384,33 @@ mod tests {
     fn test_sentinel_present_full_wipe_succeeds() {
         let tmp = TempDir::new().unwrap();
         let app_data = make_app_data(&tmp);
+
+        // Also create a legacy App Support dir (sprout import source).
+        let legacy_dir = tmp
+            .path()
+            .join("Application Support")
+            .join("xyz.block.sprout.app");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join("identity.key"), b"old-identity").unwrap();
+
         write_sentinel(&app_data).unwrap();
         let kc = FakeKeychain::ok();
-        let ctx = make_ctx(&app_data, &kc, false);
+
+        let ctx = ResetContext {
+            app_data_dir: &app_data,
+            legacy_app_data_dir: Some(legacy_dir.clone()),
+            nest_dir: None,
+            keychain: &kc,
+            home_dir: None,
+            is_dev: false,
+        };
 
         let outcome = run_boot_reset_with_keychain(ctx);
 
         assert!(outcome.completed, "should complete");
         assert!(!outcome.failed, "should not fail");
         assert!(!app_data.exists(), "app-data must be gone");
+        assert!(!legacy_dir.exists(), "legacy app-data must be gone");
         assert!(!sentinel_path(&app_data).exists(), "sentinel must be gone");
         assert_eq!(kc.delete_calls.get(), 1, "keychain deleted once");
     }
@@ -386,8 +442,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let app_data = make_app_data(&tmp);
         write_sentinel(&app_data).unwrap();
-        // Keychain delete "succeeds" but probe still returns non-empty.
-        let kc = FakeKeychain::ok_but_not_empty();
+        // Keychain delete "succeeds" but verify_fully_wiped still returns false.
+        let kc = FakeKeychain::ok_but_not_wiped();
         let ctx = make_ctx(&app_data, &kc, false);
 
         let outcome = run_boot_reset_with_keychain(ctx);
@@ -433,53 +489,128 @@ mod tests {
         );
     }
 
-    // ── Test 6: dev build does not touch prod nest ────────────────────────────
+    // ── Test 6: dev build wipes dev nest, leaves prod nest intact ────────────
 
     #[test]
-    fn test_dev_build_does_not_touch_prod_nest() {
-        // Verify is_dev discriminator: prod context has is_dev=false.
+    fn test_dev_build_wipes_dev_nest_not_prod() {
         let tmp = TempDir::new().unwrap();
-        let app_data = tmp
-            .path()
-            .join("Application Support")
-            .join("xyz.block.buzz.app");
-        std::fs::create_dir_all(&app_data).unwrap();
 
-        // Sentinel path should encode prod bundle id.
-        let sp = sentinel_path(&app_data);
-        assert!(
-            sp.to_str().unwrap().contains("xyz.block.buzz.app"),
-            "sentinel path must encode bundle id"
-        );
-        assert!(
-            !sp.to_str().unwrap().contains(".dev"),
-            "prod sentinel must not contain .dev"
-        );
-    }
+        // Create both nests.
+        let dev_nest = tmp.path().join(".buzz-dev");
+        let prod_nest = tmp.path().join(".buzz");
+        std::fs::create_dir_all(&dev_nest).unwrap();
+        std::fs::create_dir_all(&prod_nest).unwrap();
 
-    // ── Test 7: prod build does not touch dev nest ────────────────────────────
-
-    #[test]
-    fn test_prod_build_does_not_touch_dev_nest() {
-        let tmp = TempDir::new().unwrap();
         let app_data = tmp
             .path()
             .join("Application Support")
             .join("xyz.block.buzz.app.dev");
         std::fs::create_dir_all(&app_data).unwrap();
+        write_sentinel(&app_data).unwrap();
 
-        let sp = sentinel_path(&app_data);
+        let kc = FakeKeychain::ok();
+        let ctx = ResetContext {
+            app_data_dir: &app_data,
+            legacy_app_data_dir: None,
+            nest_dir: Some(dev_nest.clone()),
+            keychain: &kc,
+            home_dir: None,
+            is_dev: true,
+        };
+
+        let outcome = run_boot_reset_with_keychain(ctx);
+
+        assert!(outcome.completed, "wipe must complete");
+        assert!(!dev_nest.exists(), "dev nest must be wiped");
+        assert!(prod_nest.exists(), "prod nest must survive");
+    }
+
+    // ── Test 7: prod build wipes prod nest, leaves dev nest intact ───────────
+
+    #[test]
+    fn test_prod_build_wipes_prod_nest_not_dev() {
+        let tmp = TempDir::new().unwrap();
+
+        // Create both nests.
+        let dev_nest = tmp.path().join(".buzz-dev");
+        let prod_nest = tmp.path().join(".buzz");
+        std::fs::create_dir_all(&dev_nest).unwrap();
+        std::fs::create_dir_all(&prod_nest).unwrap();
+
+        let app_data = tmp
+            .path()
+            .join("Application Support")
+            .join("xyz.block.buzz.app");
+        std::fs::create_dir_all(&app_data).unwrap();
+        write_sentinel(&app_data).unwrap();
+
+        let kc = FakeKeychain::ok();
+        let ctx = ResetContext {
+            app_data_dir: &app_data,
+            legacy_app_data_dir: None,
+            nest_dir: Some(prod_nest.clone()),
+            keychain: &kc,
+            home_dir: None,
+            is_dev: false,
+        };
+
+        let outcome = run_boot_reset_with_keychain(ctx);
+
+        assert!(outcome.completed, "wipe must complete");
+        assert!(!prod_nest.exists(), "prod nest must be wiped");
+        assert!(dev_nest.exists(), "dev nest must survive");
+    }
+
+    // ── Test 8: legacy app-data removed on reset ──────────────────────────────
+
+    #[test]
+    fn test_legacy_app_data_removed_on_reset() {
+        let tmp = TempDir::new().unwrap();
+        let app_data = make_app_data(&tmp);
+
+        // Seed a legacy sprout dir with data that would be re-imported.
+        let legacy_dir = tmp
+            .path()
+            .join("Application Support")
+            .join("xyz.block.sprout.app");
+        std::fs::create_dir_all(legacy_dir.join("agents")).unwrap();
+        std::fs::write(legacy_dir.join("identity.key"), b"sprout-nsec").unwrap();
+
+        write_sentinel(&app_data).unwrap();
+        let kc = FakeKeychain::ok();
+        let ctx = ResetContext {
+            app_data_dir: &app_data,
+            legacy_app_data_dir: Some(legacy_dir.clone()),
+            nest_dir: None,
+            keychain: &kc,
+            home_dir: None,
+            is_dev: false,
+        };
+
+        let outcome = run_boot_reset_with_keychain(ctx);
+
+        assert!(outcome.completed, "reset must complete");
+        assert!(!legacy_dir.exists(), "legacy app-data dir must be removed");
+    }
+
+    // ── Test 9: reset_outcome.completed gates nest migrations ────────────────
+
+    #[test]
+    fn test_completed_flag_true_on_successful_wipe() {
+        let tmp = TempDir::new().unwrap();
+        let app_data = make_app_data(&tmp);
+        write_sentinel(&app_data).unwrap();
+        let kc = FakeKeychain::ok();
+        let ctx = make_ctx(&app_data, &kc, false);
+
+        let outcome = run_boot_reset_with_keychain(ctx);
+
+        // `completed` is the boolean gate used by lib.rs to suppress
+        // migrate_dev_nest and migrate_legacy_nest after a successful wipe.
         assert!(
-            sp.to_str().unwrap().contains("xyz.block.buzz.app.dev"),
-            "dev sentinel must encode dev bundle id"
+            outcome.completed,
+            "completed must be true after successful wipe"
         );
-
-        // is_dev discriminator.
-        let is_dev = app_data
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.starts_with("xyz.block.buzz.app.dev"))
-            .unwrap_or(false);
-        assert!(is_dev, "dev app-data dir must be detected as dev");
+        assert!(!outcome.failed);
     }
 }

@@ -44,7 +44,7 @@ const SHARED_AGENT_DIRS: &[&str] = &["agents/teams"];
 /// `xyz.block.buzz.app.developer`. This is the authoritative dev/prod
 /// discriminator shared by `run_boot_migrations`, `sync_shared_agent_data`,
 /// and `reconcile_target_dir`.
-fn is_dev_data_dir_name(name: &str) -> bool {
+pub(crate) fn is_dev_data_dir_name(name: &str) -> bool {
     name == CANONICAL_DEV_IDENTIFIER
         || name
             .strip_prefix(CANONICAL_DEV_IDENTIFIER)
@@ -55,7 +55,7 @@ fn canonical_dev_data_dir(current: &Path) -> Option<PathBuf> {
     current.parent().map(|p| p.join(CANONICAL_DEV_IDENTIFIER))
 }
 
-fn legacy_app_data_dir(current: &Path) -> Option<PathBuf> {
+pub(crate) fn legacy_app_data_dir(current: &Path) -> Option<PathBuf> {
     let name = current.file_name()?.to_str()?;
     let legacy_name = if name.starts_with(CANONICAL_DEV_IDENTIFIER) {
         name.replacen(CANONICAL_DEV_IDENTIFIER, LEGACY_CANONICAL_DEV_IDENTIFIER, 1)

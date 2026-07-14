@@ -779,14 +779,36 @@ impl SecretStore {
             // Steps 2 & 3: delete legacy per-key entries for every key.
             for key in &all_keys {
                 #[cfg(target_os = "macos")]
-                let _ = delete_generic_password_options(dpk_opts(&self.service, key));
+                {
+                    match delete_generic_password_options(dpk_opts(&self.service, key)) {
+                        Ok(()) => {}
+                        Err(ref e) if is_not_found(e) => {}
+                        Err(ref e) if is_dpk_unavailable(e) => {}
+                        Err(e) => return Err(format!("dpk per-key delete {key}: {e}")),
+                    }
+                }
                 if let Ok(entry) = keyring_entry(&self.service, key) {
-                    let _ = entry.delete_credential();
+                    match entry.delete_credential() {
+                        Ok(()) | Err(keyring::Error::NoEntry) => {}
+                        Err(e) if is_keyring_availability_error(&e.to_string()) => {
+                            return Err(format!("keyring unavailable deleting {key}: {e}"));
+                        }
+                        Err(e) => {
+                            return Err(format!("keyring per-key delete {key}: {e}"));
+                        }
+                    }
                 }
             }
             // Step 2 (cont.): also delete the legacy DPK blob written by #1267.
             #[cfg(target_os = "macos")]
-            let _ = delete_generic_password_options(dpk_opts(&self.service, BLOB_KEY));
+            {
+                match delete_generic_password_options(dpk_opts(&self.service, BLOB_KEY)) {
+                    Ok(()) => {}
+                    Err(ref e) if is_not_found(e) => {}
+                    Err(ref e) if is_dpk_unavailable(e) => {}
+                    Err(e) => return Err(format!("dpk blob delete: {e}")),
+                }
+            }
 
             // Step 4: delete the main blob entry.
             if let Ok(entry) = keyring_entry(&self.service, BLOB_KEY) {
@@ -809,6 +831,58 @@ impl SecretStore {
         #[cfg(not(feature = "system-keyring"))]
         {
             Ok(()) // No-op: no keyring, nothing to delete.
+        }
+    }
+
+    /// Verify no identity-bearing keychain entry survives in any shape
+    /// that `load("identity")` → `migrate_legacy_key` can consume:
+    /// main blob, DPK blob (`BLOB_KEY`), and per-key `"identity"`.
+    ///
+    /// Returns `true` when all three shapes are absent (or inaccessible in an
+    /// expected way), `false` when any entry is found or the keychain is
+    /// unavailable (fail-closed).
+    pub fn verify_fully_wiped(&self) -> bool {
+        #[cfg(feature = "system-keyring")]
+        {
+            // 1. Main blob must be absent.
+            match self.read_blob_raw() {
+                Ok(None) => {}
+                Ok(Some(_)) => return false,
+                Err(_) => return false,
+            }
+            // 2. Per-key "identity" via legacy keyring must be absent.
+            if let Ok(entry) = keyring_entry(&self.service, "identity") {
+                match entry.get_password() {
+                    Err(keyring::Error::NoEntry) => {}
+                    Ok(_) => return false,
+                    Err(e) if is_keyring_availability_error(&e.to_string()) => {
+                        return false; // can't verify → fail closed
+                    }
+                    Err(_) => {} // other errors = absent-enough
+                }
+            }
+            // 3. DPK blob (macOS only).
+            #[cfg(target_os = "macos")]
+            {
+                match generic_password(dpk_opts(&self.service, BLOB_KEY)) {
+                    Err(ref e) if is_not_found(e) => {}
+                    Err(ref e) if is_dpk_unavailable(e) => {} // unsigned dev = no DPK
+                    Ok(_) => return false,
+                    Err(_) => {} // other errors = absent-enough
+                }
+                // 4. Per-key DPK "identity" (macOS only).
+                match generic_password(dpk_opts(&self.service, "identity")) {
+                    Err(ref e) if is_not_found(e) => {}
+                    Err(ref e) if is_dpk_unavailable(e) => {}
+                    Ok(_) => return false,
+                    Err(_) => {}
+                }
+            }
+            true
+        }
+        #[cfg(not(feature = "system-keyring"))]
+        {
+            true // No keyring = nothing to verify.
         }
     }
 

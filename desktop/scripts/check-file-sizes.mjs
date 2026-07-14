@@ -324,7 +324,10 @@ const overrides = new Map([
   // reads blob keys + deletes per-key legacy entries to prevent resurrection.
   // + regression test for per-key resurrection via real OS keychain.
   // Net growth ~36+32 lines over prior cap. Load-bearing correctness fix.
-  ["src-tauri/src/secret_store.rs", 1222],
+  // signout-wipe pass-2 (F2): delete_all_with_legacy_cleanup DPK deletes now
+  // observable (propagate real errors); verify_fully_wiped checks all three
+  // keychain shapes (main blob, DPK blob, per-key "identity"). +73 lines.
+  ["src-tauri/src/secret_store.rs", 1296],
   // sign-out wipe: Sign Out section (AlertDialog + controlled state) added
   // at the bottom of the Profile settings page. Load-bearing UX feature;
   // queued to split when ProfileSettingsCard is broken into sub-components.

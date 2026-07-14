@@ -431,7 +431,7 @@ pub fn run() {
                 let is_dev_for_reset = data_dir
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .map(|n| n.starts_with("xyz.block.buzz.app.dev"))
+                    .map(crate::migration::is_dev_data_dir_name)
                     .unwrap_or(false);
                 crate::managed_agents::init_nest_dir(is_dev_for_reset);
                 crate::reset::run_boot_reset(&data_dir)
