@@ -30,6 +30,8 @@ const KIND_DRAFT: u16 = 31234;
 const KIND_CREATE_CHANNEL: u16 = 9007;
 const KIND_PUT_USER: u16 = 9000;
 const KIND_REMOVE_USER: u16 = 9001;
+/// Must match `buzz_core::kind::DRAFT_MAX_TTL_SECS`.
+const DRAFT_MAX_TTL_SECS: u64 = 30 * 24 * 3600;
 
 fn relay_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
@@ -3589,5 +3591,120 @@ async fn test_reminder_target_reaction_oracle_closed() {
         kind7_as_author.is_empty(),
         "author-side query must also return zero kind:7 events referencing the reminder id; \
          found: {kind7_as_author:?}"
+    );
+}
+
+// ─── Read-time expiry suppression (30-day server TTL) ─────────────────────────
+
+#[tokio::test]
+#[ignore]
+async fn test_draft_expired_by_server_ttl_suppressed_on_http_query() {
+    // An expired draft (created_at > 30d ago, no expiration tag) must be absent
+    // from a self-authored HTTP /query while a fresh draft on the same filter is
+    // present. This verifies `draft_expired` is live on every read surface that
+    // routes through `reader_can_receive_event`.
+    //
+    // Bite check: if draft_expired were removed from reader_can_receive_event, the
+    // expired draft would appear alongside the fresh one — the final `ids` assertion
+    // would fail.
+    let client = http_client();
+    let owner = Keys::generate();
+    let ch_id = create_open_channel(&owner).await;
+    let d_expired = uuid::Uuid::new_v4().to_string();
+    let d_fresh = uuid::Uuid::new_v4().to_string();
+
+    // The relay accepts events with any created_at (no ingest freshness check).
+    // draft_expired then suppresses at read because created_at + 30d is in the past.
+    let expired = build_draft_at(
+        &owner,
+        &d_expired,
+        "9",
+        &ch_id,
+        &fake_nip44_v2(),
+        Timestamp::from(Timestamp::now().as_secs() - DRAFT_MAX_TTL_SECS - 86400),
+    );
+    let (ok_e, msg_e) = submit_event_http(&client, &owner, &expired).await;
+    assert!(ok_e, "expired draft must be accepted at ingest: {msg_e}");
+
+    let fresh = build_draft(&owner, &d_fresh, "9", &ch_id, &fake_nip44_v2());
+    let fresh_id = fresh.id;
+    let (ok_f, msg_f) = submit_event_http(&client, &owner, &fresh).await;
+    assert!(ok_f, "fresh draft must be accepted: {msg_f}");
+
+    let filter = Filter::new()
+        .kind(nostr::Kind::Custom(KIND_DRAFT))
+        .author(owner.public_key());
+    let events = query_events_http(&client, &owner.public_key().to_hex(), vec![filter]).await;
+
+    let ids: Vec<String> = events
+        .iter()
+        .filter_map(|e| e["id"].as_str().map(String::from))
+        .collect();
+    assert!(
+        ids.contains(&fresh_id.to_hex()),
+        "fresh draft must appear in self-authored query; got: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&expired.id.to_hex()),
+        "expired draft (created_at > 30d ago) must be suppressed; got: {ids:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_draft_expired_not_counted_on_count_surface() {
+    // COUNT of self-authored drafts must exclude expired drafts.
+    //
+    // This test validates the COUNT fast-path bypass: `filter_can_match_draft`
+    // forces the per-event fallback path (which runs `reader_can_receive_event`
+    // including `draft_expired`) instead of the raw SQL `count_events()` that
+    // cannot see per-event expiry. Without the bypass, count_events() would return
+    // 2 (both drafts in storage) — the assertion `count == 1` would fail, proving
+    // the test bites against the un-patched fast-path.
+    let client = http_client();
+    let owner = Keys::generate();
+    let ch_id = create_open_channel(&owner).await;
+    let d_expired = uuid::Uuid::new_v4().to_string();
+    let d_fresh = uuid::Uuid::new_v4().to_string();
+
+    let expired = build_draft_at(
+        &owner,
+        &d_expired,
+        "9",
+        &ch_id,
+        &fake_nip44_v2(),
+        Timestamp::from(Timestamp::now().as_secs() - DRAFT_MAX_TTL_SECS - 86400),
+    );
+    let (ok_e, msg_e) = submit_event_http(&client, &owner, &expired).await;
+    assert!(ok_e, "expired draft must be accepted at ingest: {msg_e}");
+
+    let fresh = build_draft(&owner, &d_fresh, "9", &ch_id, &fake_nip44_v2());
+    let (ok_f, msg_f) = submit_event_http(&client, &owner, &fresh).await;
+    assert!(ok_f, "fresh draft must be accepted: {msg_f}");
+
+    let filter = Filter::new()
+        .kind(nostr::Kind::Custom(KIND_DRAFT))
+        .author(owner.public_key());
+    let resp = client
+        .post(format!("{}/count", relay_http_url()))
+        .header("X-Pubkey", &owner.public_key().to_hex())
+        .header("Content-Type", "application/json")
+        .json(&vec![filter])
+        .send()
+        .await
+        .expect("count request");
+    assert!(
+        resp.status().is_success(),
+        "author COUNT must succeed, got: {}",
+        resp.status()
+    );
+    let body: Value = resp.json().await.expect("parse count response");
+    let count = body["count"].as_u64().unwrap_or(u64::MAX);
+    // 2 drafts in storage; 1 expired → COUNT must return 1.
+    // If filter_can_match_draft fast-path bypass is missing, count_events() returns
+    // 2 and this assertion fails — proving the test bites against the old fast-path.
+    assert_eq!(
+        count, 1,
+        "COUNT must return 1 (expired draft excluded); got: {count}"
     );
 }

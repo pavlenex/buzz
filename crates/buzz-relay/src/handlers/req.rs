@@ -7,7 +7,7 @@ use tracing::{debug, warn};
 
 use buzz_core::filter::filters_match;
 use buzz_core::kind::{
-    AUTHOR_ONLY_KINDS, KIND_AGENT_ENGRAM, KIND_AGENT_TURN_METRIC, KIND_DM_VISIBILITY,
+    AUTHOR_ONLY_KINDS, KIND_AGENT_ENGRAM, KIND_AGENT_TURN_METRIC, KIND_DM_VISIBILITY, KIND_DRAFT,
     P_GATED_KINDS, RESULT_GATED_KINDS,
 };
 use buzz_core::tenant::TenantContext;
@@ -1099,6 +1099,26 @@ pub(crate) fn filter_can_match_author_only_kinds(filter: &Filter) -> bool {
         ks.iter()
             .any(|k| AUTHOR_ONLY_KINDS.contains(&(k.as_u16() as u32)))
     })
+}
+
+/// Returns `true` if the filter CAN match `KIND_DRAFT` events — meaning it
+/// either has no `kinds` constraint (wildcard) or explicitly includes `KIND_DRAFT`.
+///
+/// Used by COUNT handlers to bypass the `author_is_self` fast-path when the
+/// filter could match draft events. Draft events carry a per-event expiry
+/// property (`expiration` tag + server-side 30-day ceiling) that the SQL
+/// `count_events()` path cannot see, so draft-matching filters must always
+/// route through the per-event `reader_can_receive_event` gate to avoid
+/// reporting expired drafts as still-existing.
+///
+/// Note: `KIND_EVENT_REMINDER` is NOT included here because reminders carry no
+/// expiry semantics — they retain their existing fast-path, so this predicate
+/// introduces zero behaviour change for reminder COUNTs.
+pub(crate) fn filter_can_match_draft(filter: &Filter) -> bool {
+    filter
+        .kinds
+        .as_ref()
+        .is_none_or(|ks| ks.iter().any(|k| k.as_u16() as u32 == KIND_DRAFT))
 }
 
 /// Returns `true` if the filter CAN match result-gated kinds — meaning it

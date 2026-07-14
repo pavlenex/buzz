@@ -1151,6 +1151,7 @@ pub async fn count_events(
             if crate::handlers::req::filter_fully_pushable(filter)
                 && (!needs_author_only_filtering || author_is_self)
                 && !needs_result_gated_filtering
+                && !crate::handlers::req::filter_can_match_draft(filter)
             {
                 match state.db.count_events(&query).await {
                     Ok(n) => total += n as u64,
@@ -1212,6 +1213,7 @@ pub async fn count_events(
             if crate::handlers::req::filter_fully_pushable(filter)
                 && (!needs_author_only_filtering || author_is_self)
                 && !needs_result_gated_filtering
+                && !crate::handlers::req::filter_can_match_draft(filter)
             {
                 query.limit = None;
                 match state.db.count_events(&query).await {

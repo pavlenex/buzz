@@ -114,6 +114,14 @@ pub const KIND_EVENT_REMINDER: u32 = 30300;
 /// (`search_tsv = NULL`) and must not trigger workflow dispatch.
 pub const KIND_DRAFT: u32 = 31234;
 
+/// Server-owned maximum lifetime for draft events (30 days).
+///
+/// A draft without a client-supplied `expiration` tag is served for at most
+/// this many seconds from `created_at`. A client tag shorter than the ceiling
+/// takes precedence; one longer than it is clamped to it. See
+/// `buzz_core::filter::draft_expired`.
+pub const DRAFT_MAX_TTL_SECS: u64 = 30 * 24 * 3600;
+
 /// Kinds whose stored events are readable only by their author.
 ///
 /// The relay must never reveal the existence, count, tags, content, schedule,

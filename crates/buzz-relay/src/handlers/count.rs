@@ -160,6 +160,7 @@ pub async fn handle_count(
             if super::req::filter_fully_pushable(filter)
                 && (!needs_author_only_filtering || author_is_self)
                 && !needs_result_gated_filtering
+                && !super::req::filter_can_match_draft(filter)
             {
                 match state.db.count_events(&query).await {
                     Ok(n) => total += n as u64,
@@ -228,6 +229,7 @@ pub async fn handle_count(
             if super::req::filter_fully_pushable(filter)
                 && (!needs_author_only_filtering || author_is_self)
                 && !needs_result_gated_filtering
+                && !super::req::filter_can_match_draft(filter)
             {
                 query.limit = None; // COUNT doesn't need a row limit
                 match state.db.count_events(&query).await {
