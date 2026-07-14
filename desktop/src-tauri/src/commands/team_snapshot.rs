@@ -487,9 +487,12 @@ pub async fn preview_team_snapshot_import(
 ///      If ANY generation fails, return immediately — zero writes.
 ///   3. Store — inside `managed_agents_store_lock`: write all `AgentDefinition`s
 ///      + all `ManagedAgentRecord`s (with `team_id` set) + `TeamRecord`.
-///      The raw agent store is snapshotted before the first write; if either
-///      `save_managed_agents` or `save_teams` fails the pre-import bytes are
-///      restored, making the store phase all-or-none at the application level.
+///      Both store files are snapshotted (or noted absent) before the first
+///      write. On any write error the pre-import state is restored — including
+///      deleting a file that was absent, cleaning minted keyring entries, and
+///      surfacing rollback failures alongside the original error. This makes
+///      the store phase all-or-none for ordinary application errors; a process
+///      crash between atomic file commits is NOT covered.
 ///   4. Profile sync — for each member, call `sync_managed_agent_profile`.
 ///      Best-effort; errors are collected per member.
 ///   5. Memory restore — for each member with non-empty snapshot memory,
@@ -641,16 +644,65 @@ pub async fn confirm_team_snapshot_import(
             }
         }
 
-        // Snapshot the raw agent store for rollback on partial write failure.
+        // Snapshot both store files for rollback on partial write failure.
+        // Distinguish "file exists with content" from "file absent" so rollback
+        // can delete a file created by the import rather than leaving orphaned
+        // records.
         let agents_store_path = crate::managed_agents::storage::managed_agents_store_path(&app)?;
-        let agents_store_snapshot = std::fs::read(&agents_store_path).ok();
+        let agents_store_snapshot = match std::fs::read(&agents_store_path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("failed to snapshot agent store: {e}")),
+        };
+        let teams_store_path = crate::managed_agents::teams_store_path(&app)?;
+        let teams_store_snapshot = match std::fs::read(&teams_store_path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("failed to snapshot teams store: {e}")),
+        };
+
+        // Collect minted pubkeys for keyring cleanup on rollback.
+        let minted_pubkeys: Vec<&str> = minted.iter().map(|m| m.pubkey.as_str()).collect();
+
+        // Restore the agent store to pre-import state and clean minted keyring
+        // entries. Returns the original error, extended with rollback details.
+        let rollback_agents = |original_err: String| -> String {
+            let mut errors = vec![original_err];
+            // Clean minted keyring entries.
+            for pubkey in &minted_pubkeys {
+                if let Err(e) = crate::managed_agents::storage::try_delete_agent_key(pubkey) {
+                    errors.push(format!("keyring cleanup {pubkey}: {e}"));
+                }
+            }
+            // Restore agent store file.
+            let restore = match &agents_store_snapshot {
+                Some(bytes) => crate::managed_agents::storage::atomic_write_json_restricted(
+                    &agents_store_path,
+                    bytes,
+                ),
+                None => match std::fs::remove_file(&agents_store_path) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    other => other.map_err(|e| e.to_string()),
+                },
+            };
+            if let Err(e) = restore {
+                errors.push(format!("agent store restore: {e}"));
+            }
+            if errors.len() == 1 {
+                errors.into_iter().next().unwrap()
+            } else {
+                errors.join("; ")
+            }
+        };
 
         // Write all definitions.
         let mut personas = load_personas(&app)?;
         for m in &minted {
             personas.push(m.definition.clone());
         }
-        save_personas(&app, &personas)?;
+        if let Err(e) = save_personas(&app, &personas) {
+            return Err(rollback_agents(e));
+        }
 
         // Write all managed-agent records.
         let mut records = existing_records;
@@ -658,28 +710,28 @@ pub async fn confirm_team_snapshot_import(
             records.push(m.record.clone());
         }
         if let Err(e) = save_managed_agents(&app, &records) {
-            // save_personas already wrote — rollback the agent store.
-            if let Some(ref bytes) = agents_store_snapshot {
-                let _ = crate::managed_agents::storage::atomic_write_json_restricted(
-                    &agents_store_path,
-                    bytes,
-                );
-            }
-            return Err(e);
+            return Err(rollback_agents(e));
         }
 
         // Write the team record.
         let mut teams = load_teams(&app)?;
         teams.push(imported_team.clone());
         if let Err(e) = save_teams(&app, &teams) {
-            // Rollback: restore pre-import agent store.
-            if let Some(ref bytes) = agents_store_snapshot {
-                let _ = crate::managed_agents::storage::atomic_write_json_restricted(
-                    &agents_store_path,
-                    bytes,
-                );
-            }
-            return Err(e);
+            let err = rollback_agents(e);
+            // Also restore teams store.
+            let teams_restore = match &teams_store_snapshot {
+                Some(bytes) => {
+                    crate::managed_agents::storage::atomic_write_json(&teams_store_path, bytes)
+                }
+                None => match std::fs::remove_file(&teams_store_path) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    other => other.map_err(|e| e.to_string()),
+                },
+            };
+            return Err(match teams_restore {
+                Ok(()) => err,
+                Err(teams_err) => format!("{err}; teams store restore: {teams_err}"),
+            });
         }
 
         // All writes committed — safe to update in-memory state.

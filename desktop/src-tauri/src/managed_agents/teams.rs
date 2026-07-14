@@ -9,7 +9,7 @@ use crate::{
 
 use super::team_repair::team_persona_key;
 
-fn teams_store_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn teams_store_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(managed_agents_base_dir(app)?.join("teams.json"))
 }
 

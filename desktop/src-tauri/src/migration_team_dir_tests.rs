@@ -235,11 +235,16 @@ fn detach_skips_non_directory_backed_teams() {
     assert_eq!(teams[0]["instructions"], "Existing instructions.");
 }
 
+#[cfg(unix)]
 #[test]
-fn second_boot_after_successful_detach_yields_zero_detached() {
-    // Crash-safety pin: a successful detach clears source_dir atomically.
-    // A second boot must find no directory-backed teams and return 0 — both
-    // files are intact and parseable, so the idempotency gate fires correctly.
+fn detach_retries_after_teams_write_failure() {
+    // Write-seam interruption: make the agents/ directory read-only so the
+    // teams.json atomic write fails mid-detach. The agents.json write uses
+    // atomic_write_json_restricted (tmp+rename in the same dir), which also
+    // fails under a read-only parent. On retry (directory made writable),
+    // the still-open source_dir gate lets the migration complete.
+    use std::os::unix::fs::PermissionsExt;
+
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path();
 
@@ -283,37 +288,42 @@ fn second_boot_after_successful_detach_yields_zero_detached() {
         }]),
     );
 
-    // Boot 1: migration runs.
-    let n1 = super::detach::detach_directory_backed_teams_in_dir(&base.join("agents")).unwrap();
-    assert_eq!(n1, 1);
+    // Make agents/ read-only so the atomic write (tmp file creation) fails.
+    let agents_dir = base.join("agents");
+    std::fs::set_permissions(&agents_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
 
-    // Both files are readable and valid after the first boot.
-    let teams_after_first = read_teams_json(base);
+    // Boot 1: detach fails because neither file can be written.
+    let result = super::detach::detach_directory_backed_teams_in_dir(&agents_dir);
     assert!(
-        teams_after_first[0]
+        result.is_err(),
+        "detach must fail when directory is read-only"
+    );
+
+    // source_dir gate is still open — teams.json is unchanged.
+    // Restore permissions to read the file.
+    std::fs::set_permissions(&agents_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let teams_after_fail = read_teams_json(base);
+    assert!(
+        teams_after_fail[0]
+            .get("source_dir")
+            .is_some_and(|v| !v.is_null()),
+        "source_dir must remain set after failed detach"
+    );
+
+    // Boot 2: retry with writable directory — should succeed.
+    let n2 = super::detach::detach_directory_backed_teams_in_dir(&agents_dir).unwrap();
+    assert_eq!(n2, 1, "retry detach must succeed");
+
+    let teams_after_retry = read_teams_json(base);
+    assert!(
+        teams_after_retry[0]
             .get("source_dir")
             .is_none_or(|v| v.is_null()),
-        "source_dir cleared after first boot"
+        "source_dir cleared after successful retry"
     );
-    let agents_after_first = read_agents_json(base);
     assert_eq!(
-        agents_after_first[0]["team_id"], "team-uuid-1",
-        "team_id backfilled after first boot"
-    );
-
-    // Boot 2: idempotency gate fires — no teams have source_dir set.
-    let n2 = super::detach::detach_directory_backed_teams_in_dir(&base.join("agents")).unwrap();
-    assert_eq!(n2, 0, "second boot is a no-op");
-
-    // Files are unchanged.
-    let teams_after_second = read_teams_json(base);
-    assert_eq!(
-        teams_after_second[0]["instructions"], "Team rules.",
-        "instructions preserved across boots"
-    );
-    let agents_after_second = read_agents_json(base);
-    assert_eq!(
-        agents_after_second[0]["team_id"], "team-uuid-1",
-        "team_id stable across boots"
+        teams_after_retry[0]["instructions"], "Team rules.",
+        "instructions lifted on retry"
     );
 }

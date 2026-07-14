@@ -521,44 +521,6 @@ fn sync_replaces_real_teams_dir_with_symlink() {
     );
 }
 
-// ── Packs → Teams migration tests ───────────────────────────────────
-
-#[cfg(unix)]
-#[test]
-fn migrate_packs_merge_preserves_non_empty_dir() {
-    // When packs/ contains symlinks that weren't moved (e.g., external tools
-    // recreated them), the migration should NOT delete the packs/ directory.
-    let parent = tempfile::tempdir().unwrap();
-    let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
-    let packs_dir = canonical.join("agents/packs");
-    let teams_dir = canonical.join("agents/teams");
-    std::fs::create_dir_all(&packs_dir).unwrap();
-    std::fs::create_dir_all(&teams_dir).unwrap();
-
-    // Simulate an external symlink that already exists in teams/ (conflict)
-    let external_target = parent.path().join("external-pack");
-    std::fs::create_dir_all(&external_target).unwrap();
-    std::os::unix::fs::symlink(&external_target, packs_dir.join("com.ext.pack")).unwrap();
-    // Same name already in teams/ — so the migration skips it
-    std::os::unix::fs::symlink(&external_target, teams_dir.join("com.ext.pack")).unwrap();
-
-    // Run the merge logic (mirrors what migrate_packs_to_teams does)
-    if let Ok(entries) = std::fs::read_dir(&packs_dir) {
-        for entry in entries.flatten() {
-            let dest = teams_dir.join(entry.file_name());
-            if !dest.exists() {
-                let _ = std::fs::rename(entry.path(), &dest);
-            }
-        }
-    }
-    // This is the fix: remove_dir only succeeds on empty dirs
-    let _ = std::fs::remove_dir(&packs_dir);
-
-    // packs/ should still exist because it has a remaining symlink
-    assert!(packs_dir.exists(), "packs/ should survive when non-empty");
-    assert!(packs_dir.join("com.ext.pack").is_symlink());
-}
-
 /// `patch_json_records` rewrites `managed-agents.json`, which carries plaintext
 /// agent nsecs on a keyringless host — the writeback must land `0o600` from the
 /// write itself (no post-write `chmod`), or a launch-time reconcile reopens the

@@ -109,7 +109,8 @@ const overrides = new Map([
   ["src-tauri/src/managed_agents/nest.rs", 704],
   // keyring-dev-isolation: agent key migration added copy_agent_keys_between_stores
   // and load_readonly support; file grew past 1000 default. Queued to split.
-  ["src-tauri/src/managed_agents/storage.rs", 1325],
+  // +7 for try_delete_agent_key result-returning seam (snapshot-import rollback).
+  ["src-tauri/src/managed_agents/storage.rs", 1335],
   // harness-persona-sync: persona-runtime resolution threaded into the spawn
   // path here. Load-bearing feature growth; queued to split in the resolver
   // unify refactor followup. +26 for resolve_effective_prompt_model_provider
