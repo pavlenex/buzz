@@ -2934,6 +2934,153 @@ impl Db {
         ))
     }
 
+    /// Atomically publish a NIP-43 membership snapshot under a single
+    /// transaction-scoped advisory lock.
+    ///
+    /// This method acquires the per-community snapshot lock, reads the
+    /// current membership, builds the event, and replaces the prior snapshot
+    /// — all inside one transaction on one database connection. This
+    /// prevents the stale-snapshot race where a concurrent publication reads
+    /// older state and overwrites a newer snapshot by arrival order.
+    ///
+    /// The lock key matches the one used by
+    /// `replace_addressable_event_forced` for the same (kind, pubkey,
+    /// channel_id) tuple, so publications through both code paths serialize
+    /// against each other.
+    pub async fn publish_nip43_membership_locked(
+        &self,
+        community_id: CommunityId,
+        relay_keypair: &nostr::Keys,
+    ) -> Result<(StoredEvent, bool, usize)> {
+        use nostr::{EventBuilder, Kind, Tag};
+
+        let kind_i32 = buzz_core::kind::KIND_NIP43_MEMBERSHIP_LIST as i32;
+        let pubkey_bytes = relay_keypair.public_key().to_bytes();
+
+        // Same advisory-lock key algorithm as replace_addressable_event.
+        let lock_key = {
+            let mut h: u64 = 0xcbf29ce484222325;
+            for b in community_id.as_uuid().as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            for b in kind_i32.to_le_bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            for b in pubkey_bytes.as_slice() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            h as i64
+        };
+
+        let mut tx = self.pool.begin().await?;
+
+        // Acquire the per-community snapshot lock BEFORE reading members.
+        // This serializes the entire read-build-write cycle: a concurrent
+        // publication will block here until our transaction commits, then
+        // read the updated membership state.
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(lock_key)
+            .execute(&mut *tx)
+            .await?;
+
+        // Read current members inside the locked transaction.
+        let rows = sqlx::query(
+            "SELECT pubkey, role FROM relay_members \
+             WHERE community_id = $1 ORDER BY created_at ASC",
+        )
+        .bind(community_id.as_uuid())
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let member_count = rows.len();
+
+        // Build the NIP-43 event from the locked member rows.
+        let mut tags: Vec<Tag> = Vec::with_capacity(member_count + 1);
+        // NIP-70 protected-event marker.
+        tags.push(
+            Tag::parse(["-"])
+                .map_err(|e| crate::error::DbError::InvalidData(format!("failed to build '-' tag: {e}")))?,
+        );
+        for row in &rows {
+            let pubkey: String = row.try_get("pubkey")?;
+            let role: String = row.try_get("role")?;
+            tags.push(
+                Tag::parse(["member", &pubkey, &role])
+                    .map_err(|e| crate::error::DbError::InvalidData(format!("failed to build member tag: {e}")))?,
+            );
+        }
+
+        let event = EventBuilder::new(Kind::Custom(kind_i32 as u16), "")
+            .tags(tags)
+            .sign_with_keys(relay_keypair)
+            .map_err(|e| crate::error::DbError::InvalidData(format!("failed to sign kind:13534: {e}")))?;
+
+        let created_at_secs = event.created_at.as_secs() as i64;
+        let created_at = chrono::DateTime::from_timestamp(created_at_secs, 0)
+            .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
+        let sig_bytes = event.sig.serialize();
+        let tags_json = serde_json::to_value(&event.tags)?;
+        let received_at = chrono::Utc::now();
+        let d_tag = crate::event::extract_d_tag(&event);
+
+        // Soft-delete prior snapshots — unconditional, the relay is authoritative.
+        sqlx::query(
+            "UPDATE events SET deleted_at = NOW() \
+             WHERE community_id = $1 AND kind = $2 AND pubkey = $3 \
+             AND channel_id IS NULL \
+             AND deleted_at IS NULL",
+        )
+        .bind(community_id.as_uuid())
+        .bind(kind_i32)
+        .bind(pubkey_bytes.as_slice())
+        .execute(&mut *tx)
+        .await?;
+
+        let insert_result = sqlx::query(
+            "INSERT INTO events (community_id, id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id, d_tag) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(community_id.as_uuid())
+        .bind(event.id.as_bytes().as_slice())
+        .bind(pubkey_bytes.as_slice())
+        .bind(created_at)
+        .bind(kind_i32)
+        .bind(&tags_json)
+        .bind(&event.content)
+        .bind(sig_bytes.as_slice())
+        .bind(received_at)
+        .bind::<Option<Uuid>>(None)
+        .bind(d_tag.as_deref())
+        .execute(&mut *tx)
+        .await?;
+
+        let was_inserted = insert_result.rows_affected() > 0;
+        if !was_inserted {
+            tx.rollback().await?;
+            return Ok((
+                StoredEvent::with_received_at(event, received_at, None, false),
+                false,
+                member_count,
+            ));
+        }
+
+        tx.commit().await?;
+
+        if let Err(e) = crate::insert_mentions(&self.pool, community_id, &event, None).await {
+            tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
+        }
+
+        Ok((
+            StoredEvent::with_received_at(event, received_at, None, true),
+            true,
+            member_count,
+        ))
+    }
+
     /// Atomically replace a NIP-33 parameterized replaceable event (kind 30000–39999).
     ///
     /// Keeps only the event with the highest `created_at` per `(kind, pubkey, d_tag)`.

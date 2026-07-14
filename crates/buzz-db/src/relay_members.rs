@@ -248,6 +248,14 @@ pub async fn update_relay_member_role(
 /// is never bootstrapped into community B.
 ///
 /// Runs in a single transaction. Safe to call at every startup — idempotent.
+///
+/// **Deployment-root authority exception:** This function is called only by
+/// startup initialization and legacy operator provisioning
+/// (`community_provisioning.rs`). It is NOT an end-user path and does NOT
+/// enforce the per-owner community limit (`MAX_COMMUNITIES_PER_OWNER`) or
+/// acquire the per-recipient advisory lock. The per-owner limit is an
+/// end-user invariant enforced by `create_community_with_owner` and
+/// `transfer_ownership`; deployment-root operations may exceed it by design.
 pub async fn bootstrap_owner(
     pool: &PgPool,
     community: CommunityId,
