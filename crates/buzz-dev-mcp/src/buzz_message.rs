@@ -97,9 +97,6 @@ mod tests {
         std::fs::set_permissions(path, permissions).unwrap();
     }
 
-    #[cfg(windows)]
-    fn make_executable(_path: &std::path::Path) {}
-
     #[cfg(unix)]
     #[tokio::test]
     async fn publishes_with_structured_cli_arguments() {
