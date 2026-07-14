@@ -2335,7 +2335,16 @@ test("open channel management supports join and leave", async ({ page }) => {
 });
 
 test("channel context menu edits a stream", async ({ page }) => {
+  await installMockBridge(page, { channelMembersDelayMs: 500 });
   await page.goto("/");
+
+  await page.getByTestId("channel-agents").click({ button: "right" });
+  const pendingEditItem = page.getByRole("menuitem", { name: "Edit channel" });
+  await expect(pendingEditItem).toBeVisible();
+  await expect(pendingEditItem).toBeDisabled();
+  await expect(pendingEditItem).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(pendingEditItem).toHaveCount(0);
 
   await page.getByTestId("channel-general").click({ button: "right" });
   const editItem = page.getByRole("menuitem", { name: "Edit channel" });
@@ -2384,6 +2393,7 @@ test("channel context menu hides management actions from members and DMs", async
   await page.getByTestId("auxiliary-panel-close").click();
 
   await page.getByTestId("channel-random").click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Copy" })).toBeVisible();
   await expect(
     page.getByRole("menuitem", { name: "Edit channel" }),
   ).toHaveCount(0);
@@ -2397,6 +2407,7 @@ test("channel context menu hides management actions from members and DMs", async
     .locator('[data-testid^="channel-"]')
     .first();
   await firstDm.click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Copy" })).toBeVisible();
   await expect(
     page.getByRole("menuitem", { name: "Edit channel" }),
   ).toHaveCount(0);

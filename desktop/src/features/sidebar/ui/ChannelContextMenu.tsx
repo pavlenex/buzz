@@ -1,5 +1,3 @@
-import * as React from "react";
-
 import {
   Archive,
   Bell,
@@ -231,15 +229,18 @@ export function ChannelContextMenuItems({
     selfMember?.role === "owner" ||
     selfMember?.role === "admin" ||
     canManageOwnedAgentChannel;
-  // Context-menu content mounts once per open session, so this capability is a
-  // stable snapshot. Late query/refetch results cannot insert an immediate
-  // Archive action or move another item beneath the user's pointer.
-  const [showManagementActions] = React.useState(
-    () =>
-      channel.channelType !== "dm" &&
-      channel.archivedAt === null &&
-      canManageChannel,
-  );
+  const hasResolvedMembers = membersQuery.data !== undefined;
+  const hasResolvedOwnerProfiles =
+    ownerPubkeys.length === 0 || ownerProfilesQuery.data !== undefined;
+  const isManagementCandidate =
+    channel.channelType !== "dm" && channel.archivedAt === null;
+  // Reserve disabled rows while capability queries resolve. This keeps the
+  // menu stable under the pointer without making owners close and reopen a
+  // cold-cache menu before the actions appear.
+  const showManagementActions =
+    isManagementCandidate &&
+    (!hasResolvedMembers || !hasResolvedOwnerProfiles || canManageChannel);
+  const disableManagementActions = !canManageChannel;
   const showStar = Boolean(onStarChannel && onUnstarChannel);
   const showReadToggle = hasUnread
     ? Boolean(onMarkChannelRead)
@@ -270,6 +271,7 @@ export function ChannelContextMenuItems({
         <>
           <ContextMenuSeparator />
           <ContextMenuItem
+            disabled={disableManagementActions}
             onSelect={() =>
               deferMenuAction(() =>
                 openChannelManagement(channel.id, { edit: true }),
@@ -283,6 +285,7 @@ export function ChannelContextMenuItems({
           </ContextMenuItem>
           <ContextMenuItem
             className="text-destructive focus:text-destructive"
+            disabled={disableManagementActions}
             onSelect={() =>
               deferMenuAction(() => {
                 void archiveChannelMutation.mutateAsync().catch((error) => {
