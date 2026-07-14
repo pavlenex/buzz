@@ -47,7 +47,11 @@ use huddle::{
 use managed_agents::{
     backfill_persona_snapshots, ensure_nest, restore_managed_agents_on_launch, try_regenerate_nest,
 };
+#[cfg(all(feature = "mesh-llm", target_os = "macos"))]
+use shutdown::hard_exit_after_mesh_shutdown;
 use shutdown::shutdown_managed_agents;
+#[cfg(feature = "mesh-llm")]
+use shutdown::shutdown_mesh_runtime;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -226,35 +230,6 @@ async fn wait_for_stable_initial_window_geometry<R: tauri::Runtime>(window: &tau
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-#[cfg(all(feature = "mesh-llm", target_os = "macos"))]
-fn hard_exit_after_mesh_shutdown() -> ! {
-    // SAFETY: all Buzz-managed subprocesses and the embedded Mesh runtime have
-    // been stopped above. `_exit` intentionally skips only process-global C++
-    // destructors and buffered stdio; no Rust or application state remains to
-    // be observed after this point.
-    unsafe { libc::_exit(0) }
-}
-
-#[cfg(feature = "mesh-llm")]
-fn shutdown_mesh_runtime(app: &tauri::AppHandle) {
-    let app = app.clone();
-    let (tx, rx) = std::sync::mpsc::channel();
-    tauri::async_runtime::spawn(async move {
-        let state = app.state::<AppState>();
-        let runtime = state.mesh_llm_runtime.lock().await.take();
-        let result = match runtime {
-            Some(runtime) => runtime.stop().await,
-            None => Ok(()),
-        };
-        let _ = tx.send(result);
-    });
-    match rx.recv_timeout(std::time::Duration::from_secs(5)) {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => eprintln!("buzz-desktop: failed to stop Mesh runtime: {error}"),
-        Err(error) => eprintln!("buzz-desktop: timed out stopping Mesh runtime: {error}"),
-    }
-}
-
 pub fn run() {
     // mesh-llm's async chains (model download, node start/join) overflow
     // tokio's default 2 MiB worker stacks — a stack-guard SIGABRT, not a

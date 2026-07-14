@@ -7,6 +7,34 @@ use crate::managed_agents::{
 };
 use crate::util;
 
+#[cfg(all(feature = "mesh-llm", target_os = "macos"))]
+pub(crate) fn hard_exit_after_mesh_shutdown() -> ! {
+    // SAFETY: all Buzz-managed subprocesses and the embedded Mesh runtime have
+    // been stopped. `_exit` intentionally skips only process-global C++
+    // destructors and buffered stdio; no application state remains observable.
+    unsafe { libc::_exit(0) }
+}
+
+#[cfg(feature = "mesh-llm")]
+pub(crate) fn shutdown_mesh_runtime(app: &tauri::AppHandle) {
+    let app = app.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let runtime = state.mesh_llm_runtime.lock().await.take();
+        let result = match runtime {
+            Some(runtime) => runtime.stop().await,
+            None => Ok(()),
+        };
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => eprintln!("buzz-desktop: failed to stop Mesh runtime: {error}"),
+        Err(error) => eprintln!("buzz-desktop: timed out stopping Mesh runtime: {error}"),
+    }
+}
+
 pub(crate) fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let _store_guard = state
