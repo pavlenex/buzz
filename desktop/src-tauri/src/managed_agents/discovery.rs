@@ -21,7 +21,10 @@ pub(crate) struct KnownAcpRuntime {
     pub mcp_command: Option<&'static str>,
     /// Whether to enable MCP hook tools (`_Stop`, `_PostCompact`) for this agent.
     pub mcp_hooks: bool,
-    /// CLI binary that indicates partial install (e.g. `"claude"` when `claude-agent-acp` is missing).
+    /// CLI binary whose presence distinguishes `AdapterMissing` from
+    /// `NotInstalled` when the adapter is absent. `None` for the bundled
+    /// bridges (claude, codex): they ship their own vendored CLI, so the
+    /// user's install neither gates availability nor serves auth probes.
     pub underlying_cli: Option<&'static str>,
     /// Shell commands to install the runtime CLI itself (run sequentially).
     pub cli_install_commands: &'static [&'static str],
@@ -138,12 +141,12 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         avatar_url: CLAUDE_CODE_AVATAR_URL,
         mcp_command: None,
         mcp_hooks: false,
-        underlying_cli: Some("claude"),
-        cli_install_commands: &["curl -fsSL https://claude.ai/install.sh | bash"],
+        underlying_cli: None,
+        cli_install_commands: &[],
         adapter_install_commands: &[],
         install_instructions_url: "https://github.com/agentclientprotocol/claude-agent-acp",
-        cli_install_hint: "Install the Claude Code CLI via the official install script.",
-        adapter_install_hint: "The Claude Code ACP adapter ships with the Buzz desktop app.",
+        cli_install_hint: "",
+        adapter_install_hint: "The Claude Code ACP adapter ships with the Buzz desktop app. Reinstall Buzz to restore it.",
         skill_dir: Some(".claude/skills"),
         supports_acp_model_switching: false,
         model_env_var: None,
@@ -157,7 +160,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         max_tokens_env_var: None,
         context_limit_env_var: None,
         required_normalized_fields: &[],
-        login_hint: Some("Run the Claude CLI to complete authentication."),
+        login_hint: Some("Run the Claude CLI to complete authentication (install it first if needed)."),
         auth_probe_args: Some(&["claude", "auth", "status"]),
     },
     KnownAcpRuntime {
@@ -168,12 +171,12 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         avatar_url: CODEX_AVATAR_URL,
         mcp_command: Some("buzz-dev-mcp"),
         mcp_hooks: false,
-        underlying_cli: Some("codex"),
-        cli_install_commands: &["curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
+        underlying_cli: None,
+        cli_install_commands: &[],
         adapter_install_commands: &[],
         install_instructions_url: "https://github.com/agentclientprotocol/codex-acp",
-        cli_install_hint: "Install the Codex CLI via the official install script.",
-        adapter_install_hint: "The Codex ACP adapter ships with the Buzz desktop app.",
+        cli_install_hint: "",
+        adapter_install_hint: "The Codex ACP adapter ships with the Buzz desktop app. Reinstall Buzz to restore it.",
         skill_dir: Some(".codex/skills"),
         supports_acp_model_switching: false,
         model_env_var: None,
@@ -187,7 +190,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         max_tokens_env_var: None,
         context_limit_env_var: None,
         required_normalized_fields: &[],
-        login_hint: Some("Run `codex login` to authenticate."),
+        login_hint: Some("Run `codex login` to authenticate (install the Codex CLI first if needed)."),
         // Verified: `codex login status` exits 0 when logged in, non-zero otherwise.
         auth_probe_args: Some(&["codex", "login", "status"]),
     },
@@ -838,6 +841,16 @@ pub(crate) fn is_npm_global_install(cmd: &str) -> bool {
     t.starts_with("npm install -g ") || t.starts_with("npm i -g ")
 }
 
+/// Resolve the binary for a CLI auth probe (`claude`, `codex`): the pinned
+/// CLI vendored inside the bundled bridge wins — it is the exact binary agent
+/// sessions run and reads the same credential store — falling back to the
+/// user's install for builds without staged bundle resources. Not routed
+/// through `resolve_command`: probe binaries must stay out of the resolve
+/// cache and off the agent-spawn PATH.
+pub(crate) fn resolve_probe_binary(cli: &str) -> Option<PathBuf> {
+    super::acp_tools::bundled_harness_cli(cli).or_else(|| resolve_command(cli))
+}
+
 /// Run a CLI auth probe with a 10-second process-level timeout.
 ///
 /// Spawns the probe CLI as a child process. Stdout and stderr are drained on
@@ -955,25 +968,21 @@ pub fn missing_command_message(command: &str, role: &str) -> String {
     )
 }
 
+/// A resolving adapter is available, full stop — whether the runtime is
+/// usable beyond that is an auth question (`auth_status`), not an install
+/// question. The retired `CliMissing` state gated availability on a user
+/// CLI install the bundled bridges no longer need.
 pub(crate) fn classify_runtime(
     adapter_result: Option<(&str, PathBuf)>,
     underlying_cli: Option<&str>,
     underlying_cli_found: bool,
 ) -> (AcpAvailabilityStatus, Option<String>, Option<String>) {
     if let Some((cmd, path)) = adapter_result {
-        if underlying_cli.is_some() && !underlying_cli_found {
-            (
-                AcpAvailabilityStatus::CliMissing,
-                Some(cmd.to_string()),
-                Some(path.display().to_string()),
-            )
-        } else {
-            (
-                AcpAvailabilityStatus::Available,
-                Some(cmd.to_string()),
-                Some(path.display().to_string()),
-            )
-        }
+        (
+            AcpAvailabilityStatus::Available,
+            Some(cmd.to_string()),
+            Some(path.display().to_string()),
+        )
     } else if underlying_cli.is_some() && underlying_cli_found {
         (AcpAvailabilityStatus::AdapterMissing, None, None)
     } else {
@@ -1031,7 +1040,6 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
             let adapter_hint = runtime.adapter_install_hint;
             let install_hint = match availability {
                 AcpAvailabilityStatus::Available => cli_hint.to_string(),
-                AcpAvailabilityStatus::CliMissing => cli_hint.to_string(),
                 AcpAvailabilityStatus::AdapterMissing => adapter_hint.to_string(),
                 AcpAvailabilityStatus::NotInstalled => {
                     if !cli_hint.is_empty() && !adapter_hint.is_empty() {
@@ -1087,8 +1095,8 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
                 return None;
             }
             let probe_args = partial.runtime.auth_probe_args?;
-            // Need the resolved binary path for the CLI (e.g. the actual `claude` binary).
-            let binary_path = resolve_command(probe_args[0])?;
+            // Probe the bundled CLI when the app ships one, else the user's.
+            let binary_path = resolve_probe_binary(probe_args[0])?;
             let probe_args_owned: Vec<String> = probe_args.iter().map(|s| s.to_string()).collect();
 
             let handle = std::thread::spawn(move || {

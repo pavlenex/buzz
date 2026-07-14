@@ -46,7 +46,7 @@ use crate::managed_agents::{
     agent_env::baked_build_env,
     config_bridge::read_goose_file_config,
     discovery::{
-        classify_runtime, find_command, known_acp_runtime, resolve_command, KnownAcpRuntime,
+        classify_runtime, find_command, known_acp_runtime, resolve_probe_binary, KnownAcpRuntime,
     },
     env_vars::merged_user_env,
     global_config::GlobalAgentConfig,
@@ -502,7 +502,10 @@ fn cli_login_requirements(
         .iter()
         .find_map(|cmd| find_command(cmd).map(|path| (*cmd, path)));
 
-    // Check whether the underlying CLI itself (e.g. "claude", "codex") is on PATH.
+    // Check whether the underlying CLI is on PATH — only set for runtimes
+    // whose CLI is a separate install (not the bundled claude/codex bridges,
+    // which vendor their own); it distinguishes AdapterMissing from
+    // NotInstalled below.
     let underlying_cli_found = runtime
         .underlying_cli
         .map(|cli| find_command(cli).is_some())
@@ -513,10 +516,12 @@ fn cli_login_requirements(
 
     match availability {
         AcpAvailabilityStatus::Available => {
-            // Both adapter and CLI are present — probe login status.
-            // Resolve via the full login-shell PATH so the probe works in a
-            // packaged macOS DMG where the GUI PATH lacks npm/homebrew.
-            let Some(binary_path) = resolve_command(probe_args[0]) else {
+            // Adapter present — probe login status against the bundled CLI
+            // when the app ships one (the same pinned binary agent sessions
+            // run), else the user's install resolved via the full login-shell
+            // PATH so the probe works in a packaged macOS DMG where the GUI
+            // PATH lacks npm/homebrew.
+            let Some(binary_path) = resolve_probe_binary(probe_args[0]) else {
                 // Unexpectedly not resolvable (race or PATH edge case).
                 return vec![Requirement::CliLogin {
                     probe_args: probe_args.iter().map(|s| s.to_string()).collect(),
@@ -1040,10 +1045,11 @@ mod tests {
     }
 
     #[test]
-    fn cli_login_requirements_cli_missing_emits_cli_missing() {
+    fn cli_login_requirements_probe_runs_even_without_underlying_cli() {
         // Adapter present (use the running test binary as a portable stand-in),
-        // underlying CLI absent.
-        // → CliMissing state → no probe run → CliLogin{CliMissing}.
+        // underlying CLI absent. The retired CliMissing gate would have skipped
+        // the probe; now the adapter alone means Available, the probe runs
+        // (here: exit 0 → logged in) and no requirement is emitted.
         let exe = present_binary_str();
         let rt = make_cli_runtime(
             static_commands(vec![exe]),              // adapter found via absolute path
@@ -1051,19 +1057,9 @@ mod tests {
         );
         let reqs = cli_login_requirements(&[exe, "--list"], "install the CLI", &rt);
         assert!(
-            !reqs.is_empty(),
-            "CLI missing must produce a CliLogin requirement"
+            reqs.is_empty(),
+            "adapter present must probe login regardless of the user CLI; got {reqs:?}"
         );
-        if let Requirement::CliLogin {
-            ref availability, ..
-        } = reqs[0]
-        {
-            assert_eq!(
-                *availability,
-                crate::managed_agents::AcpAvailabilityStatus::CliMissing,
-                "adapter present, CLI absent → CliMissing"
-            );
-        }
     }
 
     #[test]

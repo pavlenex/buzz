@@ -63,8 +63,12 @@ pub(crate) enum AcpAvailabilityStatus {
     /// ACP adapter binary missing; underlying CLI may be present.
     AdapterMissing,
     /// ACP adapter binary is from the deprecated package (< 1.0). Reinstall required.
+    /// Retired on current desktops; kept so payloads from older app versions
+    /// still parse.
     AdapterOutdated,
     /// CLI binary missing; ACP adapter may be present.
+    /// Retired on current desktops (the bundled bridges vendor their own
+    /// CLI); kept so payloads from older app versions still parse.
     CliMissing,
     /// Neither adapter nor CLI found.
     NotInstalled,

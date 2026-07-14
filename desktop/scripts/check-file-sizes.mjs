@@ -214,7 +214,9 @@ const overrides = new Map([
   // availability retired with the codex version gate (-1 line).
   // bundled-adapter-doctor-copy: adapterBundled field on
   // AcpRuntimeCatalogEntry (+2 lines).
-  ["src/shared/api/types.ts", 1062],
+  // bundled-cli-probes: "cli_missing" availability retired; +4 doc lines on
+  // AcpAvailabilityStatus explaining why the state no longer exists.
+  ["src/shared/api/types.ts", 1066],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
@@ -271,13 +273,18 @@ const overrides = new Map([
   // claude-code-acp-fallback-retirement: the legacy command moved from the
   // resolution sweep to identity-only aliases; +5 comment lines documenting
   // the commands/aliases split that move makes load-bearing.
-  ["src-tauri/src/managed_agents/discovery.rs", 1139],
+  // bundled-cli-probes: resolve_probe_binary (bundled-CLI-first probe
+  // resolution) + classify_runtime/underlying_cli doc rewrites for the
+  // CliMissing retirement (+8 lines).
+  ["src-tauri/src/managed_agents/discovery.rs", 1147],
   // rebase over codex-acp-package-swap: its version-probe tests union with the
   // doctor-install-reliability nvm/login-shell/semver tests — each side alone
   // stayed under the 1000 default; the union exceeds it.
   // bundle-acps: version-gate retirement deletes the probe/availability test
   // sections; ratcheting 1029 -> 825 (under the 1000 default; kept as a ratchet).
-  ["src-tauri/src/managed_agents/discovery/tests.rs", 825],
+  // bundled-cli-probes: CliMissing test reworked to assert Available when the
+  // adapter resolves without an underlying CLI (+2 comment lines).
+  ["src-tauri/src/managed_agents/discovery/tests.rs", 827],
   // identity-import-keyring: the identity resolution state machine's behavioral
   // matrix (46 tests over FakeIdentityStore — probe × marker × file cells,
   // adoption / read-back-corruption / marker-failure arms, recovery-mode

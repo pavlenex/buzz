@@ -38,8 +38,6 @@ function StatusIcon({
       return <CheckCircle2 className="h-4 w-4 text-status-added" />;
     case "adapter_missing":
       return <AlertTriangle className="h-4 w-4 text-warning" />;
-    case "cli_missing":
-      return <AlertTriangle className="h-4 w-4 text-warning" />;
     case "not_installed":
       return <Circle className="h-4 w-4 text-muted-foreground/50" />;
   }
@@ -122,8 +120,6 @@ function InstallActions({
 /**
  * Node.js callout when required, or the install actions when it is not.
  * Used for both `adapter_missing` and `not_installed` availability states.
- * The `cli_missing` branch is intentionally excluded — its install path does
- * not involve npm, so no Node.js gate applies.
  */
 function NodeRequiredOrInstall({
   hasError,
@@ -180,8 +176,7 @@ function RuntimeRow({
         "flex min-h-16 items-start gap-3 px-4 py-3 text-sm",
         runtime.availability === "available"
           ? "bg-background/60"
-          : runtime.availability === "adapter_missing" ||
-              runtime.availability === "cli_missing"
+          : runtime.availability === "adapter_missing"
             ? "bg-amber-500/5"
             : "bg-muted/20",
       )}
@@ -218,23 +213,12 @@ function RuntimeRow({
                 </code>
               </p>
             ) : null}
-            {runtime.underlyingCliPath &&
-            runtime.underlyingCliPath !== runtime.binaryPath ? (
-              <div className="mt-1 space-y-0.5">
-                <p className="break-all font-mono text-2xs text-muted-foreground/80">
-                  <span className="text-muted-foreground">CLI:</span>{" "}
-                  {runtime.underlyingCliPath}
-                </p>
-                {/* The bundled bridge's resource-dir path is noise — the
-                    "ACP bridge bundled with Buzz." line above covers it. */}
-                {runtime.adapterBundled ? null : (
-                  <p className="break-all font-mono text-2xs text-muted-foreground/80">
-                    <span className="text-muted-foreground">ACP adapter:</span>{" "}
-                    {runtime.binaryPath}
-                  </p>
-                )}
-              </div>
-            ) : runtime.adapterBundled ? null : (
+            {/* The bundled bridge's resource-dir path is noise — the
+                "ACP bridge bundled with Buzz." line above covers it. The
+                user-CLI path row is retired with the cli_missing gate: the
+                bundled bridges vendor their own CLI, so no runtime reports a
+                separate CLI path anymore. */}
+            {runtime.adapterBundled ? null : (
               <>
                 <p className="mt-1 break-all font-mono text-2xs text-muted-foreground/80">
                   {runtime.binaryPath}
@@ -279,34 +263,6 @@ function RuntimeRow({
               {runtime.installHint}
             </p>
             <NodeRequiredOrInstall
-              hasError={installError !== null}
-              isInstalling={isInstalling}
-              onInstall={onInstall}
-              runtime={runtime}
-            />
-          </>
-        ) : runtime.availability === "cli_missing" ? (
-          <>
-            <p className="mt-1 text-sm font-normal text-muted-foreground">
-              {runtime.adapterBundled ? (
-                <>
-                  ACP bridge bundled with Buzz, but the {runtime.label} CLI is
-                  not installed.
-                </>
-              ) : (
-                <>
-                  ACP adapter found at{" "}
-                  <code className="rounded bg-muted px-1 py-0.5 text-2xs">
-                    {runtime.binaryPath ?? "unknown path"}
-                  </code>{" "}
-                  but the {runtime.label} CLI is not installed.
-                </>
-              )}
-            </p>
-            <p className="mt-1 text-sm font-normal text-muted-foreground">
-              {runtime.installHint}
-            </p>
-            <InstallActions
               hasError={installError !== null}
               isInstalling={isInstalling}
               onInstall={onInstall}

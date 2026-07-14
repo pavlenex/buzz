@@ -176,13 +176,15 @@ fn classifies_not_installed_when_no_underlying_cli() {
 }
 
 #[test]
-fn classifies_cli_missing_when_adapter_found_but_cli_absent() {
+fn classifies_available_when_adapter_found_even_without_underlying_cli() {
+    // The retired CliMissing gate must not come back: a resolving adapter is
+    // available regardless of whether an underlying CLI is on the user PATH.
     let (status, cmd, path) = classify_runtime(
         Some(("codex-acp", PathBuf::from("/opt/homebrew/bin/codex-acp"))),
         Some("codex"),
         false,
     );
-    assert_eq!(status, AcpAvailabilityStatus::CliMissing);
+    assert_eq!(status, AcpAvailabilityStatus::Available);
     assert_eq!(cmd.as_deref(), Some("codex-acp"));
     assert_eq!(path.as_deref(), Some("/opt/homebrew/bin/codex-acp"));
 }
