@@ -1709,6 +1709,7 @@ test("manage channel keeps canvas near the top of the sheet", async ({
 async function seedHomeInboxMention(
   page: import("@playwright/test").Page,
   itemId: string,
+  tags?: string[][],
 ) {
   await page.goto("/");
   await expect(page.getByTestId("home-inbox-list")).toBeVisible();
@@ -1719,7 +1720,14 @@ async function seedHomeInboxMention(
   );
 
   await page.evaluate(
-    ({ channelId, createdAt, currentPubkey, itemId: id, senderPubkey }) => {
+    ({
+      channelId,
+      createdAt,
+      currentPubkey,
+      itemId: id,
+      senderPubkey,
+      tags: seededTags,
+    }) => {
       const pushFeedItem = (window as MockFeedWindow)
         .__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
       if (!pushFeedItem) {
@@ -1734,7 +1742,7 @@ async function seedHomeInboxMention(
         created_at: createdAt,
         channel_id: channelId,
         channel_name: "general",
-        tags: [
+        tags: seededTags ?? [
           ["e", channelId],
           ["p", currentPubkey],
         ],
@@ -1747,6 +1755,7 @@ async function seedHomeInboxMention(
       currentPubkey: TEST_IDENTITIES.tyler.pubkey,
       itemId,
       senderPubkey: TEST_IDENTITIES.alice.pubkey,
+      tags,
     },
   );
 
@@ -1767,6 +1776,31 @@ test("home inbox channel label navigates to the channel message", async ({
     new RegExp(`#/channels/${GENERAL_CHANNEL_ID}\\?`),
   );
   await expect(page).toHaveURL(/messageId=mock-feed-home-channel-navigate/);
+  await expect(page).not.toHaveURL(/threadRootId=/);
+  await expect(page.getByTestId("message-timeline")).toBeVisible();
+  await expect(page.getByTestId("home-inbox-list")).toHaveCount(0);
+});
+
+test("home inbox thread reply mention carries threadRootId to the channel", async ({
+  page,
+}) => {
+  const rootEventId = "mock-feed-home-thread-root";
+  await seedHomeInboxMention(page, "mock-feed-home-thread-navigate", [
+    ["e", rootEventId, "", "root"],
+    ["e", "mock-feed-home-thread-parent", "", "reply"],
+    ["p", TEST_IDENTITIES.tyler.pubkey],
+  ]);
+
+  await page
+    .getByTestId("home-inbox-detail")
+    .getByRole("button", { exact: true, name: "general" })
+    .click();
+
+  await expect(page).toHaveURL(
+    new RegExp(`#/channels/${GENERAL_CHANNEL_ID}\\?`),
+  );
+  await expect(page).toHaveURL(/messageId=mock-feed-home-thread-navigate/);
+  await expect(page).toHaveURL(new RegExp(`threadRootId=${rootEventId}`));
   await expect(page.getByTestId("message-timeline")).toBeVisible();
   await expect(page.getByTestId("home-inbox-list")).toHaveCount(0);
 });
