@@ -26,6 +26,10 @@ use crate::filter::SubscriptionRule;
 /// Override via `--idle-timeout` / `BUZZ_ACP_IDLE_TIMEOUT`.
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 900;
 
+/// Default absolute wall-clock cap per agent turn (2 hours).
+/// Override via `--max-turn-duration` / `BUZZ_ACP_MAX_TURN_DURATION`.
+pub(crate) const DEFAULT_MAX_TURN_DURATION_SECS: u64 = 7200;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to parse nostr keys: {0}")]
@@ -220,7 +224,7 @@ pub struct CliArgs {
     pub idle_timeout: Option<u64>,
 
     /// Absolute wall-clock cap per turn (safety valve).
-    #[arg(long, env = "BUZZ_ACP_MAX_TURN_DURATION", default_value = "7200")]
+    #[arg(long, env = "BUZZ_ACP_MAX_TURN_DURATION", default_value_t = DEFAULT_MAX_TURN_DURATION_SECS)]
     pub max_turn_duration: u64,
 
     /// Deprecated: alias for --idle-timeout. If both set, --idle-timeout wins.
@@ -1326,7 +1330,7 @@ mod tests {
             agent_args: vec!["acp".into()],
             mcp_command: "".into(),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
-            max_turn_duration_secs: 7200,
+            max_turn_duration_secs: DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,
             heartbeat_interval_secs: 0,
             turn_liveness_secs: 10,
@@ -2231,7 +2235,7 @@ channels = "ALL"
             "summary should include {expected_idle}: {summary}"
         );
         assert!(
-            summary.contains("max_turn=7200s"),
+            summary.contains(&format!("max_turn={DEFAULT_MAX_TURN_DURATION_SECS}s")),
             "summary should include max_turn: {summary}"
         );
     }
@@ -2436,13 +2440,10 @@ channels = "ALL"
             "test precondition: idle must be >= max_turn to trigger guard"
         );
 
-        // And the valid case:
-        let idle_valid = 900u64;
-        let max_turn_valid = 7200u64;
-        assert!(
-            idle_valid < max_turn_valid,
-            "default idle (900) must be less than default max_turn (7200)"
-        );
+        // And the valid case (const assertion so clippy doesn't flag it):
+        const {
+            assert!(DEFAULT_IDLE_TIMEOUT_SECS < DEFAULT_MAX_TURN_DURATION_SECS);
+        }
     }
 
     // --- BUZZ_ACP_ALLOWED_RESPOND_TO gate ---

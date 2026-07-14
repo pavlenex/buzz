@@ -1387,7 +1387,8 @@ async fn tokio_main() -> Result<()> {
     }
 
     let dedup_mode = config.dedup_mode;
-    let mut queue = EventQueue::new(dedup_mode);
+    let mut queue =
+        EventQueue::new(dedup_mode).with_in_flight_deadline(config.max_turn_duration_secs);
 
     let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
@@ -3865,7 +3866,7 @@ mod build_mcp_servers_tests {
             agent_args: vec!["acp".into()],
             mcp_command: "test-mcp-server".into(),
             idle_timeout_secs: config::DEFAULT_IDLE_TIMEOUT_SECS,
-            max_turn_duration_secs: 7200,
+            max_turn_duration_secs: config::DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,
             heartbeat_interval_secs: 0,
             turn_liveness_secs: 10,
@@ -4014,7 +4015,8 @@ mod error_outcome_emission_tests {
     use crate::pool::{
         AgentPool, OwnedAgent, PromptOutcome, PromptResult, PromptSource, TimeoutKind,
     };
-    use crate::queue::FlushBatch;
+    use crate::queue::{BatchEvent, FlushBatch};
+    use nostr::{EventBuilder, Keys, Kind};
     use std::collections::HashSet;
 
     fn test_config() -> Config {
@@ -4028,7 +4030,7 @@ mod error_outcome_emission_tests {
             agent_args: vec![],
             mcp_command: "test-mcp-server".into(),
             idle_timeout_secs: config::DEFAULT_IDLE_TIMEOUT_SECS,
-            max_turn_duration_secs: 7200,
+            max_turn_duration_secs: config::DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,
             heartbeat_interval_secs: 0,
             turn_liveness_secs: 10,
@@ -4227,11 +4229,21 @@ mod error_outcome_emission_tests {
     /// hard-cap timeout dead-letters immediately (no requeue); idle timeout is requeued.
     #[tokio::test]
     async fn hard_timeout_not_requeued_idle_timeout_is_requeued() {
-        let make_batch = || FlushBatch {
-            channel_id: Uuid::new_v4(),
-            events: vec![],
-            cancelled_events: vec![],
-            cancel_reason: None,
+        let make_batch = || {
+            let keys = Keys::generate();
+            let event = EventBuilder::new(Kind::Custom(9), "test")
+                .sign_with_keys(&keys)
+                .unwrap();
+            FlushBatch {
+                channel_id: Uuid::new_v4(),
+                events: vec![BatchEvent {
+                    event,
+                    prompt_tag: "test".into(),
+                    received_at: std::time::Instant::now(),
+                }],
+                cancelled_events: vec![],
+                cancel_reason: None,
+            }
         };
 
         let run = |outcome: PromptOutcome, batch: FlushBatch| async move {
