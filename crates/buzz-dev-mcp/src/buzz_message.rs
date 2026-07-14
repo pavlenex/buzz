@@ -100,6 +100,7 @@ mod tests {
     #[cfg(windows)]
     fn make_executable(_path: &std::path::Path) {}
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn publishes_with_structured_cli_arguments() {
         let dir = tempfile::tempdir().unwrap();
