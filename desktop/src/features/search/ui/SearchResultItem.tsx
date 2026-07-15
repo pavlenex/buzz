@@ -17,6 +17,7 @@ import {
 } from "@/features/profile/lib/identity";
 import type { Channel, SearchHit, UserSearchResult } from "@/shared/api/types";
 import { Badge } from "@/shared/ui/badge";
+import { HashSearch } from "@/shared/ui/icons";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 export type SearchResult =
@@ -24,7 +25,7 @@ export type SearchResult =
       kind: "action";
       action: {
         description?: string;
-        id: "create-agent" | "create-channel";
+        id: "browse-channels" | "create-agent" | "create-channel";
         title: string;
       };
     }
@@ -69,7 +70,11 @@ export function resultIcon(
   channelLookup: ReadonlyMap<string, Channel>,
 ) {
   if (result.kind === "action") {
-    return result.action.id === "create-agent" ? Bot : Plus;
+    return result.action.id === "browse-channels"
+      ? HashSearch
+      : result.action.id === "create-agent"
+        ? Bot
+        : Plus;
   }
 
   if (result.kind === "user") {

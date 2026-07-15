@@ -61,18 +61,20 @@ test.describe("per-group channel sort", () => {
     await installMockBridge(page);
     await openApp(page);
 
-    // Hover the Channels header to reveal the action cluster, then open the
-    // sort dropdown and choose Recent.
+    // Browse, create, and sort are primary actions: they stay visible without
+    // requiring hover or a trip through the overflow menu.
     const streamList = page.getByTestId("stream-list");
     await expect(streamList).toBeVisible();
-    await page.getByText("Channels", { exact: true }).hover();
-    const trigger = page.getByTestId("section-actions-channels");
-    await expect(trigger).toBeVisible();
+    const browse = page.getByTestId("section-browse-channels");
+    const create = page.getByTestId("section-actions-channels-quick-create");
+    const trigger = page.getByTestId("section-sort-channels");
+    for (const action of [browse, create, trigger]) {
+      await expect(action).toBeVisible();
+      await expect(action).toHaveCSS("opacity", "1");
+    }
     await waitForAnimations(page);
     await page.screenshot({ path: `${SHOTS}/01-channels-sort-ingress.png` });
     await trigger.click();
-    // Sort is now a submenu flyout — open it before the radio items render.
-    await page.getByRole("menuitem", { name: "Sort" }).click();
     await expect(
       page.getByRole("menuitemradio", { name: "Recent" }),
     ).toBeVisible();

@@ -24,6 +24,7 @@ type AppSidebarPinnedHeaderProps = {
   channelLabels: Record<string, string>;
   currentPubkey?: string;
   homeBadgeCount: number;
+  onBrowseChannels?: () => void;
   onCreateAgent: () => void;
   onCreateChannel: () => void;
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
@@ -44,6 +45,7 @@ export function AppSidebarPinnedHeader({
   channelLabels,
   currentPubkey,
   homeBadgeCount,
+  onBrowseChannels,
   onCreateAgent,
   onCreateChannel,
   onOpenDm,
@@ -66,6 +68,7 @@ export function AppSidebarPinnedHeader({
         channels={searchChannels}
         currentPubkey={currentPubkey}
         focusRequest={searchFocusRequest}
+        onBrowseChannels={onBrowseChannels}
         onOpenChannel={onSelectChannel}
         onOpenResult={onOpenSearchResult}
         onOpenUser={(user) => onOpenDm({ pubkeys: [user.pubkey] })}

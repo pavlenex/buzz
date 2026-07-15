@@ -670,30 +670,12 @@ export async function installRelayBridge(
   });
 }
 
-// The sidebar no longer renders a "browse channels" icon button; the channel
-// browser is opened via the primary-modifier + Shift + O keyboard shortcut.
 export async function openChannelBrowser(page: Page) {
   await page.getByTestId("app-sidebar").waitFor({ state: "visible" });
-  const isMacBrowser = await page.evaluate(() =>
-    /mac|iphone|ipad|ipod/i.test(navigator.platform),
-  );
-  await page.evaluate((isMac) => {
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        ctrlKey: !isMac,
-        key: "O",
-        metaKey: isMac,
-        shiftKey: true,
-      }),
-    );
-  }, isMacBrowser);
+  await page.getByTestId("section-browse-channels").click();
 }
 
-// Section header actions (create channel, new DM, mark all read, sort) now
-// live inside a per-section "more actions" (⋮) menu instead of standalone
-// header icon buttons. These helpers open that menu and pick an item.
+// Secondary section actions still live in each section's overflow menu.
 async function openSectionMenu(page: Page, actionsTestId: string) {
   const trigger = page.getByTestId(actionsTestId);
   await trigger.scrollIntoViewIfNeeded();
@@ -701,8 +683,7 @@ async function openSectionMenu(page: Page, actionsTestId: string) {
 }
 
 export async function openCreateChannelDialog(page: Page) {
-  await openSectionMenu(page, "section-actions-channels");
-  await page.getByRole("menuitem", { name: "New channel" }).click();
+  await page.getByTestId("section-actions-channels-quick-create").click();
 }
 
 export async function openNewMessagePage(page: Page) {

@@ -72,12 +72,7 @@ const SORT_OPTIONS: { value: ChannelSortMode; label: string }[] = [
   { value: "alpha", label: "A–Z" },
 ];
 
-/**
- * A single always-visible "+" quick action shown at the right edge of a
- * section header, to the left of the ⋮ menu. Used for the most common
- * per-section create action (New channel, New message) while every other
- * action stays folded into {@link SectionActionsMenu}.
- */
+/** A compact section-header action with an accessible label. */
 export function SectionQuickAction({
   label,
   onClick,
@@ -109,12 +104,53 @@ export function SectionQuickAction({
   );
 }
 
-/**
- * The single "more actions" menu shown at the right edge of every sidebar
- * section header (Starred, Channels, Forums, Direct messages, and each custom
- * section). Items render only when their handler is provided; a Sort radio
- * group is appended whenever a sort preference is supplied.
- */
+function SectionSortMenu({
+  sectionLabel,
+  sortMode,
+  onSortModeChange,
+  onOpenChange,
+  testId,
+}: {
+  sectionLabel: string;
+  sortMode: ChannelSortMode;
+  onSortModeChange: (mode: ChannelSortMode) => void;
+  onOpenChange?: (open: boolean) => void;
+  testId?: string;
+}) {
+  const label = `Sort ${sectionLabel}`;
+
+  return (
+    <DropdownMenu onOpenChange={onOpenChange}>
+      <DropdownMenuTrigger asChild>
+        <button
+          aria-label={label}
+          className={SECTION_ICON_BUTTON_CLASS}
+          data-testid={testId}
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+          title={label}
+          type="button"
+        >
+          <ArrowUpDown className="h-4 w-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuRadioGroup
+          onValueChange={(value) => onSortModeChange(value as ChannelSortMode)}
+          value={sortMode}
+        >
+          {SORT_OPTIONS.map((option) => (
+            <DropdownMenuRadioItem key={option.value} value={option.value}>
+              {option.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** Overflow actions shared by sidebar section headers. */
 export function SectionActionsMenu({
   sectionLabel,
   testId,
@@ -337,6 +373,7 @@ export function ChannelGroupSection({
   listTestId,
   onBrowseClick,
   onCreateClick,
+  showPrimaryActions,
   showQuickCreate,
   onMarkAllRead,
   onMarkChannelRead,
@@ -374,6 +411,7 @@ export function ChannelGroupSection({
   listTestId: string;
   onBrowseClick?: () => void;
   onCreateClick?: () => void;
+  showPrimaryActions?: boolean;
   showQuickCreate?: boolean;
   onMarkChannelRead: (
     channelId: string,
@@ -484,6 +522,15 @@ export function ChannelGroupSection({
         title={title}
         actions={
           <>
+            {showPrimaryActions && onBrowseClick ? (
+              <SectionQuickAction
+                icon={HashSearch}
+                label={browseLabel ?? "Browse channels"}
+                onClick={onBrowseClick}
+                testId="section-browse-channels"
+                visibilityClassName=""
+              />
+            ) : null}
             {showQuickCreate && onCreateClick ? (
               <SectionQuickAction
                 label={createLabel ?? "Create channel"}
@@ -491,21 +538,35 @@ export function ChannelGroupSection({
                 testId={
                   actionsTestId ? `${actionsTestId}-quick-create` : undefined
                 }
+                visibilityClassName={showPrimaryActions ? "" : undefined}
               />
             ) : null}
-            <SectionActionsMenu
-              sectionLabel={title}
-              testId={actionsTestId}
-              onOpenChange={setActionsMenuOpen}
-              hasUnread={hasUnread}
-              onMarkAllRead={onMarkAllRead}
-              onBrowse={onBrowseClick}
-              browseLabel={browseLabel}
-              onCreate={onCreateClick}
-              createLabel={createLabel}
-              sortMode={sortMode}
-              onSortModeChange={onSortModeChange}
-            />
+            {showPrimaryActions && sortMode && onSortModeChange ? (
+              <SectionSortMenu
+                sectionLabel={title}
+                sortMode={sortMode}
+                onSortModeChange={onSortModeChange}
+                onOpenChange={setActionsMenuOpen}
+                testId="section-sort-channels"
+              />
+            ) : null}
+            {!showPrimaryActions || (hasUnread && onMarkAllRead) ? (
+              <SectionActionsMenu
+                sectionLabel={title}
+                testId={actionsTestId}
+                onOpenChange={setActionsMenuOpen}
+                hasUnread={hasUnread}
+                onMarkAllRead={onMarkAllRead}
+                onBrowse={showPrimaryActions ? undefined : onBrowseClick}
+                browseLabel={browseLabel}
+                onCreate={showPrimaryActions ? undefined : onCreateClick}
+                createLabel={createLabel}
+                sortMode={showPrimaryActions ? undefined : sortMode}
+                onSortModeChange={
+                  showPrimaryActions ? undefined : onSortModeChange
+                }
+              />
+            ) : null}
           </>
         }
       />

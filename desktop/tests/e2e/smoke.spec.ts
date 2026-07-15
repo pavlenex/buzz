@@ -305,6 +305,16 @@ test("opens sidebar search with the shortcut and loads the exact result", async 
   );
 });
 
+test("browses channels from the search actions", async ({ page }) => {
+  await page.goto("/");
+  await focusSidebarSearchWithShortcut(page);
+
+  await page.getByTestId("search-result-action-browse-channels").click();
+
+  await expect(page.getByTestId("search-results")).toHaveCount(0);
+  await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
+});
+
 test("opens channel matches from search", async ({ page }) => {
   await page.goto("/");
 

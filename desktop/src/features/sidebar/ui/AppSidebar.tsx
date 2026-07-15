@@ -540,6 +540,7 @@ export function AppSidebar({
           channelLabels={dmChannelLabels}
           currentPubkey={currentPubkey}
           homeBadgeCount={homeBadgeCount}
+          onBrowseChannels={onBrowseChannels}
           onCreateAgent={onCreateAgent}
           onCreateChannel={handleOpenCreateChannel}
           onOpenDm={onOpenDm}
@@ -692,6 +693,7 @@ export function AppSidebar({
                     listTestId="stream-list"
                     onBrowseClick={onBrowseChannels}
                     onCreateClick={() => openCreateDialog("stream")}
+                    showPrimaryActions
                     showQuickCreate
                     onMarkAllRead={onMarkAllChannelsRead}
                     onMarkChannelRead={onMarkChannelRead}
