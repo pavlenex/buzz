@@ -827,7 +827,7 @@ fn validate_mp4_metadata_free(path: &Path) -> Result<(), MediaError> {
         *b"ftyp", *b"moov", *b"mdat", *b"free", *b"skip", *b"wide", *b"trak", *b"mdia", *b"minf",
         *b"stbl", *b"edts", *b"dinf", *b"sinf", *b"schi", *b"udta", *b"mvhd", *b"tkhd", *b"mdhd",
         *b"hdlr", *b"vmhd", *b"smhd", *b"dref", *b"url ", *b"urn ", *b"stsd", *b"stts", *b"stss",
-        *b"ctts", *b"stsc", *b"stsz", *b"stco", *b"co64", *b"sgpd", *b"sbgp", *b"elst",
+        *b"ctts", *b"sdtp", *b"stsc", *b"stsz", *b"stco", *b"co64", *b"sgpd", *b"sbgp", *b"elst",
     ];
     fn walk(
         file: &mut std::fs::File,
@@ -2236,6 +2236,33 @@ mod tests {
         let bytes = [
             box_wrap(b"ftyp", b"isom\0\0\0\0isom"),
             box_wrap(b"moov", &box_wrap(b"udta", &empty_ffmpeg_udta)),
+            box_wrap(b"mdat", b""),
+        ]
+        .concat();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), bytes).unwrap();
+        assert!(validate_mp4_metadata_free(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn test_accepts_standard_sample_dependency_box() {
+        // AVFoundation's macOS converter writes `sdtp` alongside the sample
+        // tables. It contains per-sample decode dependency flags, not user
+        // metadata, and must survive for correct playback behavior.
+        let mut sdtp = vec![0; 4]; // FullBox version and flags.
+        sdtp.extend_from_slice(&[0x24, 0x14]); // One dependency byte per sample.
+        let bytes = [
+            box_wrap(b"ftyp", b"isom\0\0\0\0isom"),
+            box_wrap(
+                b"moov",
+                &box_wrap(
+                    b"trak",
+                    &box_wrap(
+                        b"mdia",
+                        &box_wrap(b"minf", &box_wrap(b"stbl", &box_wrap(b"sdtp", &sdtp))),
+                    ),
+                ),
+            ),
             box_wrap(b"mdat", b""),
         ]
         .concat();

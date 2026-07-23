@@ -1,9 +1,11 @@
-//! Video transcoding and poster-frame extraction via ffmpeg.
+//! Video transcoding and poster-frame extraction.
 //!
 //! Split out of `media.rs` to keep that file under the desktop line-size
 //! limit. These helpers are used by the upload pipeline to normalize any
 //! video to H.264/AAC/MP4/fast-start (guaranteed to pass the relay's
-//! `validate_video_file()`) and to produce a JPEG poster frame.
+//! `validate_video_file()`) and to produce a JPEG poster frame. ffmpeg remains
+//! the cross-platform backend; macOS falls back to the system `avconvert`
+//! binary so a stock Buzz install can upload videos without Homebrew.
 
 use crate::managed_agents::resolve_command;
 
@@ -114,29 +116,28 @@ pub(super) fn has_heic_extension(path: &std::path::Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("heic") || ext.eq_ignore_ascii_case("heif"))
 }
 
-/// Maximum wall-clock time for an ffmpeg transcode before we kill it.
+/// Maximum wall-clock time for a media conversion before we kill it.
 /// 10 minutes is generous for any reasonable video; pathological inputs
 /// (crafted to cause exponential decode time) get killed instead of
 /// blocking a Tokio worker thread indefinitely.
-const FFMPEG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+const VIDEO_TRANSCODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
-/// Run an ffmpeg command with a wall-clock timeout.
+/// Run a media-conversion command with a wall-clock timeout.
 ///
 /// Spawns the child process, polls `try_wait()` every 500ms, and kills it
 /// if the deadline is exceeded. Returns the same `Output` as `Command::output()`.
 ///
-/// **IMPORTANT**: callers MUST pass `-loglevel error` (or `quiet`) to ffmpeg.
-/// This function reads stderr only after the child exits. If ffmpeg writes
-/// enough progress/diagnostic output to fill the OS pipe buffer (~64 KiB),
-/// the child blocks on write() and never exits — causing a false timeout.
-/// `-loglevel error` suppresses progress spam, keeping stderr small.
-pub(super) fn run_ffmpeg_with_timeout(
+/// **IMPORTANT**: callers must configure the child to suppress routine progress
+/// output. This function reads stderr only after the child exits; enough output
+/// to fill the OS pipe buffer could otherwise deadlock the child until timeout.
+pub(super) fn run_media_command_with_timeout(
     cmd: &mut std::process::Command,
     timeout: std::time::Duration,
+    command_name: &str,
 ) -> Result<std::process::Output, String> {
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("failed to spawn ffmpeg: {e}"))?;
+        .map_err(|e| format!("failed to spawn {command_name}: {e}"))?;
 
     let deadline = std::time::Instant::now() + timeout;
     loop {
@@ -164,11 +165,14 @@ pub(super) fn run_ffmpeg_with_timeout(
                 if std::time::Instant::now() > deadline {
                     let _ = child.kill();
                     let _ = child.wait(); // reap zombie
-                    return Err(format!("ffmpeg timed out after {}s", timeout.as_secs()));
+                    return Err(format!(
+                        "{command_name} timed out after {}s",
+                        timeout.as_secs()
+                    ));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
-            Err(e) => return Err(format!("failed to wait on ffmpeg: {e}")),
+            Err(e) => return Err(format!("failed to wait on {command_name}: {e}")),
         }
     }
 }
@@ -187,7 +191,7 @@ pub(super) fn transcode_to_mp4(
     // UUID-based temp path — unique across concurrent uploads.
     let output = std::env::temp_dir().join(format!("buzz-transcode-{}.mp4", uuid::Uuid::new_v4()));
 
-    let result = run_ffmpeg_with_timeout(
+    let result = run_media_command_with_timeout(
         ffmpeg_command(ffmpeg)
             .args([
                 "-y",
@@ -238,7 +242,8 @@ pub(super) fn transcode_to_mp4(
             .arg(&output)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped()),
-        FFMPEG_TIMEOUT,
+        VIDEO_TRANSCODE_TIMEOUT,
+        "ffmpeg",
     )?;
 
     if !result.status.success() {
@@ -253,6 +258,69 @@ pub(super) fn transcode_to_mp4(
     }
 
     Ok(output)
+}
+
+/// Transcode a video with macOS' signed system converter.
+///
+/// `avconvert` is present at this fixed path on supported macOS releases. The
+/// 4K preset emits H.264/AAC MP4, preserves smaller source dimensions, and
+/// bounds larger sources to the relay's 3840×2160 policy. Its metadata filter
+/// is enabled by default; deliberately do not pass `--disableMetadataFilter`.
+#[cfg(target_os = "macos")]
+const AVCONVERT_PATH: &str = "/usr/bin/avconvert";
+
+#[cfg(target_os = "macos")]
+fn transcode_to_mp4_with_avconvert_at(
+    source: &std::path::Path,
+    avconvert: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let output = std::env::temp_dir().join(format!("buzz-avconvert-{}.mp4", uuid::Uuid::new_v4()));
+    let mut command = std::process::Command::new(avconvert);
+    command
+        .env_clear()
+        .env("LANG", "C")
+        .arg("--source")
+        .arg(source)
+        .args(["--preset", "Preset3840x2160", "--output"])
+        .arg(&output)
+        .arg("--replace")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+
+    let result =
+        match run_media_command_with_timeout(&mut command, VIDEO_TRANSCODE_TIMEOUT, "avconvert") {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = std::fs::remove_file(&output);
+                return Err(error);
+            }
+        };
+    let output_is_nonempty = std::fs::metadata(&output).is_ok_and(|metadata| metadata.len() > 0);
+    if !result.status.success() || !output_is_nonempty {
+        let _ = std::fs::remove_file(&output);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        let detail = stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("unknown error");
+        return Err(format!("macOS video conversion failed: {detail}"));
+    }
+
+    Ok(output)
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn transcode_to_mp4_with_avconvert(
+    source: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let avconvert = std::path::Path::new(AVCONVERT_PATH);
+    if !avconvert.is_file() {
+        return Err(format!(
+            "macOS video converter not found at {AVCONVERT_PATH}"
+        ));
+    }
+    transcode_to_mp4_with_avconvert_at(source, avconvert)
 }
 
 /// Transcode a HEIC/HEIF still image to JPEG via ffmpeg.
@@ -274,7 +342,7 @@ pub(super) fn transcode_heic_to_jpeg(
     // Single-frame image decode — 60s is generous even for large HEICs.
     let heic_timeout = std::time::Duration::from_secs(60);
 
-    let result = run_ffmpeg_with_timeout(
+    let result = run_media_command_with_timeout(
         ffmpeg_command(ffmpeg)
             .args([
                 "-y",
@@ -300,6 +368,7 @@ pub(super) fn transcode_heic_to_jpeg(
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped()),
         heic_timeout,
+        "ffmpeg",
     )?;
 
     if !result.status.success() {
@@ -349,7 +418,7 @@ pub(super) fn extract_poster_frame(
     let poster_timeout = std::time::Duration::from_secs(30);
 
     // Try seeking to 1s first (avoids black first frames from fade-ins).
-    let result = run_ffmpeg_with_timeout(
+    let result = run_media_command_with_timeout(
         ffmpeg_command(ffmpeg)
             .args([
                 "-y",
@@ -368,6 +437,7 @@ pub(super) fn extract_poster_frame(
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped()),
         poster_timeout,
+        "ffmpeg",
     )?;
 
     // If seek to 1s failed (video shorter than 1s), retry from first frame.
@@ -380,7 +450,7 @@ pub(super) fn extract_poster_frame(
             eprintln!("buzz-desktop: poster seek-to-1s failed, trying first frame: {stderr}");
         }
         let _ = std::fs::remove_file(&output);
-        let fallback = run_ffmpeg_with_timeout(
+        let fallback = run_media_command_with_timeout(
             ffmpeg_command(ffmpeg)
                 .args([
                     "-y",
@@ -397,6 +467,7 @@ pub(super) fn extract_poster_frame(
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::piped()),
             poster_timeout,
+            "ffmpeg",
         )?;
 
         if !fallback.status.success() || !output.exists() {
@@ -417,7 +488,32 @@ pub(super) fn extract_poster_frame(
 pub(super) fn transcode_and_extract_poster(
     source: &std::path::Path,
 ) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
-    let ffmpeg_path = find_ffmpeg()?;
+    let ffmpeg_path = match find_ffmpeg() {
+        Ok(path) => path,
+        Err(ffmpeg_error) => {
+            #[cfg(target_os = "macos")]
+            {
+                eprintln!(
+                    "buzz-desktop: ffmpeg unavailable; using the macOS video converter: \
+                     {ffmpeg_error}"
+                );
+                let transcoded =
+                    transcode_to_mp4_with_avconvert(source).map_err(|native_error| {
+                        format!(
+                        "{ffmpeg_error}\n\nThe built-in macOS fallback also failed: {native_error}"
+                    )
+                    })?;
+                let video_bytes = std::fs::read(&transcoded)
+                    .map_err(|e| format!("failed to read transcoded file: {e}"));
+                let _ = std::fs::remove_file(&transcoded);
+                return Ok((video_bytes?, None));
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                return Err(ffmpeg_error);
+            }
+        }
+    };
     let transcoded = transcode_to_mp4(source, &ffmpeg_path)?;
 
     // Extract poster from the transcoded file (not the original — guarantees decodability).
@@ -470,6 +566,49 @@ mod tests {
         // This test verifies the function doesn't panic.
         // It may pass or fail depending on whether ffmpeg is installed.
         let _ = find_ffmpeg();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_avconvert_invocation_uses_safe_canonical_options() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let converter = temp.path().join("fake avconvert");
+        std::fs::write(
+            &converter,
+            r#"#!/bin/sh
+source_path=
+output_path=
+preset=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --source) source_path=$2; shift 2 ;;
+    --preset) preset=$2; shift 2 ;;
+    --output) output_path=$2; shift 2 ;;
+    --replace) shift ;;
+    *) exit 64 ;;
+  esac
+done
+[ "$preset" = "Preset3840x2160" ] || exit 65
+[ -n "$source_path" ] && [ -n "$output_path" ] || exit 66
+cp "$source_path" "$output_path"
+"#,
+        )
+        .expect("write fake avconvert");
+        std::fs::set_permissions(&converter, std::fs::Permissions::from_mode(0o755))
+            .expect("make fake avconvert executable");
+
+        let source = temp.path().join("source video.mp4");
+        let source_bytes = b"fake video payload";
+        std::fs::write(&source, source_bytes).expect("write source");
+
+        let output =
+            transcode_to_mp4_with_avconvert_at(&source, &converter).expect("convert fixture");
+        let output_bytes = std::fs::read(&output).expect("read converted output");
+        let _ = std::fs::remove_file(&output);
+
+        assert_eq!(output_bytes, source_bytes);
     }
 
     /// Build a minimal ISO-BMFF `ftyp` box header with the given major brand

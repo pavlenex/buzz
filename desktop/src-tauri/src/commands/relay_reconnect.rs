@@ -46,7 +46,7 @@ pub async fn relay_reconnect_hook() -> Result<(), String> {
 /// `warp-cli` (the exact degraded-transport case this hook targets) would hang
 /// forever, pinning the blocking-pool thread and leaving the frontend `invoke`
 /// unresolved. So we spawn, poll `try_wait()` every 500ms, and kill+reap on the
-/// deadline. Modeled on `media_transcode.rs` `run_ffmpeg_with_timeout`.
+/// deadline. Modeled on `media_transcode.rs` `run_media_command_with_timeout`.
 ///
 /// stdout/stderr are piped and read only after the child exits. The pipe-buffer
 /// deadlock noted there (a child blocking on write() when the ~64 KiB OS pipe
